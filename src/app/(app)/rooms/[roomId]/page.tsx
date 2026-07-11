@@ -45,7 +45,6 @@ export default async function RoomPage({
       roomId={room.id}
       roomName={room.name}
       currentUserId={user.id}
-      currentUserName={profile.full_name}
       members={
         (memberProfiles ?? []) as Pick<Profile, "id" | "full_name" | "role">[]
       }

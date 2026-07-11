@@ -8,7 +8,7 @@ import {
   subscribeToRoomMessages,
 } from "@/lib/supabase/realtime";
 import { markRoomRead } from "@/app/actions/rooms";
-import { CallControls } from "@/components/CallControls";
+import { CallButton } from "@/components/call/CallButton";
 import { Avatar } from "@/components/Avatar";
 import type { Message, Profile } from "@/lib/types";
 
@@ -25,14 +25,12 @@ export function ChatRoom({
   roomId,
   roomName,
   currentUserId,
-  currentUserName,
   members,
   initialMessages,
 }: {
   roomId: string;
   roomName: string;
   currentUserId: string;
-  currentUserName: string;
   members: Pick<Profile, "id" | "full_name" | "role">[];
   initialMessages: Message[];
 }) {
@@ -215,11 +213,10 @@ export function ChatRoom({
             {members.length} members
           </p>
         </div>
-        <CallControls
-          supabase={supabase}
+        <CallButton
           roomId={roomId}
+          roomName={roomName}
           currentUserId={currentUserId}
-          currentUserName={currentUserName}
           members={members}
         />
         <button
