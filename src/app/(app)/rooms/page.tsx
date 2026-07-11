@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { requireProfile } from "@/lib/auth";
 import { LiveRoomList } from "@/components/LiveRoomList";
 import { NewGroupButton } from "@/components/NewGroupButton";
+import { PageHeader } from "@/components/ui/PageHeader";
 import type { MyRoom } from "@/lib/types";
 import { sitePath } from "@/lib/site-url";
 
@@ -43,11 +44,11 @@ export default async function RoomsPage() {
     profile.role === "admin" || profile.role === "manager";
 
   return (
-    <div className="mx-auto flex h-full max-w-3xl flex-col bg-white sm:border-x sm:border-line">
-      <div className="flex items-center justify-between border-b border-line bg-[#f0f2f5] px-3 py-2.5">
-        <h1 className="text-[16px] font-semibold text-ink">Chats</h1>
-        {canCreateGroup && <NewGroupButton />}
-      </div>
+    <div className="mx-auto flex h-full max-w-3xl flex-col bg-paper sm:border-x sm:border-line">
+      <PageHeader
+        title="Chats"
+        actions={canCreateGroup ? <NewGroupButton /> : undefined}
+      />
       <div className="flex-1 min-h-0">
         <LiveRoomList initialRooms={rooms} currentUserId={user.id} />
       </div>

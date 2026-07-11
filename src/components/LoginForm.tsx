@@ -3,6 +3,8 @@
 import { useActionState } from "react";
 import { signIn } from "@/app/actions/auth";
 import Link from "next/link";
+import { Button } from "@/components/ui/Button";
+import { Input, Label } from "@/components/ui/Field";
 
 const ERROR_MESSAGES: Record<string, string> = {
   deactivated: "This account has been deactivated.",
@@ -32,43 +34,34 @@ export function LoginForm({
         </p>
       )}
       <div>
-        <label htmlFor="email" className="block text-sm font-medium text-ink">
-          Email
-        </label>
-        <input
+        <Label htmlFor="email">Email</Label>
+        <Input
           id="email"
           name="email"
           type="email"
           autoComplete="email"
           required
           disabled={configError}
-          className="mt-1 w-full rounded-xl border border-line bg-paper px-3 py-2.5 text-sm text-ink focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:bg-mist"
-      />
+        />
       </div>
       <div>
-        <label
-          htmlFor="password"
-          className="block text-sm font-medium text-ink"
-        >
-          Password
-        </label>
-        <input
+        <Label htmlFor="password">Password</Label>
+        <Input
           id="password"
           name="password"
           type="password"
           autoComplete="current-password"
           required
           disabled={configError}
-          className="mt-1 w-full rounded-xl border border-line bg-paper px-3 py-2.5 text-sm text-ink focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:bg-mist"
         />
       </div>
-      <button
+      <Button
         type="submit"
         disabled={pending || configError}
-        className="w-full rounded-lg bg-brand-600 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+        className="w-full"
       >
         {pending ? "Signing in…" : "Sign in"}
-      </button>
+      </Button>
       <p className="text-center text-sm text-muted">
         <Link href="/auth/forgot-password" className="text-brand-600 hover:underline">
           Forgot password?

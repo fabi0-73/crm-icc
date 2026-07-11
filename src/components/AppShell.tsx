@@ -25,7 +25,7 @@ export function AppShell({
 
   return (
     <div className="flex h-dvh flex-col bg-mist">
-      <header className="shrink-0 bg-brand-700 text-white shadow-sm">
+      <header className="shrink-0 border-b border-line bg-paper">
         <div className="flex items-center justify-between gap-3 px-3 py-2.5 sm:px-4">
           <div className="flex items-center gap-3 min-w-0">
             <Link href="/rooms" prefetch className="flex items-center gap-2 shrink-0">
@@ -34,10 +34,10 @@ export function AppShell({
                 alt="ICC"
                 width={32}
                 height={30}
-                className="rounded-md bg-white/10 p-0.5"
+                className="rounded-md"
                 priority
               />
-              <span className="text-[15px] font-semibold tracking-tight">
+              <span className="text-[15px] font-semibold tracking-tight text-ink">
                 ICC Desk
               </span>
             </Link>
@@ -52,8 +52,8 @@ export function AppShell({
                     prefetch
                     className={`rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
                       active
-                        ? "bg-white/15 text-white"
-                        : "text-white/80 hover:bg-white/10 hover:text-white"
+                        ? "bg-brand-50 text-brand-700"
+                        : "text-muted hover:bg-mist hover:text-ink"
                     }`}
                   >
                     {l.label}
@@ -73,7 +73,7 @@ export function AppShell({
                     href={l.href}
                     prefetch
                     className={`rounded-md px-2 py-1 text-xs font-medium ${
-                      active ? "bg-white/15 text-white" : "text-white/80"
+                      active ? "bg-brand-50 text-brand-700" : "text-muted"
                     }`}
                   >
                     {l.label}
@@ -81,13 +81,13 @@ export function AppShell({
                 );
               })}
             </nav>
-            <span className="hidden md:inline text-[13px] text-white/75 truncate max-w-[8rem]">
+            <span className="hidden md:inline text-[13px] text-muted truncate max-w-[8rem]">
               {profile.full_name}
             </span>
             <form action={signOut}>
               <button
                 type="submit"
-                className="rounded-md px-2 py-1 text-xs font-medium text-white/80 hover:bg-white/10"
+                className="rounded-md px-2 py-1 text-xs font-medium text-muted hover:bg-mist hover:text-ink"
               >
                 Sign out
               </button>

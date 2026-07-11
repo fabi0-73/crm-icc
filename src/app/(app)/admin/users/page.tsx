@@ -2,6 +2,8 @@ import { requireRole } from "@/lib/auth";
 import { InviteUserButton } from "@/components/InviteUserButton";
 import { ActionForm } from "@/components/ActionForm";
 import { deactivateUser, reactivateUser } from "@/app/actions/admin";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Table, TBody, Td, Th, THead } from "@/components/ui/Table";
 
 export default async function UsersPage() {
   const { supabase } = await requireRole(["admin"]);
@@ -17,64 +19,60 @@ export default async function UsersPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="flex items-center justify-between border-b border-gray-200 bg-white px-4 py-3">
-        <h1 className="text-lg font-semibold text-gray-900">Users</h1>
-        <InviteUserButton />
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-gray-50 text-xs uppercase text-gray-500">
-            <tr>
-              <th className="px-4 py-2 font-medium">Name</th>
-              <th className="px-4 py-2 font-medium">Role</th>
-              <th className="px-4 py-2 font-medium">Status</th>
-              <th className="px-4 py-2 font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100 bg-white">
-            {(users ?? []).map((u) => (
-              <tr key={u.id}>
-                <td className="px-4 py-3 font-medium text-gray-900">
-                  {u.full_name}
-                </td>
-                <td className="px-4 py-3 capitalize text-gray-600">{u.role}</td>
-                <td className="px-4 py-3">
+      <PageHeader title="Users" actions={<InviteUserButton />} />
+      <Table>
+        <THead>
+          <Th>Name</Th>
+          <Th>Role</Th>
+          <Th>Status</Th>
+          <Th>Actions</Th>
+        </THead>
+        <TBody>
+          {(users ?? []).map((u) => (
+            <tr key={u.id}>
+              <Td className="font-medium text-ink">{u.full_name}</Td>
+              <Td className="capitalize text-muted">{u.role}</Td>
+              <Td>
+                <span
+                  className={`inline-flex items-center gap-1.5 ${
+                    u.is_active ? "text-ink" : "text-muted"
+                  }`}
+                >
                   <span
-                    className={
-                      u.is_active ? "text-emerald-600" : "text-gray-400"
-                    }
-                  >
-                    {u.is_active ? "Active" : "Inactive"}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
-                  {u.is_active ? (
-                    <ActionForm action={deactivateUser}>
-                      <input type="hidden" name="user_id" value={u.id} />
-                      <button
-                        type="submit"
-                        className="text-red-600 hover:underline"
-                      >
-                        Deactivate
-                      </button>
-                    </ActionForm>
-                  ) : (
-                    <ActionForm action={reactivateUser}>
-                      <input type="hidden" name="user_id" value={u.id} />
-                      <button
-                        type="submit"
-                        className="text-brand-600 hover:underline"
-                      >
-                        Reactivate
-                      </button>
-                    </ActionForm>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      u.is_active ? "bg-emerald-500" : "bg-slate-300"
+                    }`}
+                  />
+                  {u.is_active ? "Active" : "Inactive"}
+                </span>
+              </Td>
+              <Td>
+                {u.is_active ? (
+                  <ActionForm action={deactivateUser}>
+                    <input type="hidden" name="user_id" value={u.id} />
+                    <button
+                      type="submit"
+                      className="font-medium text-red-600 hover:underline"
+                    >
+                      Deactivate
+                    </button>
+                  </ActionForm>
+                ) : (
+                  <ActionForm action={reactivateUser}>
+                    <input type="hidden" name="user_id" value={u.id} />
+                    <button
+                      type="submit"
+                      className="font-medium text-brand-600 hover:underline"
+                    >
+                      Reactivate
+                    </button>
+                  </ActionForm>
+                )}
+              </Td>
+            </tr>
+          ))}
+        </TBody>
+      </Table>
     </div>
   );
 }

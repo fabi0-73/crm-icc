@@ -29,13 +29,13 @@ function CopyLink({ link }: { link: string }) {
         readOnly
         value={link}
         onFocus={(e) => e.target.select()}
-        className="min-w-0 flex-1 rounded border border-emerald-200 bg-white px-2 py-1 text-[12px] text-ink"
+        className="min-w-0 flex-1 rounded-md border border-emerald-200 bg-paper px-2 py-1 text-xs text-ink"
         aria-label="Set-password link"
       />
       <button
         type="button"
         onClick={() => void navigator.clipboard?.writeText(link)}
-        className="shrink-0 rounded bg-emerald-600 px-2.5 py-1 text-[12px] font-medium text-white"
+        className="shrink-0 rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white"
       >
         Copy
       </button>

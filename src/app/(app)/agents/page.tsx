@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireRole } from "@/lib/auth";
 import { CreateAgentButton } from "@/components/CreateAgentButton";
 import { Avatar } from "@/components/Avatar";
+import { PageHeader } from "@/components/ui/PageHeader";
 
 export default async function AgentsPage() {
   const { supabase } = await requireRole(["admin", "manager"]);
@@ -16,24 +17,21 @@ export default async function AgentsPage() {
   }
 
   return (
-    <div className="mx-auto h-full max-w-3xl overflow-y-auto bg-white sm:border-x sm:border-line">
-      <div className="flex items-center justify-between border-b border-line bg-[#f0f2f5] px-3 py-2.5">
-        <h1 className="text-[16px] font-semibold text-ink">Agents</h1>
-        <CreateAgentButton />
-      </div>
+    <div className="mx-auto h-full max-w-3xl overflow-y-auto bg-paper sm:border-x sm:border-line">
+      <PageHeader title="Agents" actions={<CreateAgentButton />} />
       <ul>
         {(agents ?? []).map((a) => (
           <li key={a.id} className="border-b border-line">
             <Link
               href={`/agents/${a.id}`}
-              className="flex items-center gap-3 px-3 py-3 hover:bg-mist/80"
+              className="flex items-center gap-3 px-3 py-3 hover:bg-mist"
             >
               <Avatar name={a.display_name} />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[15px] font-medium text-ink">
+                <p className="truncate text-sm font-medium text-ink">
                   {a.display_name}
                 </p>
-                <p className="text-[12px] capitalize text-muted">{a.status}</p>
+                <p className="text-xs capitalize text-muted">{a.status}</p>
               </div>
             </Link>
           </li>

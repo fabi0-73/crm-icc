@@ -4,6 +4,8 @@ import { requireRole } from "@/lib/auth";
 import { SwapAssistantsButton } from "@/components/SwapAssistantsButton";
 import { ActionForm } from "@/components/ActionForm";
 import { archiveAgent } from "@/app/actions/agents";
+import { buttonClasses } from "@/components/ui/Button";
+import { BackIcon } from "@/components/icons";
 
 export default async function AgentDetailPage({
   params,
@@ -54,22 +56,25 @@ export default async function AgentDetailPage({
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="border-b border-gray-200 bg-white px-4 py-4">
-        <Link href="/agents" className="text-sm text-brand-600">
-          ← Agents
+      <div className="border-b border-line bg-paper px-4 py-4">
+        <Link
+          href="/agents"
+          className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-600 hover:text-brand-700"
+        >
+          <BackIcon size={15} /> Agents
         </Link>
         <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">
+            <h1 className="text-lg font-semibold text-ink">
               {agent.display_name}
             </h1>
-            <p className="text-sm text-gray-500 capitalize">{agent.status}</p>
+            <p className="text-[13px] text-muted capitalize">{agent.status}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             {room && (
               <Link
                 href={`/rooms/${room.id}`}
-                className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm hover:bg-gray-50"
+                className={buttonClasses("secondary", "sm")}
               >
                 Open chat
               </Link>
@@ -92,12 +97,12 @@ export default async function AgentDetailPage({
       </div>
 
       <section className="p-4 space-y-4 max-w-xl">
-        <div className="rounded-xl border border-gray-200 bg-white p-4">
-          <h2 className="text-sm font-semibold text-gray-900 mb-3">
+        <div className="rounded-lg border border-line bg-paper p-4">
+          <h2 className="text-sm font-semibold text-ink mb-3">
             Assigned assistants
           </h2>
           {(assistants ?? []).length === 0 ? (
-            <p className="text-sm text-gray-500">None assigned.</p>
+            <p className="text-sm text-muted">None assigned.</p>
           ) : (
             <ul className="space-y-2">
               {(assistants ?? []).map((a) => (
@@ -117,7 +122,7 @@ export default async function AgentDetailPage({
             <input type="hidden" name="agent_id" value={agent.id} />
             <button
               type="submit"
-              className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50"
+              className="inline-flex h-8 items-center justify-center rounded-md border border-red-200 px-3 text-[13px] font-medium text-red-700 transition-colors hover:bg-red-50"
             >
               Archive agent
             </button>

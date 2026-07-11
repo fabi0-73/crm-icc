@@ -25,7 +25,7 @@ export default async function LoginPage({
           </h1>
           <p className="mt-1 text-sm text-muted">Sign in to continue</p>
         </div>
-        <div className="rounded-2xl bg-white p-5 shadow-sm border border-line">
+        <div className="rounded-xl bg-paper p-5 shadow-sm border border-line">
           <LoginForm
             next={params.next ?? "/rooms"}
             errorParam={params.error}

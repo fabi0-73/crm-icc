@@ -40,16 +40,16 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative z-10 w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl bg-white shadow-xl max-h-[90dvh] overflow-y-auto"
+        className="relative z-10 w-full sm:max-w-md rounded-t-xl sm:rounded-xl bg-paper shadow-lg max-h-[90dvh] overflow-y-auto"
       >
-        <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
-          <h2 id={titleId} className="text-base font-semibold text-gray-900">
+        <div className="flex items-center justify-between border-b border-line px-4 py-3">
+          <h2 id={titleId} className="text-[15px] font-semibold text-ink">
             {title}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-2 py-1 text-sm text-gray-500 hover:bg-gray-100"
+            className="rounded-md px-2 py-1 text-sm text-muted hover:bg-mist hover:text-ink"
           >
             Close
           </button>

@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { Modal, useModal } from "@/components/Modal";
 import { createGroupAndRedirect } from "@/app/actions/rooms";
 import { createClient } from "@/lib/supabase/client";
+import { Button } from "@/components/ui/Button";
+import { Input, Label } from "@/components/ui/Field";
 import type { Profile } from "@/lib/types";
 
 export function NewGroupButton() {
@@ -47,13 +49,9 @@ export function NewGroupButton() {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={openModal}
-        className="rounded-full bg-brand-600 px-3 py-1.5 text-[13px] font-medium text-white hover:bg-brand-700"
-      >
+      <Button size="sm" type="button" onClick={openModal}>
         New group
-      </button>
+      </Button>
       <Modal title="New group" open={open} onClose={closeModal}>
         <form onSubmit={onSubmit} className="space-y-4">
           {error && (
@@ -62,28 +60,22 @@ export function NewGroupButton() {
             </p>
           )}
           <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Name
-            </label>
-            <input
-              name="name"
-              required
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            />
+            <Label htmlFor="group-name">Name</Label>
+            <Input id="group-name" name="name" required />
           </div>
           <div>
-            <p className="text-sm font-medium text-gray-700 mb-2">Members</p>
-            <ul className="max-h-48 overflow-y-auto space-y-1 border border-gray-200 rounded-lg p-2">
+            <p className="mb-1.5 text-[13px] font-medium text-ink">Members</p>
+            <ul className="max-h-48 overflow-y-auto space-y-1 rounded-md border border-line p-2">
               {staff.map((p) => (
                 <li key={p.id}>
-                  <label className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-gray-50 cursor-pointer">
+                  <label className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-mist cursor-pointer">
                     <input
                       type="checkbox"
                       checked={selected.includes(p.id)}
                       onChange={() => toggle(p.id)}
                     />
                     <span className="flex-1">{p.full_name}</span>
-                    <span className="text-xs text-gray-400 capitalize">
+                    <span className="text-xs text-muted capitalize">
                       {p.role}
                     </span>
                   </label>
@@ -91,13 +83,9 @@ export function NewGroupButton() {
               ))}
             </ul>
           </div>
-          <button
-            type="submit"
-            disabled={pending}
-            className="w-full rounded-lg bg-brand-600 py-2.5 text-sm font-medium text-white disabled:opacity-50"
-          >
+          <Button type="submit" disabled={pending} className="w-full">
             Create
-          </button>
+          </Button>
         </form>
       </Modal>
     </>

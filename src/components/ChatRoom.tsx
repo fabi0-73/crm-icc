@@ -10,6 +10,7 @@ import {
 import { markRoomRead } from "@/app/actions/rooms";
 import { CallButton } from "@/components/call/CallButton";
 import { Avatar } from "@/components/Avatar";
+import { BackIcon, PaperclipIcon, SendIcon } from "@/components/icons";
 import type { Message, Profile } from "@/lib/types";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -196,20 +197,20 @@ export function ChatRoom({
   }
 
   return (
-    <div className="flex h-full flex-col bg-white">
-      <div className="flex items-center gap-2 border-b border-line bg-[#f0f2f5] px-2 py-2 sm:px-3">
+    <div className="flex h-full flex-col bg-paper">
+      <div className="flex items-center gap-2 border-b border-line bg-paper px-2 py-2 sm:px-3">
         <a
           href="/rooms"
-          className="sm:hidden rounded-full p-2 text-muted hover:bg-black/5"
+          className="sm:hidden rounded-full p-2 text-muted hover:bg-mist"
           aria-label="Back"
         >
-          ←
+          <BackIcon />
         </a>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[16px] font-semibold text-ink">
+          <h1 className="truncate text-[15px] font-semibold text-ink">
             {roomName}
           </h1>
-          <p className="truncate text-[12px] text-muted">
+          <p className="truncate text-xs text-muted">
             {members.length} members
           </p>
         </div>
@@ -222,19 +223,19 @@ export function ChatRoom({
         <button
           type="button"
           onClick={() => setShowMembers((v) => !v)}
-          className="rounded-full px-2.5 py-2 text-[13px] font-medium text-muted hover:bg-black/5"
+          className="rounded-full px-2.5 py-2 text-[13px] font-medium text-muted hover:bg-mist"
         >
           Info
         </button>
       </div>
 
       <div className="relative flex-1 min-h-0">
-        <div className="chat-wallpaper h-full overflow-y-auto px-3 py-3 space-y-1.5 sm:px-6">
+        <div className="h-full overflow-y-auto bg-paper px-3 py-4 space-y-2 sm:px-6">
           {messages.map((msg) => {
             if (msg.kind === "system") {
               return (
                 <div key={msg.id} className="flex justify-center py-1.5">
-                  <span className="rounded-md bg-white/90 px-2.5 py-1 text-[11px] text-muted shadow-sm">
+                  <span className="rounded-md border border-line bg-mist px-2.5 py-1 text-[11px] text-muted">
                     {msg.body}
                   </span>
                 </div>
@@ -250,14 +251,12 @@ export function ChatRoom({
                 className={`flex ${mine ? "justify-end" : "justify-start"}`}
               >
                 <div
-                  className={`max-w-[85%] rounded-lg px-2.5 py-1.5 text-[14.5px] leading-snug shadow-sm ${
-                    mine
-                      ? "rounded-tr-none bg-[#d9fdd3] text-ink"
-                      : "rounded-tl-none bg-white text-ink"
+                  className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
+                    mine ? "bg-bubble text-ink" : "bg-bubble-peer text-ink"
                   }`}
                 >
                   {!mine && (
-                    <p className="mb-0.5 text-[12px] font-semibold text-brand-700">
+                    <p className="mb-0.5 text-xs font-semibold text-brand-700">
                       {name}
                     </p>
                   )}
@@ -277,7 +276,7 @@ export function ChatRoom({
                   ) : (
                     <p className="whitespace-pre-wrap break-words">{msg.body}</p>
                   )}
-                  <p className="mt-0.5 text-right text-[10px] text-muted/80 tabular-nums">
+                  <p className="mt-0.5 text-right text-[11px] text-muted/70 tabular-nums">
                     {formatMsgTime(msg.created_at)}
                   </p>
                 </div>
@@ -288,7 +287,7 @@ export function ChatRoom({
         </div>
 
         {showMembers && (
-          <div className="absolute inset-y-0 right-0 z-20 w-72 max-w-[85%] border-l border-line bg-white shadow-lg overflow-y-auto">
+          <div className="absolute inset-y-0 right-0 z-20 w-72 max-w-[85%] border-l border-line bg-paper shadow-lg overflow-y-auto">
             <div className="flex items-center justify-between border-b border-line px-3 py-3">
               <p className="text-sm font-semibold">Members</p>
               <button
@@ -310,7 +309,7 @@ export function ChatRoom({
                     <p className="truncate text-sm font-medium text-ink">
                       {m.full_name}
                     </p>
-                    <p className="text-[11px] capitalize text-muted">{m.role}</p>
+                    <p className="text-xs capitalize text-muted">{m.role}</p>
                   </div>
                 </li>
               ))}
@@ -327,7 +326,7 @@ export function ChatRoom({
 
       <form
         onSubmit={sendText}
-        className="flex items-end gap-2 border-t border-line bg-[#f0f2f5] p-2 sm:p-3"
+        className="flex items-end gap-2 border-t border-line bg-paper p-2 sm:p-3"
       >
         <input
           ref={fileRef}
@@ -343,17 +342,17 @@ export function ChatRoom({
           type="button"
           disabled={sending}
           onClick={() => fileRef.current?.click()}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xl text-muted hover:bg-black/5"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-mist"
           aria-label="Attach file"
         >
-          +
+          <PaperclipIcon />
         </button>
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           rows={1}
           placeholder="Type a message"
-          className="flex-1 max-h-28 resize-none rounded-lg border-0 bg-white px-3 py-2.5 text-[15px] text-ink shadow-sm focus:outline-none focus:ring-1 focus:ring-brand-300"
+          className="flex-1 max-h-28 resize-none rounded-md border border-line-strong bg-paper px-3 py-2.5 text-sm text-ink placeholder:text-muted focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-100"
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -364,10 +363,10 @@ export function ChatRoom({
         <button
           type="submit"
           disabled={sending || !body.trim()}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white disabled:opacity-40"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-40"
           aria-label="Send"
         >
-          ➤
+          <SendIcon />
         </button>
       </form>
     </div>

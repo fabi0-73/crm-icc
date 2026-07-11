@@ -1,16 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Manrope, Newsreader } from "next/font/google";
+import { Manrope } from "next/font/google";
 import "./globals.css";
 
 const manrope = Manrope({
   subsets: ["latin"],
   variable: "--font-manrope",
-  display: "swap",
-});
-
-const newsreader = Newsreader({
-  subsets: ["latin"],
-  variable: "--font-newsreader",
   display: "swap",
 });
 
@@ -23,22 +17,17 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  themeColor: "#0b1220",
+  themeColor: "#f8fafc",
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${manrope.variable} ${newsreader.variable}`}>
+    <html lang="en" className={manrope.variable}>
       <body
         className="font-sans"
-        style={
-          {
-            "--font-sans": "var(--font-manrope)",
-            "--font-display": "var(--font-newsreader)",
-          } as React.CSSProperties
-        }
+        style={{ "--font-sans": "var(--font-manrope)" } as React.CSSProperties}
       >
         {children}
       </body>

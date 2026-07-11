@@ -5,6 +5,8 @@ import { Modal, useModal } from "@/components/Modal";
 import { ActionForm } from "@/components/ActionForm";
 import { swapAssistants } from "@/app/actions/agents";
 import { HISTORY_PRESET_OPTIONS } from "@/lib/history-presets";
+import { Button } from "@/components/ui/Button";
+import { Label, Select, Textarea } from "@/components/ui/Field";
 
 type Person = { id: string; full_name: string };
 
@@ -28,13 +30,9 @@ export function SwapAssistantsButton({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={openModal}
-        className="rounded-full bg-brand-600 px-3 py-1.5 text-[13px] font-medium text-white hover:bg-brand-700"
-      >
+      <Button size="sm" type="button" onClick={openModal}>
         Swap assistants
-      </button>
+      </Button>
       <Modal title="Swap assistants" open={open} onClose={closeModal}>
         <ActionForm action={swapAssistants} className="space-y-4">
           <input type="hidden" name="agent_id" value={agentId} />
@@ -42,13 +40,11 @@ export function SwapAssistantsButton({
 
           {assigned.length > 0 && (
             <div>
-              <p className="text-sm font-medium text-gray-700 mb-2">
-                Remove
-              </p>
-              <ul className="space-y-1 border border-gray-200 rounded-lg p-2">
+              <p className="mb-1.5 text-[13px] font-medium text-ink">Remove</p>
+              <ul className="space-y-1 rounded-md border border-line p-2">
                 {assigned.map((a) => (
                   <li key={a.id}>
-                    <label className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm cursor-pointer hover:bg-gray-50">
+                    <label className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm cursor-pointer hover:bg-mist">
                       <input
                         type="checkbox"
                         checked={removeIds.includes(a.id)}
@@ -63,58 +59,45 @@ export function SwapAssistantsButton({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Add assistant
-            </label>
-            <select
-              name="add_user_id"
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-              defaultValue=""
-            >
+            <Label htmlFor="swap-add">Add assistant</Label>
+            <Select id="swap-add" name="add_user_id" defaultValue="">
               <option value="">— none —</option>
               {available.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.full_name}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <Label htmlFor="swap-history">
               History access for new assistant
-            </label>
-            <select
-              name="history_preset"
-              defaultValue="none"
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-            >
+            </Label>
+            <Select id="swap-history" name="history_preset" defaultValue="none">
               {HISTORY_PRESET_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">
+            <Label htmlFor="swap-reason">
               Reason (audit only — never shown in chat)
-            </label>
-            <textarea
+            </Label>
+            <Textarea
+              id="swap-reason"
               name="reason"
               rows={2}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               placeholder="Optional"
             />
           </div>
 
-          <button
-            type="submit"
-            className="w-full rounded-lg bg-brand-600 py-2.5 text-sm font-medium text-white"
-          >
+          <Button type="submit" className="w-full">
             Apply swap
-          </button>
+          </Button>
         </ActionForm>
       </Modal>
     </>

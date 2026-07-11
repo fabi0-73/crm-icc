@@ -1,12 +1,13 @@
-/** Shared avatar initials — consistent color from name. */
+/** Shared avatar initials — consistent color from name.
+ *  Cool corporate family only, so avatars read as one system. */
 const PALETTE = [
-  "bg-[#1b4d8c]",
-  "bg-[#0f766e]",
-  "bg-[#7c3aed]",
-  "bg-[#b45309]",
-  "bg-[#be123c]",
-  "bg-[#0369a1]",
-  "bg-[#4338ca]",
+  "bg-[#1d4ed8]", // blue-700
+  "bg-[#0e7490]", // cyan-700
+  "bg-[#4f46e5]", // indigo-600
+  "bg-[#7c3aed]", // violet-600
+  "bg-[#0369a1]", // sky-700
+  "bg-[#475569]", // slate-600
+  "bg-[#1e3a8a]", // blue-900
 ];
 
 export function initials(name: string) {

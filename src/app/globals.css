@@ -1,31 +1,35 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Newsreader", ui-serif, Georgia, serif;
   --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
 
-  --color-ink: #111b21;
-  --color-ink-soft: #202c33;
-  --color-mist: #f0f2f5;
-  --color-paper: #ffffff;
-  --color-chat: #eef2f6;
-  --color-line: #e9edef;
-  --color-muted: #667781;
+  /* Neutrals — slate register */
+  --color-ink: #0f172a; /* primary text, dark call surfaces */
+  --color-ink-soft: #1e293b; /* secondary dark surface */
+  --color-mist: #f8fafc; /* app background */
+  --color-paper: #ffffff; /* panels, cards, chat stream, headers */
+  --color-line: #e2e8f0; /* hairline borders, dividers */
+  --color-line-strong: #cbd5e1; /* form-control borders */
+  --color-muted: #64748b; /* secondary text, meta */
 
-  --color-brand-50: #eef6f4;
-  --color-brand-100: #d5ebe6;
-  --color-brand-200: #a8d5cb;
-  --color-brand-300: #6fb8a8;
-  --color-brand-400: #3d9a86;
-  --color-brand-500: #1f7a68;
-  --color-brand-600: #0b6b5a;
-  --color-brand-700: #085546;
-  --color-brand-800: #074438;
-  --color-brand-900: #06362d;
-  --color-brand-950: #031f1a;
+  /* Chat bubbles */
+  --color-bubble: #e8eefc; /* own messages */
+  --color-bubble-peer: #f1f5f9; /* other people's messages */
 
-  --color-brass: #c9a227;
-  --color-brass-soft: #f5e6b8;
+  /* Brand — deep blue. NOTE: shifted one step vs Tailwind's blue scale
+     (brand-600 = blue-700 #1d4ed8) so existing bg-brand-600/700 call
+     sites produce the locked accent/hover. Do not "fix" the shift. */
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-300: #93c5fd;
+  --color-brand-400: #60a5fa;
+  --color-brand-500: #2563eb;
+  --color-brand-600: #1d4ed8; /* primary accent */
+  --color-brand-700: #1e40af; /* hover */
+  --color-brand-800: #1e3a8a;
+  --color-brand-900: #172554;
+  --color-brand-950: #0f1533;
 }
 
 html,
@@ -38,19 +42,5 @@ body {
 }
 
 ::selection {
-  background: color-mix(in oklab, var(--color-brand-600) 22%, white);
-}
-
-.brand-mark {
-  font-family: var(--font-display);
-  letter-spacing: -0.02em;
-}
-
-.chat-wallpaper {
-  background-color: var(--color-chat);
-  background-image: radial-gradient(
-    rgba(17, 27, 33, 0.035) 1px,
-    transparent 1px
-  );
-  background-size: 18px 18px;
+  background: color-mix(in oklab, var(--color-brand-600) 18%, white);
 }

@@ -22,20 +22,20 @@ export function RoomList({ rooms }: { rooms: MyRoom[] }) {
   }
 
   return (
-    <ul className="h-full overflow-y-auto bg-white">
+    <ul className="h-full overflow-y-auto bg-paper">
       {rooms.map((room) => (
         <li key={room.room_id} className="border-b border-line">
           <Link
             href={`/rooms/${room.room_id}`}
-            className="flex items-center gap-3 px-3 py-3 hover:bg-mist/80 transition-colors"
+            className="flex items-center gap-3 px-3 py-3 hover:bg-mist transition-colors"
           >
             <Avatar name={room.name} />
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline justify-between gap-2">
-                <p className="truncate text-[15px] font-medium text-ink">
+                <p className="truncate text-sm font-medium text-ink">
                   {room.name}
                 </p>
-                <span className="shrink-0 text-[11px] text-muted tabular-nums">
+                <span className="shrink-0 text-xs text-muted tabular-nums">
                   {formatTime(room.last_message_at)}
                 </span>
               </div>

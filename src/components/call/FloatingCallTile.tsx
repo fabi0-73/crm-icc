@@ -4,7 +4,14 @@ import { useEffect, useRef } from "react";
 import { Avatar } from "@/components/Avatar";
 import { useCall } from "@/components/call/CallProvider";
 import { useDuration } from "@/components/call/useDuration";
-import { CamIcon, CamOffIcon, MicIcon, MicOffIcon } from "@/components/call/FullScreenCall";
+import {
+  CamIcon,
+  CamOffIcon,
+  ExpandIcon,
+  HangUpIcon,
+  MicIcon,
+  MicOffIcon,
+} from "@/components/icons";
 
 /**
  * Minimized in-call tile. Floats over every page so the chat stays
@@ -48,7 +55,7 @@ export function FloatingCallTile() {
     phase === "in-call" && duration ? duration : statusText || "Ringing…";
 
   return (
-    <div className="fixed bottom-4 right-4 z-[115] w-60 overflow-hidden rounded-2xl bg-ink text-white shadow-2xl ring-1 ring-brand-400/40 sm:w-64">
+    <div className="fixed bottom-4 right-4 z-[115] w-60 overflow-hidden rounded-xl bg-ink text-white shadow-lg ring-1 ring-brand-400/40 sm:w-64">
       <button
         type="button"
         onClick={() => setView("full")}
@@ -83,9 +90,7 @@ export function FloatingCallTile() {
           </div>
         )}
         <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/40">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-            <path d="M9 3H3v6M15 21h6v-6M3 3l8 8M21 21l-8-8" />
-          </svg>
+          <ExpandIcon />
         </span>
       </button>
 
@@ -126,9 +131,7 @@ export function FloatingCallTile() {
           className="flex h-9 w-9 items-center justify-center rounded-full bg-red-500 hover:bg-red-600"
           aria-label="Hang up"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className="rotate-[135deg]">
-            <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.2 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.3 1.1L6.6 10.8z" />
-          </svg>
+          <HangUpIcon size={16} />
         </button>
       </div>
     </div>
