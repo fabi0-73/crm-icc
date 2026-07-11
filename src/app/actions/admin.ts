@@ -5,7 +5,12 @@ import { requireRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { Role } from "@/lib/types";
 
-export type ActionState = { error?: string; success?: string };
+export type ActionState = {
+  error?: string;
+  success?: string;
+  /** Copyable fallback (e.g. an invite link) shown with the success message. */
+  link?: string;
+};
 
 const STAFF_ROLES: Role[] = ["admin", "manager", "assistant"];
 
@@ -62,28 +67,30 @@ export async function inviteUser(
     metadata: { email, role, full_name: fullName },
   });
 
-  const { error: linkError } = await service.auth.admin.generateLink({
-    type: "invite",
-    email,
-    options: { redirectTo: `${siteUrl}/auth/reset-password` },
-  });
+  // The built-in SMTP is rate-limited (~2 emails/hour), so always hand
+  // the admin a copyable set-password link alongside the email attempt.
+  const { data: linkData, error: linkError } =
+    await service.auth.admin.generateLink({
+      type: "recovery",
+      email,
+      options: { redirectTo: `${siteUrl}/auth/reset-password` },
+    });
+  const actionLink = linkData?.properties?.action_link;
 
-  // Invite email is best-effort; account exists either way.
-  if (linkError) {
-    revalidatePath("/admin/users");
-    return {
-      success: `User created, but invite email failed: ${linkError.message}. Share a password-reset link manually.`,
-    };
-  }
-
-  // Also send the invite via inviteUserByEmail if available — generateLink
-  // creates the link; for email delivery use resetPasswordForEmail as fallback.
   await service.auth.resetPasswordForEmail(email, {
     redirectTo: `${siteUrl}/auth/reset-password`,
   });
 
   revalidatePath("/admin/users");
-  return { success: `Invited ${fullName} as ${role}.` };
+  if (linkError || !actionLink) {
+    return {
+      success: `Invited ${fullName} as ${role}. Email sent — if it doesn't arrive, use "Forgot password" on the login page.`,
+    };
+  }
+  return {
+    success: `Invited ${fullName} as ${role}. If the email doesn't arrive, share this set-password link:`,
+    link: actionLink,
+  };
 }
 
 export async function deactivateUser(

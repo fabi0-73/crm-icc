@@ -5,8 +5,30 @@ Assistants support agents in shared workspaces. Swap assistants without WhatsApp
 ## Stack
 
 - Next.js 15 (App Router) + TypeScript
-- Supabase (Postgres, Auth, Realtime, Storage)
-- Vercel deploy target
+- Supabase managed cloud (Postgres, Auth, Realtime, Storage)
+- Deployed on a VPS: systemd service `crm-icc` (`next start -p 3010`)
+  behind nginx at https://iccdesk.duckdns.org
+- coturn on the same VPS relays WebRTC calls (`NEXT_PUBLIC_TURN_*` env;
+  no credentials in code — without env the client is STUN-only)
+
+## Deploying
+
+From a clone with SSH access to the VPS (Git Bash on Windows):
+
+```bash
+ICC_SSH_KEY=~/.ssh/icc_vps_ed25519 scripts/deploy.sh
+# or ICC_SSH_PASS='...' scripts/deploy.sh
+```
+
+The script ships `git HEAD` (uncommitted changes are not deployed),
+builds on the server, restarts the service, and health-checks it.
+The server's `.env.local` is never touched.
+
+Design note: role checks read `profiles` via the SECURITY DEFINER
+helper `private.current_user_role()` instead of a JWT custom access
+token hook — no dashboard hook config to forget, and deactivation
+takes effect on the next query instead of at token refresh
+(migration 0006 extends this to all SELECT policies).
 
 ## Setup
 
@@ -16,7 +38,7 @@ Assistants support agents in shared workspaces. Swap assistants without WhatsApp
 
 ```bash
 npx supabase db push
-# or paste supabase/migrations/0001_schema.sql, 0002_rls_policies.sql, 0003_rpcs.sql in order
+# or paste supabase/migrations/0001…0006 in the SQL editor, in order
 ```
 
 3. Copy env:

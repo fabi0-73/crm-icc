@@ -13,12 +13,34 @@ export function FormMessage({ state }: { state: ActionState }) {
   }
   if (state.success) {
     return (
-      <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-        {state.success}
-      </p>
+      <div className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+        <p>{state.success}</p>
+        {state.link && <CopyLink link={state.link} />}
+      </div>
     );
   }
   return null;
+}
+
+function CopyLink({ link }: { link: string }) {
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <input
+        readOnly
+        value={link}
+        onFocus={(e) => e.target.select()}
+        className="min-w-0 flex-1 rounded border border-emerald-200 bg-white px-2 py-1 text-[12px] text-ink"
+        aria-label="Set-password link"
+      />
+      <button
+        type="button"
+        onClick={() => void navigator.clipboard?.writeText(link)}
+        className="shrink-0 rounded bg-emerald-600 px-2.5 py-1 text-[12px] font-medium text-white"
+      >
+        Copy
+      </button>
+    </div>
+  );
 }
 
 export function ActionForm({
