@@ -84,11 +84,11 @@ export function NewDmButton() {
       <button
         type="button"
         onClick={openModal}
-        className="rounded-md p-1 text-muted hover:bg-paper hover:text-ink"
+        className="rounded-md p-1.5 text-muted hover:bg-mist hover:text-ink"
         aria-label="New message"
         title="New message"
       >
-        <ComposeIcon size={14} />
+        <ComposeIcon size={16} />
       </button>
       <Modal title="New message" open={open} onClose={closeModal}>
         {error && (
