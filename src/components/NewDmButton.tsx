@@ -45,7 +45,7 @@ function PersonRow({
 }
 
 /** "New message" — staff picker that opens the 1:1 DM. */
-export function NewDmButton() {
+export function NewDmButton({ dark = false }: { dark?: boolean }) {
   const { open, openModal, closeModal } = useModal();
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -84,7 +84,11 @@ export function NewDmButton() {
       <button
         type="button"
         onClick={openModal}
-        className="rounded-md p-1.5 text-muted hover:bg-mist hover:text-ink"
+        className={`rounded-md p-1.5 ${
+          dark
+            ? "text-white/60 hover:bg-white/10 hover:text-white"
+            : "text-muted hover:bg-mist hover:text-ink"
+        }`}
         aria-label="New message"
         title="New message"
       >

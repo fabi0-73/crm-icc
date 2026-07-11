@@ -9,7 +9,13 @@ import { Input, Label } from "@/components/ui/Field";
 import { PlusIcon } from "@/components/icons";
 import type { Profile } from "@/lib/types";
 
-export function NewGroupButton({ compact = false }: { compact?: boolean }) {
+export function NewGroupButton({
+  compact = false,
+  dark = false,
+}: {
+  compact?: boolean;
+  dark?: boolean;
+}) {
   const { open, openModal, closeModal } = useModal();
   const [staff, setStaff] = useState<Pick<Profile, "id" | "full_name" | "role">[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
@@ -54,7 +60,11 @@ export function NewGroupButton({ compact = false }: { compact?: boolean }) {
         <button
           type="button"
           onClick={openModal}
-          className="rounded-md p-1 text-muted hover:bg-paper hover:text-ink"
+          className={`rounded-md p-1 ${
+            dark
+              ? "text-white/60 hover:bg-white/10 hover:text-white"
+              : "text-muted hover:bg-mist hover:text-ink"
+          }`}
           aria-label="New group"
           title="New group"
         >

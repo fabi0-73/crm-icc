@@ -19,10 +19,14 @@ export const NAV: { href: string; label: string; roles: Profile["role"][] }[] = 
   { href: "/admin/audit", label: "Audit", roles: ["admin", "manager"] },
 ];
 
-function UnreadBadge({ count }: { count: number }) {
+function UnreadBadge({ count, active }: { count: number; active: boolean }) {
   if (count <= 0) return null;
   return (
-    <span className="ml-auto min-w-[1.1rem] shrink-0 rounded-full bg-brand-600 px-1.5 text-center text-[11px] font-semibold leading-[1.1rem] text-white">
+    <span
+      className={`ml-auto min-w-[1.1rem] shrink-0 rounded-full px-1.5 text-center text-[11px] font-semibold leading-[1.1rem] ${
+        active ? "bg-white text-brand-700" : "bg-brand-500 text-white"
+      }`}
+    >
       {count > 99 ? "99+" : count}
     </span>
   );
@@ -37,8 +41,8 @@ function RoomRow({ room, active }: { room: MyRoom; active: boolean }) {
       prefetch
       className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[13px] ${
         active
-          ? "bg-brand-50 font-medium text-brand-700"
-          : "text-muted hover:bg-paper hover:text-ink"
+          ? "bg-brand-600 font-medium text-white"
+          : "text-white/60 hover:bg-white/10 hover:text-white"
       }`}
     >
       {room.type === "dm" ? (
@@ -46,16 +50,16 @@ function RoomRow({ room, active }: { room: MyRoom; active: boolean }) {
           <Avatar name={room.display_name} size="sm" className="!h-5 !w-5 !text-[9px]" />
           <PresenceDot
             online={online}
-            className="absolute -bottom-0.5 -right-0.5 ring-2 ring-mist"
+            className="absolute -bottom-0.5 -right-0.5 ring-2 ring-ink"
           />
         </span>
       ) : (
         <HashIcon className="shrink-0 opacity-70" />
       )}
-      <span className={`truncate ${unread && !active ? "font-semibold text-ink" : ""}`}>
+      <span className={`truncate ${unread && !active ? "font-semibold text-white" : ""}`}>
         {room.display_name}
       </span>
-      <UnreadBadge count={room.unread_count} />
+      <UnreadBadge count={room.unread_count} active={active} />
     </Link>
   );
 }
@@ -69,7 +73,7 @@ function SectionHeader({
 }) {
   return (
     <div className="mt-4 mb-1 flex items-center justify-between px-2">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-white/40">
         {label}
       </p>
       {action}
@@ -88,14 +92,14 @@ export function Sidebar({ profile }: { profile: Profile }) {
   const nav = NAV.filter((n) => n.roles.includes(profile.role));
 
   return (
-    <aside className="hidden sm:flex w-64 shrink-0 flex-col border-r border-line bg-mist">
+    <aside className="hidden sm:flex w-64 shrink-0 flex-col bg-ink text-white">
       <Link
         href="/rooms"
         prefetch
-        className="flex items-center gap-2 border-b border-line px-3 py-3"
+        className="flex items-center gap-2 border-b border-white/10 px-3 py-3"
       >
         <Image src="/logo-sm.png" alt="ICC" width={26} height={24} className="rounded" priority />
-        <span className="text-[15px] font-semibold tracking-tight text-ink">
+        <span className="text-[15px] font-semibold tracking-tight">
           ICC Desk
         </span>
       </Link>
@@ -113,8 +117,8 @@ export function Sidebar({ profile }: { profile: Profile }) {
                   prefetch
                   className={`block rounded-md px-2 py-1.5 text-[13px] font-medium ${
                     active
-                      ? "bg-brand-50 text-brand-700"
-                      : "text-muted hover:bg-paper hover:text-ink"
+                      ? "bg-brand-600 text-white"
+                      : "text-white/60 hover:bg-white/10 hover:text-white"
                   }`}
                 >
                   {l.label}
@@ -126,7 +130,7 @@ export function Sidebar({ profile }: { profile: Profile }) {
 
         <SectionHeader
           label="Channels"
-          action={canManage ? <NewGroupButton compact /> : undefined}
+          action={canManage ? <NewGroupButton compact dark /> : undefined}
         />
         <div className="space-y-0.5">
           {channels.map((r) => (
@@ -137,11 +141,11 @@ export function Sidebar({ profile }: { profile: Profile }) {
             />
           ))}
           {channels.length === 0 && (
-            <p className="px-2 py-1 text-[12px] text-muted">No channels yet</p>
+            <p className="px-2 py-1 text-[12px] text-white/40">No channels yet</p>
           )}
         </div>
 
-        <SectionHeader label="Direct messages" action={<NewDmButton />} />
+        <SectionHeader label="Direct messages" action={<NewDmButton dark />} />
         <div className="space-y-0.5">
           {dms.map((r) => (
             <RoomRow
@@ -151,28 +155,28 @@ export function Sidebar({ profile }: { profile: Profile }) {
             />
           ))}
           {dms.length === 0 && (
-            <p className="px-2 py-1 text-[12px] text-muted">
+            <p className="px-2 py-1 text-[12px] text-white/40">
               No direct messages yet
             </p>
           )}
         </div>
       </div>
 
-      <div className="flex items-center gap-2 border-t border-line px-3 py-2.5">
+      <div className="flex items-center gap-2 border-t border-white/10 px-3 py-2.5">
         <span className="relative shrink-0">
           <Avatar name={profile.full_name} size="sm" className="!h-7 !w-7 !text-[10px]" />
           <PresenceDot
             online={selfOnline}
-            className="absolute -bottom-0.5 -right-0.5 ring-2 ring-mist"
+            className="absolute -bottom-0.5 -right-0.5 ring-2 ring-ink"
           />
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
           {profile.full_name}
         </span>
         <form action={signOut}>
           <button
             type="submit"
-            className="rounded-md p-1.5 text-muted hover:bg-paper hover:text-ink"
+            className="rounded-md p-1.5 text-white/60 hover:bg-white/10 hover:text-white"
             aria-label="Sign out"
             title="Sign out"
           >
