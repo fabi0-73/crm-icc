@@ -45,6 +45,8 @@ fi
   rm -f /tmp/$BUNDLE
   npm ci --no-audit --no-fund 2>&1 | tail -1
   npx next build 2>&1 | tail -5
+  # keep files owned by the service user once it exists (Step 6 hardening)
+  id -u crmicc >/dev/null 2>&1 && chown -R crmicc: $APP_DIR
   systemctl restart $SERVICE
   sleep 3
   code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3010/)
