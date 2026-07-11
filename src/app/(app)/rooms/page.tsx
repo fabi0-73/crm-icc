@@ -1,14 +1,13 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { requireProfile } from "@/lib/auth";
-import { LiveRoomList } from "@/components/LiveRoomList";
+import { MobileRoomList } from "@/components/rooms/MobileRoomList";
 import { NewGroupButton } from "@/components/NewGroupButton";
 import { PageHeader } from "@/components/ui/PageHeader";
-import type { MyRoom } from "@/lib/types";
 import { sitePath } from "@/lib/site-url";
 
 export default async function RoomsPage() {
-  const { supabase, profile, user } = await requireProfile();
+  const { supabase, profile } = await requireProfile();
 
   if (profile.role === "agent") {
     const { data: agent } = await supabase
@@ -30,28 +29,30 @@ export default async function RoomsPage() {
     }
   }
 
-  const { data, error } = await supabase.rpc("get_my_rooms");
-  if (error) {
-    return (
-      <div className="p-6 text-sm text-red-700">
-        Failed to load rooms: {error.message}
-      </div>
-    );
-  }
-
-  const rooms = (data ?? []) as MyRoom[];
   const canCreateGroup =
     profile.role === "admin" || profile.role === "manager";
 
   return (
-    <div className="mx-auto flex h-full max-w-3xl flex-col bg-paper sm:border-x sm:border-line">
-      <PageHeader
-        title="Chats"
-        actions={canCreateGroup ? <NewGroupButton /> : undefined}
-      />
-      <div className="flex-1 min-h-0">
-        <LiveRoomList initialRooms={rooms} currentUserId={user.id} />
+    <>
+      {/* Mobile: the full-screen conversation list (live via RoomsProvider). */}
+      <div className="flex h-full flex-col bg-paper sm:hidden">
+        <PageHeader
+          title="Chats"
+          actions={canCreateGroup ? <NewGroupButton /> : undefined}
+        />
+        <div className="flex-1 min-h-0">
+          <MobileRoomList />
+        </div>
       </div>
-    </div>
+      {/* Desktop: the sidebar already lists everything. */}
+      <div className="hidden h-full items-center justify-center bg-paper sm:flex">
+        <div className="text-center">
+          <p className="text-sm font-medium text-ink">Select a conversation</p>
+          <p className="mt-1 text-[13px] text-muted">
+            Pick a channel or direct message from the sidebar.
+          </p>
+        </div>
+      </div>
+    </>
   );
 }

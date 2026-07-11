@@ -73,3 +73,13 @@ export async function markRoomRead(roomId: string) {
   const { supabase } = await requireProfile();
   await supabase.rpc("mark_room_read", { p_room_id: roomId });
 }
+
+/** Open (or create) the caller's DM with another staff member. */
+export async function openDm(otherUserId: string) {
+  const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+  const { data: roomId, error } = await supabase.rpc("get_or_create_dm", {
+    p_other_user: otherUserId,
+  });
+  if (error) throw new Error(error.message);
+  redirect(`/rooms/${roomId}`);
+}

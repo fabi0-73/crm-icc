@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { requireProfile } from "@/lib/auth";
 import { ChatRoom } from "@/components/ChatRoom";
 import { fetchRecentMessages } from "@/lib/supabase/realtime";
-import type { Profile } from "@/lib/types";
+import type { Profile, RoomType } from "@/lib/types";
 
 export default async function RoomPage({
   params,
@@ -16,7 +16,7 @@ export default async function RoomPage({
     .from("rooms")
     .select("id, name, type")
     .eq("id", roomId)
-    .maybeSingle();
+    .maybeSingle<{ id: string; name: string; type: RoomType }>();
 
   if (!room) notFound();
 
@@ -40,14 +40,23 @@ export default async function RoomPage({
 
   const messages = await fetchRecentMessages(supabase, roomId, 100);
 
+  const memberList = (memberProfiles ?? []) as Pick<
+    Profile,
+    "id" | "full_name" | "role"
+  >[];
+  const dmOther =
+    room.type === "dm"
+      ? (memberList.find((m) => m.id !== user.id) ?? null)
+      : null;
+
   return (
     <ChatRoom
       roomId={room.id}
-      roomName={room.name}
+      roomName={dmOther ? dmOther.full_name : room.name}
+      roomType={room.type}
+      dmOtherUserId={dmOther?.id ?? null}
       currentUserId={user.id}
-      members={
-        (memberProfiles ?? []) as Pick<Profile, "id" | "full_name" | "role">[]
-      }
+      members={memberList}
       initialMessages={messages}
     />
   );

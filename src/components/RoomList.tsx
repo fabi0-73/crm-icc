@@ -29,11 +29,11 @@ export function RoomList({ rooms }: { rooms: MyRoom[] }) {
             href={`/rooms/${room.room_id}`}
             className="flex items-center gap-3 px-3 py-3 hover:bg-mist transition-colors"
           >
-            <Avatar name={room.name} />
+            <Avatar name={room.display_name} />
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline justify-between gap-2">
                 <p className="truncate text-sm font-medium text-ink">
-                  {room.name}
+                  {room.display_name}
                 </p>
                 <span className="shrink-0 text-xs text-muted tabular-nums">
                   {formatTime(room.last_message_at)}

@@ -28,7 +28,7 @@ export type Assignment = {
   removal_reason: string | null;
 };
 
-export type RoomType = "agent_workspace" | "group";
+export type RoomType = "agent_workspace" | "group" | "dm";
 
 export type Room = {
   id: string;
@@ -78,8 +78,12 @@ export type AuditLog = {
 export type MyRoom = {
   room_id: string;
   name: string;
+  /** Other member's name for DMs; equals name otherwise. */
+  display_name: string;
   type: RoomType;
   agent_id: string | null;
+  /** Non-null exactly when type === "dm" — for presence/avatar. */
+  dm_other_user_id: string | null;
   last_message_at: string | null;
   last_message_body: string | null;
   last_message_kind: MessageKind | null;

@@ -10,8 +10,11 @@ import {
 import { markRoomRead } from "@/app/actions/rooms";
 import { CallButton } from "@/components/call/CallButton";
 import { Avatar } from "@/components/Avatar";
+import { PresenceDot } from "@/components/PresenceDot";
+import { useIsOnline } from "@/components/presence/PresenceProvider";
 import { BackIcon, PaperclipIcon, SendIcon } from "@/components/icons";
-import type { Message, Profile } from "@/lib/types";
+import { buildDaySections } from "@/lib/chat/grouping";
+import type { Message, Profile, RoomType } from "@/lib/types";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
@@ -25,12 +28,16 @@ function formatMsgTime(iso: string) {
 export function ChatRoom({
   roomId,
   roomName,
+  roomType = "group",
+  dmOtherUserId = null,
   currentUserId,
   members,
   initialMessages,
 }: {
   roomId: string;
   roomName: string;
+  roomType?: RoomType;
+  dmOtherUserId?: string | null;
   currentUserId: string;
   members: Pick<Profile, "id" | "full_name" | "role">[];
   initialMessages: Message[];
@@ -52,6 +59,9 @@ export function ChatRoom({
     members.forEach((p) => m.set(p.id, p.full_name));
     return m;
   }, [members]);
+
+  const sections = useMemo(() => buildDaySections(messages), [messages]);
+  const dmOtherOnline = useIsOnline(dmOtherUserId);
 
   const mergeMessage = useCallback((msg: Message) => {
     setMessages((prev) => {
@@ -210,9 +220,16 @@ export function ChatRoom({
           <h1 className="truncate text-[15px] font-semibold text-ink">
             {roomName}
           </h1>
-          <p className="truncate text-xs text-muted">
-            {members.length} members
-          </p>
+          {roomType === "dm" ? (
+            <p className="flex items-center gap-1.5 text-xs text-muted">
+              <PresenceDot online={dmOtherOnline} />
+              {dmOtherOnline ? "Online" : "Offline"}
+            </p>
+          ) : (
+            <p className="truncate text-xs text-muted">
+              {members.length} members
+            </p>
+          )}
         </div>
         <CallButton
           roomId={roomId}
@@ -230,59 +247,89 @@ export function ChatRoom({
       </div>
 
       <div className="relative flex-1 min-h-0">
-        <div className="h-full overflow-y-auto bg-paper px-3 py-4 space-y-2 sm:px-6">
-          {messages.map((msg) => {
-            if (msg.kind === "system") {
-              return (
-                <div key={msg.id} className="flex justify-center py-1.5">
-                  <span className="rounded-md border border-line bg-mist px-2.5 py-1 text-[11px] text-muted">
-                    {msg.body}
-                  </span>
-                </div>
-              );
-            }
-            const mine = msg.sender_id === currentUserId;
-            const name = msg.sender_id
-              ? (memberMap.get(msg.sender_id) ?? "Unknown")
-              : "";
-            return (
-              <div
-                key={msg.id}
-                className={`flex ${mine ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
-                    mine ? "bg-bubble text-ink" : "bg-bubble-peer text-ink"
-                  }`}
-                >
-                  {!mine && (
-                    <p className="mb-0.5 text-xs font-semibold text-brand-700">
-                      {name}
-                    </p>
-                  )}
-                  {msg.kind === "file" && msg.attachment_path ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void downloadAttachment(
-                          msg.attachment_path!,
-                          msg.attachment_name ?? "file",
-                        )
-                      }
-                      className="font-medium underline underline-offset-2"
-                    >
-                      {msg.attachment_name ?? msg.body}
-                    </button>
-                  ) : (
-                    <p className="whitespace-pre-wrap break-words">{msg.body}</p>
-                  )}
-                  <p className="mt-0.5 text-right text-[11px] text-muted/70 tabular-nums">
-                    {formatMsgTime(msg.created_at)}
-                  </p>
-                </div>
+        <div className="h-full overflow-y-auto bg-paper px-3 py-4 sm:px-6">
+          {sections.map((day) => (
+            <div key={day.key}>
+              <div className="flex items-center gap-3 py-2">
+                <span className="h-px flex-1 bg-line" />
+                <span className="rounded-full border border-line bg-paper px-2.5 py-0.5 text-[11px] font-medium text-muted">
+                  {day.label}
+                </span>
+                <span className="h-px flex-1 bg-line" />
               </div>
-            );
-          })}
+              {day.groups.map((g) => {
+                if (g.kind === "system") {
+                  return (
+                    <div key={g.key} className="flex justify-center py-1.5">
+                      <span className="rounded-md border border-line bg-mist px-2.5 py-1 text-[11px] text-muted">
+                        {g.message.body}
+                      </span>
+                    </div>
+                  );
+                }
+                const mine = g.senderId === currentUserId;
+                if (mine) {
+                  const last = g.messages[g.messages.length - 1];
+                  return (
+                    <div key={g.key} className="mt-3 flex flex-col items-end">
+                      {g.messages.map((msg) => (
+                        <div key={msg.id} className="group relative mt-0.5 max-w-[85%]">
+                          <span className="absolute right-full top-1/2 mr-2 hidden -translate-y-1/2 whitespace-nowrap text-[10px] text-muted tabular-nums group-hover:block">
+                            {formatMsgTime(msg.created_at)}
+                          </span>
+                          <div className="rounded-lg bg-bubble px-3 py-2 text-sm leading-relaxed text-ink">
+                            <MessageBody
+                              msg={msg}
+                              onDownload={downloadAttachment}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                      <p className="mt-0.5 text-[11px] text-muted/70 tabular-nums">
+                        {formatMsgTime(last.created_at)}
+                      </p>
+                    </div>
+                  );
+                }
+                const name = g.senderId
+                  ? (memberMap.get(g.senderId) ?? "Unknown")
+                  : "";
+                const first = g.messages[0];
+                return (
+                  <div key={g.key} className="mt-3 flex gap-2.5">
+                    <div className="w-9 shrink-0 pt-0.5">
+                      <Avatar name={name} size="sm" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="flex items-baseline gap-2">
+                        <span className="truncate text-[13px] font-semibold text-brand-700">
+                          {name}
+                        </span>
+                        <span className="shrink-0 text-[11px] text-muted tabular-nums">
+                          {formatMsgTime(first.created_at)}
+                        </span>
+                      </p>
+                      {g.messages.map((msg, i) => (
+                        <div key={msg.id} className="group relative mt-0.5 flex">
+                          {i > 0 && (
+                            <span className="absolute right-full top-1/2 mr-2 hidden -translate-y-1/2 whitespace-nowrap text-[10px] text-muted tabular-nums group-hover:block">
+                              {formatMsgTime(msg.created_at)}
+                            </span>
+                          )}
+                          <div className="max-w-[85%] rounded-lg bg-bubble-peer px-3 py-2 text-sm leading-relaxed text-ink">
+                            <MessageBody
+                              msg={msg}
+                              onDownload={downloadAttachment}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
           <div ref={bottomRef} />
         </div>
 
@@ -304,13 +351,7 @@ export function ChatRoom({
                   key={m.id}
                   className="flex items-center gap-3 rounded-lg px-2 py-2.5 hover:bg-mist"
                 >
-                  <Avatar name={m.full_name} size="sm" />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-ink">
-                      {m.full_name}
-                    </p>
-                    <p className="text-xs capitalize text-muted">{m.role}</p>
-                  </div>
+                  <MemberRow member={m} />
                 </li>
               ))}
             </ul>
@@ -370,5 +411,53 @@ export function ChatRoom({
         </button>
       </form>
     </div>
+  );
+}
+
+function MessageBody({
+  msg,
+  onDownload,
+}: {
+  msg: Message;
+  onDownload: (path: string, name: string) => Promise<void>;
+}) {
+  if (msg.kind === "file" && msg.attachment_path) {
+    return (
+      <button
+        type="button"
+        onClick={() =>
+          void onDownload(msg.attachment_path!, msg.attachment_name ?? "file")
+        }
+        className="font-medium underline underline-offset-2"
+      >
+        {msg.attachment_name ?? msg.body}
+      </button>
+    );
+  }
+  return <p className="whitespace-pre-wrap break-words">{msg.body}</p>;
+}
+
+function MemberRow({
+  member,
+}: {
+  member: Pick<Profile, "id" | "full_name" | "role">;
+}) {
+  const online = useIsOnline(member.id);
+  return (
+    <>
+      <span className="relative shrink-0">
+        <Avatar name={member.full_name} size="sm" />
+        <PresenceDot
+          online={online}
+          className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
+        />
+      </span>
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-ink">
+          {member.full_name}
+        </p>
+        <p className="text-xs capitalize text-muted">{member.role}</p>
+      </div>
+    </>
   );
 }

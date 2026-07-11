@@ -6,9 +6,10 @@ import { createGroupAndRedirect } from "@/app/actions/rooms";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
+import { PlusIcon } from "@/components/icons";
 import type { Profile } from "@/lib/types";
 
-export function NewGroupButton() {
+export function NewGroupButton({ compact = false }: { compact?: boolean }) {
   const { open, openModal, closeModal } = useModal();
   const [staff, setStaff] = useState<Pick<Profile, "id" | "full_name" | "role">[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
@@ -49,9 +50,21 @@ export function NewGroupButton() {
 
   return (
     <>
-      <Button size="sm" type="button" onClick={openModal}>
-        New group
-      </Button>
+      {compact ? (
+        <button
+          type="button"
+          onClick={openModal}
+          className="rounded-md p-1 text-muted hover:bg-paper hover:text-ink"
+          aria-label="New group"
+          title="New group"
+        >
+          <PlusIcon />
+        </button>
+      ) : (
+        <Button size="sm" type="button" onClick={openModal}>
+          New group
+        </Button>
+      )}
       <Modal title="New group" open={open} onClose={closeModal}>
         <form onSubmit={onSubmit} className="space-y-4">
           {error && (
