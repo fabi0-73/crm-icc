@@ -87,6 +87,12 @@ begin
   insert into room_members (room_id, user_id, can_view_history_from, added_by)
   values (v_room, p_user_id, null, v_actor);
 
+  -- Creator (manager/admin) joins so they can open the workspace chat.
+  if v_actor is distinct from p_user_id then
+    insert into room_members (room_id, user_id, can_view_history_from, added_by)
+    values (v_room, v_actor, null, v_actor);
+  end if;
+
   perform private.add_system_message(
     v_room, 'Workspace created',
     jsonb_build_object('event', 'workspace_created')

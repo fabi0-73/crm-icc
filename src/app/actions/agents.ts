@@ -1,0 +1,176 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { requireRole } from "@/lib/auth";
+import { createServiceClient } from "@/lib/supabase/server";
+import type { ActionState } from "@/app/actions/admin";
+import { historyFromPreset } from "@/lib/history-presets";
+import type { HistoryPreset } from "@/lib/types";
+
+export async function createAgent(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { profile: actor, supabase } = await requireRole([
+    "admin",
+    "manager",
+  ]);
+
+  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const displayName = String(formData.get("display_name") ?? "").trim();
+  const fullName =
+    String(formData.get("full_name") ?? "").trim() || displayName;
+
+  if (!email || !displayName) {
+    return { error: "Display name and email are required." };
+  }
+
+  const service = createServiceClient();
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+
+  const { data: created, error: createError } =
+    await service.auth.admin.createUser({
+      email,
+      email_confirm: true,
+      user_metadata: { full_name: fullName },
+    });
+
+  if (createError || !created.user) {
+    return { error: createError?.message ?? "Failed to create agent account." };
+  }
+
+  const userId = created.user.id;
+
+  const { error: profileError } = await service.from("profiles").insert({
+    id: userId,
+    full_name: fullName,
+    role: "agent",
+    is_active: true,
+  });
+
+  if (profileError) {
+    await service.auth.admin.deleteUser(userId);
+    return { error: profileError.message };
+  }
+
+  // Transactional agent + workspace room via RPC (caller's session).
+  const { data: agentId, error: rpcError } = await supabase.rpc(
+    "create_agent_with_room",
+    { p_user_id: userId, p_display_name: displayName },
+  );
+
+  if (rpcError) {
+    await service.from("profiles").delete().eq("id", userId);
+    await service.auth.admin.deleteUser(userId);
+    return { error: rpcError.message };
+  }
+
+  await service.auth.resetPasswordForEmail(email, {
+    redirectTo: `${siteUrl}/auth/reset-password`,
+  });
+
+  // Extra audit from service path for the auth account itself.
+  await service.from("audit_logs").insert({
+    actor_id: actor.id,
+    action: "user.invited",
+    target_type: "profile",
+    target_id: userId,
+    metadata: { email, role: "agent", full_name: fullName, agent_id: agentId },
+  });
+
+  revalidatePath("/agents");
+  return { success: `Agent ${displayName} created.` };
+}
+
+export async function archiveAgent(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { profile: actor } = await requireRole(["admin", "manager"]);
+  const agentId = String(formData.get("agent_id") ?? "");
+  if (!agentId) return { error: "Missing agent." };
+
+  const service = createServiceClient();
+  const { data: agent, error: fetchError } = await service
+    .from("agents")
+    .select("id, user_id, display_name")
+    .eq("id", agentId)
+    .single();
+
+  if (fetchError || !agent) return { error: "Agent not found." };
+
+  const { error } = await service
+    .from("agents")
+    .update({ status: "archived" })
+    .eq("id", agentId);
+
+  if (error) return { error: error.message };
+
+  await service
+    .from("profiles")
+    .update({ is_active: false })
+    .eq("id", agent.user_id);
+
+  await service.auth.admin.updateUserById(agent.user_id, {
+    ban_duration: "876000h",
+  });
+
+  await service.from("audit_logs").insert({
+    actor_id: actor.id,
+    action: "agent.archived",
+    target_type: "agent",
+    target_id: agentId,
+    metadata: { display_name: agent.display_name },
+  });
+
+  revalidatePath("/agents");
+  revalidatePath(`/agents/${agentId}`);
+  return { success: "Agent archived." };
+}
+
+export async function swapAssistants(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase } = await requireRole(["admin", "manager"]);
+
+  const agentId = String(formData.get("agent_id") ?? "");
+  const reason = String(formData.get("reason") ?? "").trim() || null;
+  const removeRaw = String(formData.get("remove_ids") ?? "");
+  const addUserId = String(formData.get("add_user_id") ?? "").trim();
+  const preset = String(formData.get("history_preset") ?? "none") as HistoryPreset;
+
+  if (!agentId) return { error: "Missing agent." };
+
+  const removeIds = removeRaw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const additions =
+    addUserId.length > 0
+      ? [
+          {
+            user_id: addUserId,
+            history_from: historyFromPreset(preset),
+          },
+        ]
+      : [];
+
+  if (removeIds.length === 0 && additions.length === 0) {
+    return { error: "Select at least one assistant to add or remove." };
+  }
+
+  const { error } = await supabase.rpc("swap_assistants", {
+    p_agent_id: agentId,
+    p_remove_ids: removeIds,
+    p_additions: additions,
+    p_reason: reason,
+  });
+
+  if (error) return { error: error.message };
+
+  revalidatePath(`/agents/${agentId}`);
+  revalidatePath("/rooms");
+  return { success: "Assignment updated." };
+}

@@ -1,17 +1,31 @@
 @import "tailwindcss";
 
 @theme {
-  --color-brand-50: #eef4ff;
-  --color-brand-100: #dce7fd;
-  --color-brand-200: #c0d4fc;
-  --color-brand-300: #94b8f9;
-  --color-brand-400: #6193f4;
-  --color-brand-500: #3d6fee;
-  --color-brand-600: #274fe3;
-  --color-brand-700: #1f3cd0;
-  --color-brand-800: #2033a9;
-  --color-brand-900: #1f3085;
-  --color-brand-950: #171f51;
+  --font-display: "Newsreader", ui-serif, Georgia, serif;
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+
+  --color-ink: #111b21;
+  --color-ink-soft: #202c33;
+  --color-mist: #f0f2f5;
+  --color-paper: #ffffff;
+  --color-chat: #eef2f6;
+  --color-line: #e9edef;
+  --color-muted: #667781;
+
+  --color-brand-50: #eef6f4;
+  --color-brand-100: #d5ebe6;
+  --color-brand-200: #a8d5cb;
+  --color-brand-300: #6fb8a8;
+  --color-brand-400: #3d9a86;
+  --color-brand-500: #1f7a68;
+  --color-brand-600: #0b6b5a;
+  --color-brand-700: #085546;
+  --color-brand-800: #074438;
+  --color-brand-900: #06362d;
+  --color-brand-950: #031f1a;
+
+  --color-brass: #c9a227;
+  --color-brass-soft: #f5e6b8;
 }
 
 html,
@@ -20,5 +34,23 @@ body {
 }
 
 body {
-  @apply bg-gray-50 text-gray-900 antialiased;
+  @apply bg-mist text-ink antialiased font-sans;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-brand-600) 22%, white);
+}
+
+.brand-mark {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+.chat-wallpaper {
+  background-color: var(--color-chat);
+  background-image: radial-gradient(
+    rgba(17, 27, 33, 0.035) 1px,
+    transparent 1px
+  );
+  background-size: 18px 18px;
 }
