@@ -1,0 +1,5 @@
+# Mobile shell — not needed on the web server (deploy.sh uses `git archive`)
+android export-ignore
+ios export-ignore
+mobile export-ignore
+capacitor.config.ts export-ignore

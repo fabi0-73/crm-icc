@@ -10,6 +10,9 @@
     "seed": "node scripts/seed-demo.mjs"
   },
   "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
+    "@capacitor/ios": "^8.4.2",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.49.4",
     "next": "^15.3.3",
@@ -17,6 +20,7 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.4.2",
     "@tailwindcss/postcss": "^4.1.7",
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",
