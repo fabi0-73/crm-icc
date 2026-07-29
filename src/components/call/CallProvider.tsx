@@ -82,6 +82,7 @@ type CallContextValue = {
   muted: boolean;
   camOff: boolean;
   noiseOff: boolean;
+  sharing: boolean;
   statusText: string;
   signalReady: boolean;
   localStream: MediaStream | null;
@@ -99,6 +100,7 @@ type CallContextValue = {
   toggleMic: () => void;
   toggleCam: () => void;
   toggleNoise: () => void;
+  toggleScreenShare: () => Promise<void>;
   setView: (v: "full" | "mini") => void;
 };
 
@@ -128,6 +130,7 @@ export function CallProvider({
   const [muted, setMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
   const [noiseOff, setNoiseOff] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [signalReady, setSignalReady] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -137,6 +140,10 @@ export function CallProvider({
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
+  /** True when screen was added as a new sender (voice call); false when replaceTrack. */
+  const screenAddedSenderRef = useRef(false);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const callIdRef = useRef<string | null>(null);
   const roomIdRef = useRef<string | null>(null);
@@ -193,6 +200,10 @@ export function CallProvider({
       if (opts?.purge) purgeSignals(callIdRef.current);
       pcRef.current?.close();
       pcRef.current = null;
+      screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+      screenStreamRef.current = null;
+      cameraTrackRef.current = null;
+      screenAddedSenderRef.current = false;
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
       callIdRef.current = null;
@@ -210,6 +221,7 @@ export function CallProvider({
       setMuted(false);
       setCamOff(false);
       setNoiseOff(false);
+      setSharing(false);
       setStatusText("");
       setLocalStream(null);
       setRemoteStream(null);
@@ -283,12 +295,23 @@ export function CallProvider({
         });
       };
       pc.ontrack = (e) => {
-        const stream = e.streams[0] ?? new MediaStream([e.track]);
-        setRemoteStream(stream);
-        if (remoteAudioRef.current) {
-          remoteAudioRef.current.srcObject = stream;
-          void remoteAudioRef.current.play().catch(() => undefined);
-        }
+        const incoming = e.streams[0] ?? new MediaStream([e.track]);
+        // Merge newly arrived tracks into one remote stream so voice→screen
+        // renegotiation (extra video track) still reaches the UI/audio sink.
+        setRemoteStream((prev) => {
+          const next = new MediaStream(prev?.getTracks() ?? []);
+          for (const t of incoming.getTracks()) {
+            if (!next.getTracks().some((x) => x.id === t.id)) next.addTrack(t);
+          }
+          if (!next.getTracks().some((x) => x.id === e.track.id)) {
+            next.addTrack(e.track);
+          }
+          if (remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = next;
+            void remoteAudioRef.current.play().catch(() => undefined);
+          }
+          return next;
+        });
       };
       pc.oniceconnectionstatechange = () => {
         const s = pc.iceConnectionState;
@@ -326,9 +349,28 @@ export function CallProvider({
       video: video ? { facingMode: "user" } : false,
     });
     localStreamRef.current = stream;
+    cameraTrackRef.current = stream.getVideoTracks()[0] ?? null;
     setLocalStream(stream);
     return stream;
   }, []);
+
+  /** Answer a mid-call renegotiation offer (e.g. peer started screenshare on a voice call). */
+  const answerRenegotiation = useCallback(
+    async (sdp: RTCSessionDescriptionInit, from: string, callId: string, roomId: string) => {
+      const pc = pcRef.current;
+      if (!pc || pc.signalingState !== "stable") return;
+      await pc.setRemoteDescription(sdp);
+      await flushIce();
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await waitForIceGathering(pc);
+      const finalAnswer = pc.localDescription ?? answer;
+      await send("answer", callId, from, roomId, {
+        sdp: { type: finalAnswer.type, sdp: finalAnswer.sdp },
+      });
+    },
+    [flushIce, send],
+  );
 
   const answerOffer = useCallback(
     async (offer: { callId: string; from: string; payload: SignalPayload }) => {
@@ -445,6 +487,20 @@ export function CallProvider({
       }
 
       if (row.kind === "offer" && p.sdp) {
+        // Mid-call renegotiation (screenshare on a voice call).
+        if (
+          phaseRef.current === "in-call" &&
+          callIdRef.current === row.call_id &&
+          remoteSetRef.current
+        ) {
+          try {
+            await answerRenegotiation(p.sdp, row.from_user, row.call_id, row.room_id);
+          } catch (err) {
+            console.warn("renegotiation answer failed", err);
+          }
+          return;
+        }
+
         if (answeredCallIdRef.current !== row.call_id) {
           pendingOfferRef.current = {
             callId: row.call_id,
@@ -466,18 +522,17 @@ export function CallProvider({
         try {
           stopTones();
           clearTimers();
-          if (
-            !remoteSetRef.current &&
-            !pcRef.current.currentRemoteDescription &&
-            pcRef.current.signalingState === "have-local-offer"
-          ) {
+          const pc = pcRef.current;
+          if (pc.signalingState === "have-local-offer") {
             remoteSetRef.current = true;
-            await pcRef.current.setRemoteDescription(p.sdp);
+            await pc.setRemoteDescription(p.sdp);
             await loadMissedIce(row.call_id);
             await flushIce();
           }
-          setPhase("connecting");
-          setStatusText("Connecting…");
+          if (phaseRef.current !== "in-call") {
+            setPhase("connecting");
+            setStatusText("Connecting…");
+          }
         } catch (err) {
           setStatusText(err instanceof Error ? err.message : "Answer failed");
         }
@@ -496,7 +551,7 @@ export function CallProvider({
         }
       }
     },
-    [answerOffer, cleanup, clearTimers, flushIce, loadMissedIce, send, showNotice, userId],
+    [answerOffer, answerRenegotiation, cleanup, clearTimers, flushIce, loadMissedIce, send, showNotice, userId],
   );
 
   handlingRef.current = handleSignal;
@@ -646,9 +701,18 @@ export function CallProvider({
   const toggleCam = useCallback(() => {
     setCamOff((prev) => {
       const next = !prev;
-      localStreamRef.current?.getVideoTracks().forEach((t) => {
-        t.enabled = !next;
-      });
+      // While screensharing, cam toggle only affects the parked camera track.
+      const target =
+        cameraTrackRef.current ??
+        localStreamRef.current?.getVideoTracks()[0] ??
+        null;
+      if (target && target !== screenStreamRef.current?.getVideoTracks()[0]) {
+        target.enabled = !next;
+      } else if (!screenStreamRef.current) {
+        localStreamRef.current?.getVideoTracks().forEach((t) => {
+          t.enabled = !next;
+        });
+      }
       return next;
     });
   }, []);
@@ -669,6 +733,143 @@ export function CallProvider({
       return next;
     });
   }, []);
+
+  const refreshLocalPreview = useCallback((screenTrack: MediaStreamTrack | null) => {
+    const mic = localStreamRef.current?.getAudioTracks() ?? [];
+    if (screenTrack) {
+      setLocalStream(new MediaStream([...mic, screenTrack]));
+      return;
+    }
+    const cam = cameraTrackRef.current;
+    const tracks = cam ? [...mic, cam] : [...mic];
+    const stream = new MediaStream(tracks);
+    // Keep localStreamRef as the camera/mic ownership stream for cleanup.
+    setLocalStream(stream);
+  }, []);
+
+  const stopScreenShare = useCallback(async () => {
+    const pc = pcRef.current;
+    const screen = screenStreamRef.current;
+    const screenTrack = screen?.getVideoTracks()[0] ?? null;
+
+    if (pc && screenTrack) {
+      const videoSender = pc
+        .getSenders()
+        .find((s) => s.track?.id === screenTrack.id || s.track?.kind === "video");
+      if (screenAddedSenderRef.current && videoSender) {
+        try {
+          pc.removeTrack(videoSender);
+        } catch {
+          /* ignore */
+        }
+        if (
+          peerIdRef.current &&
+          callIdRef.current &&
+          roomIdRef.current &&
+          pc.signalingState === "stable"
+        ) {
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            await waitForIceGathering(pc);
+            const finalOffer = pc.localDescription ?? offer;
+            await send("offer", callIdRef.current, peerIdRef.current, roomIdRef.current, {
+              video: true,
+              sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
+            });
+          } catch (err) {
+            console.warn("screenshare stop renegotiation failed", err);
+          }
+        }
+      } else if (videoSender && cameraTrackRef.current) {
+        try {
+          await videoSender.replaceTrack(cameraTrackRef.current);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    screen?.getTracks().forEach((t) => t.stop());
+    screenStreamRef.current = null;
+    screenAddedSenderRef.current = false;
+    setSharing(false);
+    refreshLocalPreview(null);
+  }, [refreshLocalPreview, send]);
+
+  const startScreenShare = useCallback(async () => {
+    if (phaseRef.current !== "in-call") return;
+    if (!window.isSecureContext && location.hostname !== "localhost") {
+      showNotice("Screen share needs HTTPS.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      showNotice("This browser cannot share the screen.");
+      return;
+    }
+    const pc = pcRef.current;
+    if (!pc || !peerIdRef.current || !callIdRef.current || !roomIdRef.current) return;
+
+    try {
+      const screen = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: false,
+      });
+      const screenTrack = screen.getVideoTracks()[0];
+      if (!screenTrack) {
+        screen.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      try {
+        screenTrack.contentHint = "detail";
+      } catch {
+        /* ignore */
+      }
+
+      screenStreamRef.current = screen;
+      screenTrack.onended = () => {
+        void stopScreenShare();
+      };
+
+      const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
+      if (videoSender) {
+        if (videoSender.track && videoSender.track !== cameraTrackRef.current) {
+          // Keep the original camera for restore if we somehow replaced already.
+        } else if (videoSender.track) {
+          cameraTrackRef.current = videoSender.track;
+        }
+        await videoSender.replaceTrack(screenTrack);
+        screenAddedSenderRef.current = false;
+      } else {
+        const camStream = localStreamRef.current ?? new MediaStream();
+        pc.addTrack(screenTrack, camStream);
+        screenAddedSenderRef.current = true;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await waitForIceGathering(pc);
+        const finalOffer = pc.localDescription ?? offer;
+        await send("offer", callIdRef.current, peerIdRef.current, roomIdRef.current, {
+          video: true,
+          sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
+        });
+      }
+
+      setSharing(true);
+      refreshLocalPreview(screenTrack);
+    } catch (err) {
+      // User cancelled the picker — not an error worth surfacing.
+      if (err instanceof DOMException && err.name === "NotAllowedError") return;
+      showNotice(err instanceof Error ? err.message : "Could not share screen");
+    }
+  }, [refreshLocalPreview, send, showNotice, stopScreenShare]);
+
+  const toggleScreenShare = useCallback(async () => {
+    if (screenStreamRef.current) {
+      await stopScreenShare();
+    } else {
+      await startScreenShare();
+    }
+  }, [startScreenShare, stopScreenShare]);
 
   // One global signaling channel for the whole session.
   useEffect(() => {
@@ -733,6 +934,7 @@ export function CallProvider({
       muted,
       camOff,
       noiseOff,
+      sharing,
       statusText,
       signalReady,
       localStream,
@@ -745,6 +947,7 @@ export function CallProvider({
       toggleMic,
       toggleCam,
       toggleNoise,
+      toggleScreenShare,
       setView,
     }),
     [
@@ -755,6 +958,7 @@ export function CallProvider({
       muted,
       camOff,
       noiseOff,
+      sharing,
       statusText,
       signalReady,
       localStream,
@@ -767,6 +971,7 @@ export function CallProvider({
       toggleMic,
       toggleCam,
       toggleNoise,
+      toggleScreenShare,
     ],
   );
 

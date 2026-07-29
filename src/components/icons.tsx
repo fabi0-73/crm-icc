@@ -129,3 +129,13 @@ export function NoiseIcon({ size = 22, className = "" }: IconProps) {
     </svg>
   );
 }
+
+export function ScreenShareIcon({ size = 22, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <rect x="2" y="3" width="20" height="14" rx="2" />
+      <path d="M8 21h8M12 17v4" />
+      <path d="M12 7v5M9.5 9.5 12 7l2.5 2.5" />
+    </svg>
+  );
+}

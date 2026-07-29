@@ -11,6 +11,7 @@ import {
   HangUpIcon,
   MicIcon,
   MicOffIcon,
+  ScreenShareIcon,
 } from "@/components/icons";
 
 /**
@@ -24,17 +25,26 @@ export function FloatingCallTile() {
     statusText,
     muted,
     camOff,
+    sharing,
     localStream,
     remoteStream,
     connectedAt,
     hangup,
     toggleMic,
     toggleCam,
+    toggleScreenShare,
     setView,
   } = useCall();
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const duration = useDuration(connectedAt);
+
+  const remoteHasVideo = Boolean(
+    remoteStream?.getVideoTracks().some((t) => t.readyState === "live"),
+  );
+  const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
+  const fitClass =
+    sharing || (!call?.video && remoteHasVideo) ? "object-contain" : "object-cover";
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
@@ -63,20 +73,22 @@ export function FloatingCallTile() {
         aria-label="Expand call to full screen"
         title="Expand"
       >
-        {call.video ? (
+        {showVideo ? (
           <>
             <video
               ref={remoteVideoRef}
               autoPlay
               playsInline
-              className="h-full w-full object-cover"
+              className={`h-full w-full bg-ink ${fitClass}`}
             />
             <video
               ref={localVideoRef}
               autoPlay
               playsInline
               muted
-              className={`absolute bottom-2 right-2 h-16 w-12 rounded-lg border border-white/25 object-cover ${camOff ? "opacity-30" : ""}`}
+              className={`absolute bottom-2 right-2 h-16 w-12 rounded-lg border border-white/25 ${
+                sharing ? "object-contain bg-ink" : "object-cover"
+              } ${camOff && !sharing ? "opacity-30" : ""}`}
             />
           </>
         ) : (
@@ -92,6 +104,11 @@ export function FloatingCallTile() {
         <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/40">
           <ExpandIcon />
         </span>
+        {sharing && (
+          <span className="absolute left-2 top-2 rounded bg-brand-500/90 px-1.5 py-0.5 text-[10px] font-medium">
+            Sharing
+          </span>
+        )}
       </button>
 
       <div className="flex items-center gap-2 px-3 py-2.5">
@@ -123,6 +140,21 @@ export function FloatingCallTile() {
             aria-pressed={camOff}
           >
             <span className="scale-75">{camOff ? <CamOffIcon /> : <CamIcon />}</span>
+          </button>
+        )}
+        {phase === "in-call" && (
+          <button
+            type="button"
+            onClick={() => void toggleScreenShare()}
+            className={`flex h-9 w-9 items-center justify-center rounded-full ${
+              sharing ? "bg-white text-ink" : "bg-white/15 hover:bg-white/25"
+            }`}
+            aria-label={sharing ? "Stop sharing" : "Share screen"}
+            aria-pressed={sharing}
+          >
+            <span className="scale-75">
+              <ScreenShareIcon />
+            </span>
           </button>
         )}
         <button

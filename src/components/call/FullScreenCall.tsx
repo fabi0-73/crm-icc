@@ -12,6 +12,7 @@ import {
   MicOffIcon,
   MinimizeIcon,
   NoiseIcon,
+  ScreenShareIcon,
 } from "@/components/icons";
 
 export function FullScreenCall() {
@@ -22,6 +23,7 @@ export function FullScreenCall() {
     muted,
     camOff,
     noiseOff,
+    sharing,
     localStream,
     remoteStream,
     connectedAt,
@@ -29,11 +31,17 @@ export function FullScreenCall() {
     toggleMic,
     toggleCam,
     toggleNoise,
+    toggleScreenShare,
     setView,
   } = useCall();
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const duration = useDuration(connectedAt);
+
+  const remoteHasVideo = Boolean(remoteStream?.getVideoTracks().some((t) => t.readyState === "live"));
+  const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
+  const fitClass =
+    sharing || (!call?.video && remoteHasVideo) ? "object-contain" : "object-cover";
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
@@ -52,6 +60,13 @@ export function FullScreenCall() {
   if (!call) return null;
   const subtitle =
     phase === "in-call" && duration ? duration : statusText || "Ringing…";
+  const modeLabel = sharing
+    ? "Screen"
+    : call.video
+      ? "Video"
+      : remoteHasVideo
+        ? "Screen"
+        : "Voice";
 
   return (
     <div className="fixed inset-0 z-[115] flex flex-col bg-ink text-white">
@@ -68,26 +83,28 @@ export function FullScreenCall() {
         <div className="min-w-0">
           <p className="truncate text-lg font-semibold">{call.peerName}</p>
           <p className="text-xs text-white/50 tabular-nums">
-            {call.video ? "Video" : "Voice"} · {subtitle}
+            {modeLabel} · {subtitle}
           </p>
         </div>
       </div>
 
       <div className="relative flex-1 min-h-0 bg-ink-soft">
-        {call.video ? (
+        {showVideo ? (
           <>
             <video
               ref={remoteVideoRef}
               autoPlay
               playsInline
-              className="h-full w-full object-cover"
+              className={`h-full w-full bg-ink ${fitClass}`}
             />
             <video
               ref={localVideoRef}
               autoPlay
               playsInline
               muted
-              className={`absolute bottom-4 right-4 h-36 w-28 rounded-xl border border-white/20 object-cover ${camOff ? "opacity-30" : ""}`}
+              className={`absolute bottom-4 right-4 h-36 w-28 rounded-xl border border-white/20 ${
+                sharing ? "object-contain bg-ink" : "object-cover"
+              } ${camOff && !sharing ? "opacity-30" : ""}`}
             />
           </>
         ) : (
@@ -118,6 +135,15 @@ export function FullScreenCall() {
             label={camOff ? "Camera on" : "Camera off"}
           >
             {camOff ? <CamOffIcon /> : <CamIcon />}
+          </CallControlButton>
+        )}
+        {phase === "in-call" && (
+          <CallControlButton
+            onClick={() => void toggleScreenShare()}
+            active={sharing}
+            label={sharing ? "Stop share" : "Share"}
+          >
+            <ScreenShareIcon />
           </CallControlButton>
         )}
         <CallControlButton
@@ -171,4 +197,3 @@ function CallControlButton({
     </div>
   );
 }
-
