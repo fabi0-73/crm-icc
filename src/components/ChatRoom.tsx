@@ -345,9 +345,9 @@ export function ChatRoom({
       : null;
 
   return (
-    <div className="flex h-full flex-col bg-mist">
+    <div className="flex h-full flex-col bg-stream">
       {/* ── Header ─────────────────────────────────────────────── */}
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-line bg-paper px-1.5 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] sm:px-3">
+      <div className="flex shrink-0 items-center gap-1.5 border-b border-line/80 bg-paper/90 px-1.5 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] backdrop-blur-md sm:px-3">
         <Link
           href="/rooms"
           prefetch
@@ -413,10 +413,11 @@ export function ChatRoom({
           onScroll={onStreamScroll}
           className="h-full overflow-y-auto overscroll-contain px-3 py-3 sm:px-6"
         >
+          <div className="mx-auto w-full max-w-3xl">
           {sections.map((day) => (
             <div key={day.key}>
               <div className="my-3 flex justify-center">
-                <span className="rounded-full border border-line bg-paper px-3 py-1 text-[11px] font-medium text-muted shadow-xs">
+                <span className="rounded-full border border-line/70 bg-white/75 px-3 py-1 text-[11px] font-medium text-muted shadow-xs backdrop-blur">
                   {day.label}
                 </span>
               </div>
@@ -504,17 +505,21 @@ export function ChatRoom({
             </div>
           ))}
           <div ref={bottomRef} className="h-px" />
+          </div>
         </div>
       </div>
 
       {/* ── Composer ───────────────────────────────────────────── */}
-      <div className="shrink-0 border-t border-line bg-paper px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-3">
+      <div className="shrink-0 border-t border-line/80 bg-paper/95 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur sm:px-3">
         {error && (
-          <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700">
+          <p className="mx-auto mb-2 w-full max-w-3xl rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700">
             {error}
           </p>
         )}
-        <form onSubmit={sendText} className="flex items-end gap-1.5">
+        <form
+          onSubmit={sendText}
+          className="mx-auto flex w-full max-w-3xl items-end gap-1.5"
+        >
           <input
             ref={fileRef}
             type="file"
@@ -563,7 +568,7 @@ export function ChatRoom({
           <button
             type="submit"
             disabled={sending || !body.trim()}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white transition-opacity hover:bg-brand-700 active:bg-brand-700 disabled:opacity-40"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-grad text-white shadow-brand transition-[opacity,transform] hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:shadow-none"
             aria-label="Send"
           >
             <SendHorizontal className="size-5" />
@@ -636,8 +641,8 @@ function Bubble({
     ? `rounded-2xl ${tail ? "rounded-br-md" : ""}`
     : `rounded-2xl ${tail ? "rounded-bl-md" : ""}`;
   const surface = mine
-    ? "bg-brand-600 text-white"
-    : "border border-line bg-paper text-ink";
+    ? "bg-brand-grad text-white shadow-bubble"
+    : "border border-line/70 bg-paper text-ink shadow-xs";
 
   if (msg.kind === "file" && msg.attachment_path) {
     return (

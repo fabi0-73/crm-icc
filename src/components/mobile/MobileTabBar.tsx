@@ -74,7 +74,7 @@ function TabButton({
     >
       <span
         className={`relative flex h-8 min-w-14 items-center justify-center rounded-full transition-colors ${
-          active ? "bg-brand-600 text-white" : "text-white/55"
+          active ? "bg-brand-grad text-white shadow-bubble" : "text-white/55"
         }`}
       >
         {children}
@@ -111,7 +111,7 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
   return (
     <>
       <nav
-        className="shrink-0 border-t border-white/10 bg-ink pb-[env(safe-area-inset-bottom)] sm:hidden"
+        className="shrink-0 border-t border-white/10 bg-ink-grad pb-[env(safe-area-inset-bottom)] sm:hidden"
         aria-label="Primary"
       >
         <div className="flex items-stretch px-2">

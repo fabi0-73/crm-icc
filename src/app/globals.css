@@ -34,6 +34,14 @@
   --color-brand-800: #1e3a8a;
   --color-brand-900: #172554;
   --color-brand-950: #0f1533;
+
+  /* Elevation — layered, slate-tinted so shadows read cool, not gray */
+  --shadow-soft:
+    0 1px 2px rgb(15 23 42 / 0.05), 0 4px 12px rgb(15 23 42 / 0.06);
+  --shadow-lift:
+    0 2px 4px rgb(15 23 42 / 0.06), 0 12px 32px rgb(15 23 42 / 0.12);
+  --shadow-brand: 0 4px 14px rgb(29 78 216 / 0.35);
+  --shadow-bubble: 0 2px 8px rgb(29 78 216 / 0.22);
 }
 
 /* shadcn/ui semantic tokens, mapped onto the brand palette above.
@@ -147,4 +155,31 @@ body {
   &::-webkit-scrollbar {
     display: none;
   }
+}
+
+/* Brand gradient — buttons, own bubbles, active nav. One accent,
+   used with intent. */
+@utility bg-brand-grad {
+  background-image: linear-gradient(135deg, #2563eb 0%, #1d4ed8 55%, #1e40af 100%);
+}
+
+/* Deep-slate vertical wash for the sidebar / dark chrome. */
+@utility bg-ink-grad {
+  background-image: linear-gradient(180deg, #131e38 0%, #0f172a 55%, #0b1120 100%);
+}
+
+/* Chat stream backdrop — a barely-there cool falloff so white
+   bubbles and cards sit on something with depth. */
+@utility bg-stream {
+  background-color: #f1f5fa;
+  background-image: linear-gradient(180deg, #f6f8fc 0%, #eef2f8 100%);
+}
+
+/* Auth hero — ink base with two deep-blue glows. */
+@utility bg-hero {
+  background-color: #0b1120;
+  background-image:
+    radial-gradient(70rem 42rem at 75% -12%, rgb(37 99 235 / 0.28), transparent 60%),
+    radial-gradient(48rem 30rem at -8% 105%, rgb(30 64 175 / 0.22), transparent 55%),
+    linear-gradient(180deg, #0d1528 0%, #0b1120 100%);
 }

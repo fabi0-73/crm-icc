@@ -65,7 +65,7 @@ export function NewGroupButton({
           onClick={openModal}
           className={
             big
-              ? "flex h-10 w-10 items-center justify-center rounded-full border border-line bg-paper text-ink shadow-sm active:bg-mist"
+              ? "flex h-10 w-10 items-center justify-center rounded-full border border-line bg-paper text-ink shadow-soft active:bg-mist"
               : `rounded-md p-1 ${
                   dark
                     ? "text-white/60 hover:bg-white/10 hover:text-white"

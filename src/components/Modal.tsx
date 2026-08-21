@@ -75,14 +75,14 @@ export function Modal({
       <button
         type="button"
         aria-label="Close"
-        className="absolute inset-0 bg-black/40"
+        className="absolute inset-0 bg-ink/50 backdrop-blur-sm"
         onClick={onClose}
       />
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative z-10 w-full max-w-md rounded-xl bg-paper shadow-lg max-h-[90dvh] overflow-y-auto"
+        className="relative z-10 w-full max-w-md rounded-2xl bg-paper shadow-lift max-h-[90dvh] overflow-y-auto"
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <h2 id={titleId} className="text-[15px] font-semibold text-ink">

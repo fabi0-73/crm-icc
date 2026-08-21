@@ -2,7 +2,6 @@
 
 import { useActionState } from "react";
 import { signIn } from "@/app/actions/auth";
-import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
 
@@ -29,17 +28,21 @@ export function LoginForm({
     <form action={action} className="space-y-4">
       <input type="hidden" name="next" value={next} />
       {banner && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p className="rounded-lg bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
           {banner}
         </p>
       )}
       <div>
-        <Label htmlFor="email">Email</Label>
+        <Label htmlFor="identifier">Username</Label>
         <Input
-          id="email"
-          name="email"
-          type="email"
-          autoComplete="email"
+          id="identifier"
+          name="identifier"
+          type="text"
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
+          placeholder="Your username or email"
+          className="py-3 text-[16px]"
           required
           disabled={configError}
         />
@@ -51,6 +54,7 @@ export function LoginForm({
           name="password"
           type="password"
           autoComplete="current-password"
+          className="py-3 text-[16px]"
           required
           disabled={configError}
         />
@@ -58,15 +62,10 @@ export function LoginForm({
       <Button
         type="submit"
         disabled={pending || configError}
-        className="w-full"
+        className="h-11 w-full rounded-xl text-[15px]"
       >
         {pending ? "Signing in…" : "Sign in"}
       </Button>
-      <p className="text-center text-sm text-muted">
-        <Link href="/auth/forgot-password" className="text-brand-600 hover:underline">
-          Forgot password?
-        </Link>
-      </p>
     </form>
   );
 }

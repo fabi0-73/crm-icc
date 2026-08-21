@@ -58,19 +58,22 @@ function ChatRow({ room }: { room: MyRoom }) {
     >
       {room.type === "dm" ? (
         <span className="relative shrink-0">
-          <Avatar name={room.display_name} />
+          <Avatar
+            name={room.display_name}
+            className="ring-1 ring-black/5"
+          />
           <PresenceDot
             online={online}
             className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
           />
         </span>
       ) : (
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-50 to-brand-100 text-brand-700 ring-1 ring-brand-200/60">
           <Hash className="size-5" strokeWidth={2.2} />
         </span>
       )}
 
-      <div className="min-w-0 flex-1 border-b border-line/80 py-3">
+      <div className="min-w-0 flex-1 border-b border-line/70 py-3.5">
         <div className="flex items-baseline justify-between gap-2">
           <p
             className={`truncate text-[15px] text-ink ${
@@ -100,7 +103,7 @@ function ChatRow({ room }: { room: MyRoom }) {
             {preview(room)}
           </p>
           {unread && (
-            <span className="shrink-0 min-w-[1.25rem] rounded-full bg-brand-600 px-1.5 py-0.5 text-center text-[11px] font-bold leading-none text-white">
+            <span className="shrink-0 min-w-[1.25rem] rounded-full bg-brand-grad px-1.5 py-0.5 text-center text-[11px] font-bold leading-none text-white shadow-bubble">
               {room.unread_count > 99 ? "99+" : room.unread_count}
             </span>
           )}
@@ -150,14 +153,14 @@ export function MobileChatsScreen({
           </div>
         </div>
 
-        <div className="relative mt-2 px-4">
-          <Search className="pointer-events-none absolute left-7 top-1/2 size-[18px] -translate-y-1/2 text-muted" />
+        <div className="relative mt-2.5 px-4">
+          <Search className="pointer-events-none absolute left-[30px] top-1/2 size-[18px] -translate-y-1/2 text-muted" />
           <Input
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search conversations"
-            className="h-10 rounded-full border-transparent bg-secondary pl-10 text-[16px] shadow-none placeholder:text-muted"
+            className="h-11 rounded-full border-line/80 bg-white pl-10 text-[16px] shadow-xs placeholder:text-muted"
             aria-label="Search conversations"
           />
         </div>
@@ -172,8 +175,8 @@ export function MobileChatsScreen({
                 onClick={() => setFilter(f.key)}
                 className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold transition-colors ${
                   active
-                    ? "bg-ink text-white"
-                    : "border border-line bg-paper text-muted active:bg-mist"
+                    ? "bg-ink text-white shadow-soft"
+                    : "border border-line/80 bg-white text-muted shadow-xs active:bg-mist"
                 }`}
               >
                 {f.label}

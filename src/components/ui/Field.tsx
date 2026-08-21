@@ -1,6 +1,6 @@
 /** The one form-control treatment used everywhere. */
 const CONTROL =
-  "w-full rounded-md border border-line-strong bg-paper px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-brand-600 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:bg-mist disabled:text-muted";
+  "w-full rounded-lg border border-line-strong bg-paper px-3.5 py-2.5 text-sm text-ink placeholder:text-muted/80 shadow-xs transition-[border-color,box-shadow] focus:border-brand-600 focus:outline-none focus:ring-4 focus:ring-brand-600/10 disabled:bg-mist disabled:text-muted";
 
 export function Label({
   className = "",
