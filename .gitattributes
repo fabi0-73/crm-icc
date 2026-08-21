@@ -1,5 +1,6 @@
-# Mobile shell — not needed on the web server (deploy.sh uses `git archive`)
-android export-ignore
-ios export-ignore
-mobile export-ignore
-capacitor.config.ts export-ignore
+# Mobile shell — not needed on the web server (deploy.sh uses `git archive`).
+# Patterns are root-anchored so they can't swallow same-named dirs in src/.
+/android export-ignore
+/ios export-ignore
+/mobile export-ignore
+/capacitor.config.ts export-ignore
