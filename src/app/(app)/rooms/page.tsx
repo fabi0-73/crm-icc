@@ -1,10 +1,7 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { requireProfile } from "@/lib/auth";
-import { MobileRoomList } from "@/components/rooms/MobileRoomList";
-import { NewGroupButton } from "@/components/NewGroupButton";
-import { NewDmButton } from "@/components/NewDmButton";
-import { PageHeader } from "@/components/ui/PageHeader";
+import { MobileChatsScreen } from "@/components/rooms/MobileChatsScreen";
 import { sitePath } from "@/lib/site-url";
 
 export default async function RoomsPage() {
@@ -35,20 +32,9 @@ export default async function RoomsPage() {
 
   return (
     <>
-      {/* Mobile: the full-screen conversation list (live via RoomsProvider). */}
-      <div className="flex h-full flex-col bg-paper sm:hidden">
-        <PageHeader
-          title="Chats"
-          actions={
-            <span className="flex items-center gap-1.5">
-              <NewDmButton />
-              {canCreateGroup && <NewGroupButton />}
-            </span>
-          }
-        />
-        <div className="flex-1 min-h-0">
-          <MobileRoomList />
-        </div>
+      {/* Mobile: the full chats home (live via RoomsProvider). */}
+      <div className="h-full sm:hidden">
+        <MobileChatsScreen canCreateGroup={canCreateGroup} />
       </div>
       {/* Desktop: the sidebar already lists everything. */}
       <div className="hidden h-full items-center justify-center bg-paper sm:flex">

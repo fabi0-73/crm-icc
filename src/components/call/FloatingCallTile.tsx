@@ -64,8 +64,9 @@ export function FloatingCallTile() {
   const subtitle =
     phase === "in-call" && duration ? duration : statusText || "Ringing…";
 
+  // Mobile: sit above the chat composer/keyboard, not on top of it.
   return (
-    <div className="fixed bottom-4 right-4 z-[115] w-60 overflow-hidden rounded-xl bg-ink text-white shadow-lg ring-1 ring-brand-400/40 sm:w-64">
+    <div className="fixed right-3 bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] z-[115] w-60 overflow-hidden rounded-xl bg-ink text-white shadow-lg ring-1 ring-brand-400/40 sm:right-4 sm:bottom-4 sm:w-64">
       <button
         type="button"
         onClick={() => setView("full")}

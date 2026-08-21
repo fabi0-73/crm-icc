@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { SidebarShell } from "@/components/sidebar/SidebarShell";
 import { CallProvider } from "@/components/call/CallProvider";
 import { PresenceProvider } from "@/components/presence/PresenceProvider";
+import { KeyboardInsets } from "@/components/mobile/KeyboardInsets";
 import { requireProfile } from "@/lib/auth";
 import { sitePath } from "@/lib/site-url";
 import type { MyRoom } from "@/lib/types";
@@ -20,7 +21,8 @@ export default async function AppLayout({
       return (
         <CallProvider userId={profile.id} userName={profile.full_name}>
           <PresenceProvider userId={profile.id}>
-            <div className="h-dvh">{children}</div>
+            <KeyboardInsets />
+            <div className="h-app">{children}</div>
           </PresenceProvider>
         </CallProvider>
       );
@@ -29,6 +31,7 @@ export default async function AppLayout({
     return (
       <CallProvider userId={profile.id} userName={profile.full_name}>
         <PresenceProvider userId={profile.id}>
+          <KeyboardInsets />
           <SidebarShell
             profile={profile}
             initialRooms={(data ?? []) as MyRoom[]}

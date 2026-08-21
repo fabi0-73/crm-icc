@@ -11,12 +11,22 @@ const manrope = Manrope({
 export const metadata: Metadata = {
   title: "ICC Desk",
   description: "Internal messaging for agent support teams",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "ICC Desk",
+    statusBarStyle: "default",
+  },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
+  // Draw under the notch/home indicator; safe-area insets pad it back.
+  viewportFit: "cover",
+  // Android: shrink the layout viewport when the keyboard opens.
+  interactiveWidget: "resizes-content",
   themeColor: "#f8fafc",
 };
 

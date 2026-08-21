@@ -45,7 +45,14 @@ function PersonRow({
 }
 
 /** "New message" — staff picker that opens the 1:1 DM. */
-export function NewDmButton({ dark = false }: { dark?: boolean }) {
+export function NewDmButton({
+  dark = false,
+  big = false,
+}: {
+  dark?: boolean;
+  /** 40px round trigger for the mobile header. */
+  big?: boolean;
+}) {
   const { open, openModal, closeModal } = useModal();
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -84,15 +91,19 @@ export function NewDmButton({ dark = false }: { dark?: boolean }) {
       <button
         type="button"
         onClick={openModal}
-        className={`rounded-md p-1.5 ${
-          dark
-            ? "text-white/60 hover:bg-white/10 hover:text-white"
-            : "text-muted hover:bg-mist hover:text-ink"
-        }`}
+        className={
+          big
+            ? "flex h-10 w-10 items-center justify-center rounded-full bg-brand-600 text-white shadow-sm active:bg-brand-700"
+            : `rounded-md p-1.5 ${
+                dark
+                  ? "text-white/60 hover:bg-white/10 hover:text-white"
+                  : "text-muted hover:bg-mist hover:text-ink"
+              }`
+        }
         aria-label="New message"
         title="New message"
       >
-        <ComposeIcon size={16} />
+        <ComposeIcon size={big ? 18 : 16} />
       </button>
       <Modal title="New message" open={open} onClose={closeModal}>
         {error && (

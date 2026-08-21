@@ -12,9 +12,12 @@ import type { Profile } from "@/lib/types";
 export function NewGroupButton({
   compact = false,
   dark = false,
+  big = false,
 }: {
   compact?: boolean;
   dark?: boolean;
+  /** 40px round trigger for the mobile header. */
+  big?: boolean;
 }) {
   const { open, openModal, closeModal } = useModal();
   const [staff, setStaff] = useState<Pick<Profile, "id" | "full_name" | "role">[]>([]);
@@ -60,15 +63,19 @@ export function NewGroupButton({
         <button
           type="button"
           onClick={openModal}
-          className={`rounded-md p-1 ${
-            dark
-              ? "text-white/60 hover:bg-white/10 hover:text-white"
-              : "text-muted hover:bg-mist hover:text-ink"
-          }`}
+          className={
+            big
+              ? "flex h-10 w-10 items-center justify-center rounded-full border border-line bg-paper text-ink shadow-sm active:bg-mist"
+              : `rounded-md p-1 ${
+                  dark
+                    ? "text-white/60 hover:bg-white/10 hover:text-white"
+                    : "text-muted hover:bg-mist hover:text-ink"
+                }`
+          }
           aria-label="New group"
           title="New group"
         >
-          <PlusIcon />
+          <PlusIcon size={big ? 18 : 14} />
         </button>
       ) : (
         <Button size="sm" type="button" onClick={openModal}>

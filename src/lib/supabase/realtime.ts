@@ -3,30 +3,46 @@ import type { Message } from "@/lib/types";
 
 type MessageHandler = (message: Message) => void;
 
+export type TypingEvent = { user_id: string };
+
 /**
  * Subscribe to new messages in a room. Caller must refresh the realtime
- * auth token on JWT refresh (see ensureRealtimeAuth).
+ * auth token on JWT refresh (see ensureRealtimeAuth). Optionally also
+ * receives ephemeral typing broadcasts on the same channel.
  */
 export function subscribeToRoomMessages(
   supabase: SupabaseClient,
   roomId: string,
   onInsert: MessageHandler,
+  onTyping?: (event: TypingEvent) => void,
 ): RealtimeChannel {
-  return supabase
-    .channel(`room:${roomId}`)
-    .on(
-      "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "messages",
-        filter: `room_id=eq.${roomId}`,
-      },
-      (payload) => {
-        onInsert(payload.new as Message);
-      },
-    )
-    .subscribe();
+  const channel = supabase.channel(`room:${roomId}`).on(
+    "postgres_changes",
+    {
+      event: "INSERT",
+      schema: "public",
+      table: "messages",
+      filter: `room_id=eq.${roomId}`,
+    },
+    (payload) => {
+      onInsert(payload.new as Message);
+    },
+  );
+  if (onTyping) {
+    channel.on("broadcast", { event: "typing" }, ({ payload }) => {
+      onTyping(payload as TypingEvent);
+    });
+  }
+  return channel.subscribe();
+}
+
+/** Ephemeral "I'm typing" ping to everyone else in the room's channel. */
+export function sendTyping(channel: RealtimeChannel, userId: string) {
+  void channel.send({
+    type: "broadcast",
+    event: "typing",
+    payload: { user_id: userId } satisfies TypingEvent,
+  });
 }
 
 /** Global INSERT listener for room-list unread badges. */

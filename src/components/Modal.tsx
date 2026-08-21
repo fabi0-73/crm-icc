@@ -1,7 +1,27 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/uikit/drawer";
 
+function useIsMobile() {
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639px)");
+    const update = () => setMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  return mobile;
+}
+
+/** App dialog: swipeable bottom drawer on phones, centered panel on
+ *  desktop. Same `title/open/onClose/children` contract everywhere. */
 export function Modal({
   title,
   open,
@@ -14,21 +34,44 @@ export function Modal({
   children: React.ReactNode;
 }) {
   const titleId = useId();
-  const panelRef = useRef<HTMLDivElement>(null);
+  const mobile = useIsMobile();
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || mobile) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, mobile, onClose]);
+
+  if (mobile) {
+    return (
+      <Drawer
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) onClose();
+        }}
+        showSwipeHandle
+      >
+        <DrawerContent className="bg-paper">
+          <DrawerHeader className="pb-2">
+            <DrawerTitle className="text-[16px] font-semibold text-ink">
+              {title}
+            </DrawerTitle>
+          </DrawerHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+            {children}
+          </div>
+        </DrawerContent>
+      </Drawer>
+    );
+  }
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <button
         type="button"
         aria-label="Close"
@@ -36,11 +79,10 @@ export function Modal({
         onClick={onClose}
       />
       <div
-        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative z-10 w-full sm:max-w-md rounded-t-xl sm:rounded-xl bg-paper shadow-lg max-h-[90dvh] overflow-y-auto"
+        className="relative z-10 w-full max-w-md rounded-xl bg-paper shadow-lg max-h-[90dvh] overflow-y-auto"
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <h2 id={titleId} className="text-[15px] font-semibold text-ink">

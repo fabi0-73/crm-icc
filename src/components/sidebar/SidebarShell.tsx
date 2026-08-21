@@ -2,11 +2,11 @@
 
 import { RoomsProvider } from "@/components/rooms/RoomsProvider";
 import { Sidebar } from "@/components/sidebar/Sidebar";
-import { MobileTopBar } from "@/components/AppShell";
+import { MobileTabBar } from "@/components/mobile/MobileTabBar";
 import type { MyRoom, Profile } from "@/lib/types";
 
-/** Staff shell: persistent sidebar on desktop, top bar + stacked flow
- *  on mobile. Owns the live room-list state for both. */
+/** Staff shell: persistent sidebar on desktop, bottom tab bar on
+ *  mobile. Owns the live room-list state for both. */
 export function SidebarShell({
   profile,
   initialRooms,
@@ -18,10 +18,10 @@ export function SidebarShell({
 }) {
   return (
     <RoomsProvider initialRooms={initialRooms} currentUserId={profile.id}>
-      <div className="flex h-dvh flex-col bg-mist sm:flex-row">
-        <MobileTopBar profile={profile} />
+      <div className="flex h-app flex-col bg-mist sm:flex-row">
         <Sidebar profile={profile} />
         <main className="flex-1 min-h-0 overflow-hidden">{children}</main>
+        <MobileTabBar profile={profile} />
       </div>
     </RoomsProvider>
   );
