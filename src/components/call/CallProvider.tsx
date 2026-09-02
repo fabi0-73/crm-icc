@@ -35,6 +35,10 @@ import { IncomingCallOverlay } from "@/components/call/IncomingCallOverlay";
 import { FloatingCallTile } from "@/components/call/FloatingCallTile";
 import { FullScreenCall } from "@/components/call/FullScreenCall";
 
+/** Answered but never connected — give up instead of hanging forever. */
+const CONNECT_TIMEOUT_MS = 25_000;
+/** A "disconnected" ICE state this long counts as a dropped call. */
+const DROP_GRACE_MS = 12_000;
 const RING_TIMEOUT_MS = 30_000;
 /** Callee gives the caller's timeout a grace window before going quiet. */
 const RING_TIMEOUT_CALLEE_MS = 35_000;
@@ -159,6 +163,11 @@ export function CallProvider({
   const ringTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handlingRef = useRef<((row: SignalRow) => Promise<void>) | null>(null);
+  const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dropTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectedAtRef = useRef<number | null>(null);
+  /** Set once hangup exists; lets the ICE handler end a dead call. */
+  const endCallRef = useRef<(() => void) | null>(null);
 
   phaseRef.current = phase;
   incomingRef.current = incoming;
@@ -178,7 +187,27 @@ export function CallProvider({
       clearTimeout(ringTimerRef.current);
       ringTimerRef.current = null;
     }
+    if (connectTimerRef.current) {
+      clearTimeout(connectTimerRef.current);
+      connectTimerRef.current = null;
+    }
   }, []);
+
+  /**
+   * Once the call is answered nothing else was watching the connection:
+   * if ICE never completed (blocked relay, dead network) both sides sat on
+   * "Connecting…" forever, and a peer that vanished mid-call left the
+   * other on a running timer. These end the call instead.
+   */
+  const armConnectTimeout = useCallback(() => {
+    if (connectTimerRef.current) clearTimeout(connectTimerRef.current);
+    connectTimerRef.current = setTimeout(() => {
+      connectTimerRef.current = null;
+      if (connectedAtRef.current) return; // made it through
+      showNotice("Couldn't connect — check your network and try again");
+      endCallRef.current?.();
+    }, CONNECT_TIMEOUT_MS);
+  }, [showNotice]);
 
   /** Ephemeral signaling rows are deleted once their call ends. */
   const purgeSignals = useCallback(
@@ -196,6 +225,11 @@ export function CallProvider({
   const cleanup = useCallback(
     (opts?: { purge?: boolean }) => {
       clearTimers();
+      if (dropTimerRef.current) {
+        clearTimeout(dropTimerRef.current);
+        dropTimerRef.current = null;
+      }
+      connectedAtRef.current = null;
       stopTones();
       if (opts?.purge) purgeSignals(callIdRef.current);
       pcRef.current?.close();
@@ -315,16 +349,40 @@ export function CallProvider({
       };
       pc.oniceconnectionstatechange = () => {
         const s = pc.iceConnectionState;
+        if (dropTimerRef.current) {
+          clearTimeout(dropTimerRef.current);
+          dropTimerRef.current = null;
+        }
         if (s === "connected" || s === "completed") {
           clearTimers();
           stopTones();
           setPhase("in-call");
           setStatusText("Connected");
-          setConnectedAt((prev) => prev ?? Date.now());
+          setConnectedAt((prev) => {
+            const at = prev ?? Date.now();
+            connectedAtRef.current = at;
+            return at;
+          });
         } else if (s === "checking") {
           setStatusText("Connecting…");
-        } else if (s === "failed") {
-          setStatusText("Connection failed — hang up and retry");
+        } else if (s === "disconnected") {
+          // Often transient (network switch) — give it a moment to recover.
+          setStatusText("Reconnecting…");
+          dropTimerRef.current = setTimeout(() => {
+            dropTimerRef.current = null;
+            if (pcRef.current?.iceConnectionState === "disconnected") {
+              showNotice("Call dropped — the connection was lost");
+              endCallRef.current?.();
+            }
+          }, DROP_GRACE_MS);
+        } else if (s === "failed" || s === "closed") {
+          setStatusText("Connection failed");
+          showNotice(
+            connectedAtRef.current
+              ? "Call dropped — the connection was lost"
+              : "Couldn't connect — check your network and try again",
+          );
+          endCallRef.current?.();
         }
       };
       pcRef.current = pc;
@@ -399,8 +457,13 @@ export function CallProvider({
       await send("answer", offer.callId, offer.from, roomIdRef.current!, {
         sdp: { type: finalAnswer.type, sdp: finalAnswer.sdp },
       });
-      setStatusText("Connecting…");
-      setPhase("connecting");
+      // On a fast network ICE can reach "connected" before this resolves.
+      // Without this guard the callee is knocked back to "Connecting…"
+      // for the rest of the call — audio flowing, timer never starting.
+      if (!connectedAtRef.current) {
+        setStatusText("Connecting…");
+        setPhase("connecting");
+      }
       setIncoming(null);
     },
     [ensurePc, flushIce, getMedia, loadMissedIce, send],
@@ -522,6 +585,9 @@ export function CallProvider({
         try {
           stopTones();
           clearTimers();
+          // The ring timeout just went away — from here on the connection
+          // itself is what we wait for.
+          armConnectTimeout();
           const pc = pcRef.current;
           if (pc.signalingState === "have-local-offer") {
             remoteSetRef.current = true;
@@ -551,7 +617,7 @@ export function CallProvider({
         }
       }
     },
-    [answerOffer, answerRenegotiation, cleanup, clearTimers, flushIce, loadMissedIce, send, showNotice, userId],
+    [answerOffer, answerRenegotiation, armConnectTimeout, cleanup, clearTimers, flushIce, loadMissedIce, send, showNotice, userId],
   );
 
   handlingRef.current = handleSignal;
@@ -562,6 +628,10 @@ export function CallProvider({
     }
     cleanup({ purge: true });
   }, [cleanup, send]);
+
+  // The ICE handler is created before hangup exists, so it ends calls
+  // through this ref.
+  endCallRef.current = hangup;
 
   const dial = useCallback(
     async (
@@ -653,6 +723,7 @@ export function CallProvider({
     acceptedRef.current = true;
     stopTones();
     clearTimers();
+    armConnectTimeout();
     setCall({
       callId: inc.callId,
       roomId: inc.roomId,
@@ -678,7 +749,7 @@ export function CallProvider({
       void send("decline", inc.callId, inc.peerId, inc.roomId);
       cleanup();
     }
-  }, [answerOffer, cleanup, clearTimers, getMedia, send, showNotice]);
+  }, [answerOffer, armConnectTimeout, cleanup, clearTimers, getMedia, send, showNotice]);
 
   const decline = useCallback(() => {
     const inc = incomingRef.current;

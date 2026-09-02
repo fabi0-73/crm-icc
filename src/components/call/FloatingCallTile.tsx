@@ -76,10 +76,12 @@ export function FloatingCallTile() {
       >
         {showVideo ? (
           <>
+            {/* Muted: audio comes from the provider's <audio> sink only. */}
             <video
               ref={remoteVideoRef}
               autoPlay
               playsInline
+              muted
               className={`h-full w-full bg-ink ${fitClass}`}
             />
             <video

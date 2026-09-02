@@ -34,7 +34,7 @@ export function FullScreenCall() {
     toggleScreenShare,
     setView,
   } = useCall();
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const duration = useDuration(connectedAt);
 
@@ -70,7 +70,9 @@ export function FullScreenCall() {
 
   return (
     <div className="fixed inset-0 z-[115] flex flex-col bg-ink text-white">
-      <div className="flex items-center gap-3 px-4 py-4">
+      {/* The page draws under the notch (viewport-fit=cover), so the
+          minimize button needs the inset or it sits under the status bar. */}
+      <div className="flex items-center gap-3 px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
         <button
           type="button"
           onClick={() => setView("mini")}
@@ -91,10 +93,14 @@ export function FullScreenCall() {
       <div className="relative flex-1 min-h-0 bg-ink-soft">
         {showVideo ? (
           <>
+            {/* Muted on purpose: the provider's persistent <audio> element
+                is the single audio sink. Without this the same remote
+                track plays twice on video calls. */}
             <video
               ref={remoteVideoRef}
               autoPlay
               playsInline
+              muted
               className={`h-full w-full bg-ink ${fitClass}`}
             />
             <video
@@ -120,7 +126,7 @@ export function FullScreenCall() {
         )}
       </div>
 
-      <div className="flex items-center justify-center gap-4 px-4 py-6">
+      <div className="flex items-center justify-center gap-4 px-4 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
         <CallControlButton
           onClick={toggleMic}
           active={muted}

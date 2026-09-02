@@ -62,7 +62,15 @@ export function subscribeToAllMessageInserts(
     .subscribe();
 }
 
-/** Keep realtime auth in sync with the session JWT. */
+/** Clients that already have a token listener attached. */
+const authListenerAttached = new WeakSet<SupabaseClient>();
+
+/**
+ * Keep realtime auth in sync with the session JWT. Called on every room
+ * visit, so the listener must be registered once per client — one
+ * subscription per mount meant a token refresh fired setAuth N times and
+ * churned the socket that calls and typing ride on.
+ */
 export async function ensureRealtimeAuth(supabase: SupabaseClient) {
   const {
     data: { session },
@@ -71,6 +79,8 @@ export async function ensureRealtimeAuth(supabase: SupabaseClient) {
     await supabase.realtime.setAuth(session.access_token);
   }
 
+  if (authListenerAttached.has(supabase)) return;
+  authListenerAttached.add(supabase);
   supabase.auth.onAuthStateChange((_event, next) => {
     if (next?.access_token) {
       void supabase.realtime.setAuth(next.access_token);
