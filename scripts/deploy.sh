@@ -48,8 +48,13 @@ fi
   # keep files owned by the service user once it exists (Step 6 hardening)
   id -u crmicc >/dev/null 2>&1 && chown -R crmicc: $APP_DIR
   systemctl restart $SERVICE
-  sleep 3
-  code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3010/)
+  # Next.js can take >3s to boot; poll instead of failing on the first try.
+  code=000
+  for i in \$(seq 1 15); do
+    sleep 2
+    code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3010/ || true)
+    if [ \"\$code\" = 307 ] || [ \"\$code\" = 200 ]; then break; fi
+  done
   echo \"health: HTTP \$code\"
   [ \"\$code\" = 307 ] || [ \"\$code\" = 200 ] || { echo 'DEPLOY FAILED health check'; exit 1; }
 "
