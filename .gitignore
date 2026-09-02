@@ -11,3 +11,6 @@ next-env.d.ts
 .DS_Store
 deploy-bundle.tgz
 *.tgz
+
+# Local copies of env files (contain live keys)
+.env.local.*
