@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Modal, useModal } from "@/components/Modal";
 import { ActionForm } from "@/components/ActionForm";
 import { CredentialsPanel } from "@/components/CredentialsPanel";
@@ -16,13 +15,14 @@ export function ResetPasswordButton({
   name: string;
 }) {
   const { open, openModal, closeModal } = useModal();
-  const router = useRouter();
   const [result, setResult] = useState<ActionState | null>(null);
 
   function finish() {
     closeModal();
     setResult(null);
-    router.refresh();
+    // A reload, not router.refresh(): with staleTimes the client router
+    // cache serves the old table for 30s and the change never shows.
+    window.location.reload();
   }
 
   return (

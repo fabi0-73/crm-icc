@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Modal, useModal } from "@/components/Modal";
 import { ActionForm } from "@/components/ActionForm";
 import { CredentialsPanel } from "@/components/CredentialsPanel";
@@ -12,7 +11,6 @@ import { Input, Label, Select } from "@/components/ui/Field";
 
 export function NewUserButton() {
   const { open, openModal, closeModal } = useModal();
-  const router = useRouter();
   // Controlled: React resets uncontrolled fields when a form action
   // returns, so a rejected username used to wipe everything typed.
   const [fullName, setFullName] = useState("");
@@ -33,7 +31,9 @@ export function NewUserButton() {
   function finish() {
     closeModal();
     setResult(null);
-    router.refresh();
+    // A reload, not router.refresh(): with staleTimes the client router
+    // cache serves the old table for 30s and the new account never shows.
+    window.location.reload();
   }
 
   return (

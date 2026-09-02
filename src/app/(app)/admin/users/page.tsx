@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { emailToUsername } from "@/lib/username";
 import { NewUserButton } from "@/components/NewUserButton";
 import { ResetPasswordButton } from "@/components/ResetPasswordButton";
+import { DeleteUserButton } from "@/components/DeleteUserButton";
 import { ActionForm } from "@/components/ActionForm";
 import { deactivateUser, reactivateUser } from "@/app/actions/admin";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -104,6 +105,9 @@ export default async function UsersPage() {
                         Reactivate
                       </button>
                     </ActionForm>
+                  )}
+                  {u.id !== self.id && (
+                    <DeleteUserButton userId={u.id} name={u.full_name} />
                   )}
                 </div>
               </Td>

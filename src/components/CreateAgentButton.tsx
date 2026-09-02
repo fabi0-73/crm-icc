@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Modal, useModal } from "@/components/Modal";
 import { ActionForm } from "@/components/ActionForm";
 import { CredentialsPanel } from "@/components/CredentialsPanel";
@@ -13,7 +12,6 @@ import { Input, Label } from "@/components/ui/Field";
 
 export function CreateAgentButton() {
   const { open, openModal, closeModal } = useModal();
-  const router = useRouter();
   const [displayName, setDisplayName] = useState("");
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
@@ -32,7 +30,9 @@ export function CreateAgentButton() {
   function finish() {
     closeModal();
     setResult(null);
-    router.refresh();
+    // A reload, not router.refresh(): with staleTimes the client router
+    // cache serves the old table for 30s and the new agent never shows.
+    window.location.reload();
   }
 
   return (
