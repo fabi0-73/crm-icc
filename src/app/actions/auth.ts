@@ -4,12 +4,9 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { getSiteOrigin, sitePath } from "@/lib/site-url";
+import { usernameToEmail } from "@/lib/username";
 
 export type AuthState = { error?: string; success?: string };
-
-/** Bare usernames sign in as <name>@USERNAME_DOMAIN under the hood;
- *  full email addresses keep working unchanged. */
-const USERNAME_DOMAIN = "iccdesk.duckdns.org";
 
 export async function signIn(
   _prev: AuthState,
@@ -25,9 +22,7 @@ export async function signIn(
     return { error: "Username and password are required." };
   }
 
-  const email = identifier.includes("@")
-    ? identifier
-    : `${identifier}@${USERNAME_DOMAIN}`;
+  const email = usernameToEmail(identifier);
 
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });

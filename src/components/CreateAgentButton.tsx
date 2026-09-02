@@ -3,6 +3,7 @@
 import { Modal, useModal } from "@/components/Modal";
 import { ActionForm } from "@/components/ActionForm";
 import { createAgent } from "@/app/actions/agents";
+import { USERNAME_HINT } from "@/lib/username";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
 
@@ -29,11 +30,31 @@ export function CreateAgentButton() {
             />
           </div>
           <div>
-            <Label htmlFor="agent-email">Email (login)</Label>
-            <Input id="agent-email" name="email" type="email" required />
+            <Label htmlFor="agent-username">Username (login)</Label>
+            <Input
+              id="agent-username"
+              name="username"
+              required
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="e.g. marco.b"
+            />
+            <p className="mt-1 text-xs text-muted">{USERNAME_HINT}</p>
+          </div>
+          <div>
+            <Label htmlFor="agent-password">Password</Label>
+            <Input
+              id="agent-password"
+              name="password"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              placeholder="Leave empty to auto-generate"
+            />
           </div>
           <Button type="submit" className="w-full">
-            Create & invite
+            Create agent
           </Button>
         </ActionForm>
       </Modal>

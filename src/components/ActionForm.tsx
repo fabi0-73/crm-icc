@@ -15,26 +15,34 @@ export function FormMessage({ state }: { state: ActionState }) {
     return (
       <div className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
         <p>{state.success}</p>
-        {state.link && <CopyLink link={state.link} />}
+        {state.credentials && (
+          <div className="mt-2 space-y-1.5">
+            <CopyRow label="Username" value={state.credentials.username} />
+            <CopyRow label="Password" value={state.credentials.password} />
+          </div>
+        )}
       </div>
     );
   }
   return null;
 }
 
-function CopyLink({ link }: { link: string }) {
+function CopyRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="mt-2 flex items-center gap-2">
+    <div className="flex items-center gap-2">
+      <span className="w-[4.5rem] shrink-0 text-xs font-medium text-emerald-800">
+        {label}
+      </span>
       <input
         readOnly
-        value={link}
+        value={value}
         onFocus={(e) => e.target.select()}
-        className="min-w-0 flex-1 rounded-md border border-emerald-200 bg-paper px-2 py-1 text-xs text-ink"
-        aria-label="Set-password link"
+        className="min-w-0 flex-1 rounded-md border border-emerald-200 bg-paper px-2 py-1 font-mono text-xs text-ink"
+        aria-label={label}
       />
       <button
         type="button"
-        onClick={() => void navigator.clipboard?.writeText(link)}
+        onClick={() => void navigator.clipboard?.writeText(value)}
         className="shrink-0 rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white"
       >
         Copy

@@ -3,6 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { requireRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import {
+  friendlyAuthError,
+  generatePassword,
+  isValidUsername,
+  USERNAME_HINT,
+  usernameToEmail,
+} from "@/lib/username";
 import type { ActionState } from "@/app/actions/admin";
 import { historyFromPreset } from "@/lib/history-presets";
 import type { HistoryPreset } from "@/lib/types";
@@ -16,27 +23,44 @@ export async function createAgent(
     "manager",
   ]);
 
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
+  const username = String(formData.get("username") ?? "").trim().toLowerCase();
   const displayName = String(formData.get("display_name") ?? "").trim();
   const fullName =
     String(formData.get("full_name") ?? "").trim() || displayName;
+  let password = String(formData.get("password") ?? "").trim();
 
-  if (!email || !displayName) {
-    return { error: "Display name and email are required." };
+  if (!username || !displayName) {
+    return { error: "Display name and username are required." };
   }
+  if (!isValidUsername(username)) {
+    return { error: `Invalid username. ${USERNAME_HINT}` };
+  }
+  if (password && password.length < 8) {
+    return { error: "Password must be at least 8 characters." };
+  }
+  if (!password) password = generatePassword();
 
-  const service = createServiceClient();
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
-
+  let service;
+  try {
+    service = createServiceClient();
+  } catch (e) {
+    return { error: friendlyAuthError((e as Error).message, "Server misconfigured.") };
+  }
   const { data: created, error: createError } =
     await service.auth.admin.createUser({
-      email,
+      email: usernameToEmail(username),
+      password,
       email_confirm: true,
-      user_metadata: { full_name: fullName },
+      user_metadata: { full_name: fullName, username },
     });
 
   if (createError || !created.user) {
-    return { error: createError?.message ?? "Failed to create agent account." };
+    return {
+      error: friendlyAuthError(
+        createError?.message,
+        "Failed to create agent account.",
+      ),
+    };
   }
 
   const userId = created.user.id;
@@ -65,21 +89,20 @@ export async function createAgent(
     return { error: rpcError.message };
   }
 
-  await service.auth.resetPasswordForEmail(email, {
-    redirectTo: `${siteUrl}/auth/reset-password`,
-  });
-
   // Extra audit from service path for the auth account itself.
   await service.from("audit_logs").insert({
     actor_id: actor.id,
-    action: "user.invited",
+    action: "user.created",
     target_type: "profile",
     target_id: userId,
-    metadata: { email, role: "agent", full_name: fullName, agent_id: agentId },
+    metadata: { username, role: "agent", full_name: fullName, agent_id: agentId },
   });
 
   revalidatePath("/agents");
-  return { success: `Agent ${displayName} created.` };
+  return {
+    success: `Agent ${displayName} created. Share these — the password isn't shown again:`,
+    credentials: { username, password },
+  };
 }
 
 export async function archiveAgent(

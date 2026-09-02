@@ -1,5 +1,4 @@
 import Image from "next/image";
-import Link from "next/link";
 import { LoginForm } from "@/components/LoginForm";
 
 export default async function LoginPage({
@@ -35,13 +34,8 @@ export default async function LoginPage({
           <LoginForm next={params.next ?? "/rooms"} errorParam={params.error} />
         </div>
 
-        <p className="mt-5 text-center text-sm">
-          <Link
-            href="/auth/forgot-password"
-            className="text-white/50 transition-colors hover:text-white"
-          >
-            Forgot password?
-          </Link>
+        <p className="mt-5 text-center text-sm text-white/50">
+          Forgot your password? Ask an admin to reset it.
         </p>
       </div>
 

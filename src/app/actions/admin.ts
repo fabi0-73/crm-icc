@@ -3,46 +3,69 @@
 import { revalidatePath } from "next/cache";
 import { requireRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import {
+  emailToUsername,
+  friendlyAuthError,
+  generatePassword,
+  isValidUsername,
+  USERNAME_HINT,
+  usernameToEmail,
+} from "@/lib/username";
 import type { Role } from "@/lib/types";
 
 export type ActionState = {
   error?: string;
   success?: string;
-  /** Copyable fallback (e.g. an invite link) shown with the success message. */
-  link?: string;
+  /** Shown exactly once after create/reset — never stored anywhere else. */
+  credentials?: { username: string; password: string };
 };
 
 const STAFF_ROLES: Role[] = ["admin", "manager", "assistant"];
 
-export async function inviteUser(
+export async function createUserAccount(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
   const { profile: actor } = await requireRole(["admin"]);
 
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const fullName = String(formData.get("full_name") ?? "").trim();
+  const username = String(formData.get("username") ?? "").trim().toLowerCase();
   const role = String(formData.get("role") ?? "") as Role;
+  let password = String(formData.get("password") ?? "").trim();
 
-  if (!email || !fullName) {
-    return { error: "Name and email are required." };
+  if (!fullName || !username) {
+    return { error: "Name and username are required." };
+  }
+  if (!isValidUsername(username)) {
+    return { error: `Invalid username. ${USERNAME_HINT}` };
   }
   if (!STAFF_ROLES.includes(role)) {
     return { error: "Invalid role. Agent accounts are created via Agents." };
   }
+  if (password && password.length < 8) {
+    return { error: "Password must be at least 8 characters." };
+  }
+  if (!password) password = generatePassword();
 
-  const service = createServiceClient();
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  let service;
+  try {
+    service = createServiceClient();
+  } catch (e) {
+    return { error: friendlyAuthError((e as Error).message, "Server misconfigured.") };
+  }
 
   const { data: created, error: createError } =
     await service.auth.admin.createUser({
-      email,
+      email: usernameToEmail(username),
+      password,
       email_confirm: true,
-      user_metadata: { full_name: fullName },
+      user_metadata: { full_name: fullName, username },
     });
 
   if (createError || !created.user) {
-    return { error: createError?.message ?? "Failed to create user." };
+    return {
+      error: friendlyAuthError(createError?.message, "Failed to create user."),
+    };
   }
 
   const userId = created.user.id;
@@ -61,35 +84,58 @@ export async function inviteUser(
 
   await service.from("audit_logs").insert({
     actor_id: actor.id,
-    action: "user.invited",
+    action: "user.created",
     target_type: "profile",
     target_id: userId,
-    metadata: { email, role, full_name: fullName },
-  });
-
-  // The built-in SMTP is rate-limited (~2 emails/hour), so always hand
-  // the admin a copyable set-password link alongside the email attempt.
-  const { data: linkData, error: linkError } =
-    await service.auth.admin.generateLink({
-      type: "recovery",
-      email,
-      options: { redirectTo: `${siteUrl}/auth/reset-password` },
-    });
-  const actionLink = linkData?.properties?.action_link;
-
-  await service.auth.resetPasswordForEmail(email, {
-    redirectTo: `${siteUrl}/auth/reset-password`,
+    metadata: { username, role, full_name: fullName },
   });
 
   revalidatePath("/admin/users");
-  if (linkError || !actionLink) {
-    return {
-      success: `Invited ${fullName} as ${role}. Email sent — if it doesn't arrive, use "Forgot password" on the login page.`,
-    };
-  }
   return {
-    success: `Invited ${fullName} as ${role}. If the email doesn't arrive, share this set-password link:`,
-    link: actionLink,
+    success: `${fullName} can sign in now. Share these — the password isn't shown again:`,
+    credentials: { username, password },
+  };
+}
+
+export async function resetUserPassword(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { profile: actor } = await requireRole(["admin"]);
+  const userId = String(formData.get("user_id") ?? "");
+  if (!userId) return { error: "Missing user." };
+
+  let service;
+  try {
+    service = createServiceClient();
+  } catch (e) {
+    return { error: friendlyAuthError((e as Error).message, "Server misconfigured.") };
+  }
+
+  const { data: target, error: fetchError } =
+    await service.auth.admin.getUserById(userId);
+  if (fetchError || !target.user) return { error: "User not found." };
+
+  const password = generatePassword();
+  const { error } = await service.auth.admin.updateUserById(userId, {
+    password,
+  });
+  if (error) return { error: error.message };
+
+  await service.from("audit_logs").insert({
+    actor_id: actor.id,
+    action: "user.password_reset",
+    target_type: "profile",
+    target_id: userId,
+    metadata: {},
+  });
+
+  return {
+    success: "New password set — the old one stopped working. Share it now:",
+    credentials: {
+      username: emailToUsername(target.user.email ?? ""),
+      password,
+    },
   };
 }
 
