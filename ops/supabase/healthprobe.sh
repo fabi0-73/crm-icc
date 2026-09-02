@@ -11,6 +11,7 @@
 set -uo pipefail
 
 STACK=${STACK:-/srv/supabase}
+API=${API:-http://127.0.0.1:8001}   # Kong; 8000 was taken by another stack
 PING_URL=${HEALTH_PING_URL:-}
 DISK_LIMIT=${DISK_LIMIT:-80}                 # percent
 SLOT_LAG_LIMIT=${SLOT_LAG_LIMIT:-536870912}  # 512 MB, matches max_slot_wal_keep_size
@@ -21,18 +22,22 @@ fail() {
 }
 
 [ -r "$STACK/.env" ] || fail "cannot read $STACK/.env"
-# shellcheck disable=SC1091
-set -a; . "$STACK/.env"; set +a
+# Read the keys rather than sourcing: the env file is written for Docker
+# Compose and contains values with spaces that break shell sourcing.
+ANON_KEY=$(grep -E '^ANON_KEY=' "$STACK/.env" | cut -d= -f2-)
+SERVICE_KEY=$(grep -E '^SERVICE_ROLE_KEY=' "$STACK/.env" | cut -d= -f2-)
+[ -n "$ANON_KEY" ] && [ -n "$SERVICE_KEY" ] || fail "keys missing from $STACK/.env"
 
 code() { curl -s -o /dev/null -w '%{http_code}' -m 10 "$@"; }
 
 [ "$(code https://iccdesk.duckdns.org/login)" = "200" ] \
   || fail "app not answering on https://iccdesk.duckdns.org/login"
 
-[ "$(code http://127.0.0.1:8000/auth/v1/health)" = "200" ] \
+[ "$(code -H "apikey: ${ANON_KEY}" "${API}/auth/v1/health")" = "200" ] \
   || fail "auth (GoTrue) not answering"
 
-[ "$(code -H "apikey: ${ANON_KEY}" http://127.0.0.1:8000/rest/v1/)" = "200" ] \
+# /rest/v1/ is the OpenAPI root, which Kong restricts to service_role.
+[ "$(code -H "apikey: ${SERVICE_KEY}" "${API}/rest/v1/")" = "200" ] \
   || fail "rest (PostgREST) not answering"
 
 DISK=$(df --output=pcent / | tail -1 | tr -dc '0-9')
