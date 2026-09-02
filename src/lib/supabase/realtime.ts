@@ -104,6 +104,25 @@ export async function fetchMessagesSince(
   return (data ?? []) as Message[];
 }
 
+/** Older page for "load earlier messages" (exclusive of `before`). */
+export async function fetchMessagesBefore(
+  supabase: SupabaseClient,
+  roomId: string,
+  before: string,
+  limit = 50,
+): Promise<Message[]> {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("*")
+    .eq("room_id", roomId)
+    .lt("created_at", before)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+  return ((data ?? []) as Message[]).reverse();
+}
+
 export async function fetchRecentMessages(
   supabase: SupabaseClient,
   roomId: string,

@@ -90,7 +90,9 @@ export async function createUserAccount(
     metadata: { username, role, full_name: fullName },
   });
 
-  revalidatePath("/admin/users");
+  // Deliberately no revalidatePath here: it refreshes the route, which
+  // remounts this form and wipes the one-time password off the screen.
+  // The list refreshes when the admin closes the dialog.
   return {
     success: `${fullName} can sign in now. Share these — the password isn't shown again:`,
     credentials: { username, password },
@@ -104,6 +106,13 @@ export async function resetUserPassword(
   const { profile: actor } = await requireRole(["admin"]);
   const userId = String(formData.get("user_id") ?? "");
   if (!userId) return { error: "Missing user." };
+  if (userId === actor.id) {
+    // An admin password reset ends every session that user has — including
+    // the one clicking the button.
+    return {
+      error: "Change your own password from Account instead.",
+    };
+  }
 
   let service;
   try {
@@ -149,7 +158,12 @@ export async function deactivateUser(
   if (!userId) return { error: "Missing user." };
   if (userId === actor.id) return { error: "You cannot deactivate yourself." };
 
-  const service = createServiceClient();
+  let service;
+  try {
+    service = createServiceClient();
+  } catch (e) {
+    return { error: friendlyAuthError((e as Error).message, "Server misconfigured.") };
+  }
 
   const { error } = await service
     .from("profiles")
@@ -158,10 +172,16 @@ export async function deactivateUser(
 
   if (error) return { error: error.message };
 
-  // Ban so existing JWTs stop working on next refresh / sign-in.
-  await service.auth.admin.updateUserById(userId, {
+  // Ban so existing sessions stop working immediately. If this fails the
+  // account would be half-deactivated (locked out of the app, still able
+  // to hold a session), so put the profile back and report it.
+  const { error: banError } = await service.auth.admin.updateUserById(userId, {
     ban_duration: "876000h",
   });
+  if (banError) {
+    await service.from("profiles").update({ is_active: true }).eq("id", userId);
+    return { error: `Could not deactivate: ${banError.message}` };
+  }
 
   await service.from("audit_logs").insert({
     actor_id: actor.id,
@@ -183,7 +203,12 @@ export async function reactivateUser(
   const userId = String(formData.get("user_id") ?? "");
   if (!userId) return { error: "Missing user." };
 
-  const service = createServiceClient();
+  let service;
+  try {
+    service = createServiceClient();
+  } catch (e) {
+    return { error: friendlyAuthError((e as Error).message, "Server misconfigured.") };
+  }
 
   const { error } = await service
     .from("profiles")
@@ -192,7 +217,16 @@ export async function reactivateUser(
 
   if (error) return { error: error.message };
 
-  await service.auth.admin.updateUserById(userId, { ban_duration: "none" });
+  // Without a successful unban the profile would read "Active" while the
+  // person still cannot sign in.
+  const { error: unbanError } = await service.auth.admin.updateUserById(
+    userId,
+    { ban_duration: "none" },
+  );
+  if (unbanError) {
+    await service.from("profiles").update({ is_active: false }).eq("id", userId);
+    return { error: `Could not reactivate: ${unbanError.message}` };
+  }
 
   await service.from("audit_logs").insert({
     actor_id: actor.id,

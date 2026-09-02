@@ -3,10 +3,12 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { getSiteOrigin, sitePath } from "@/lib/site-url";
+import { sitePath } from "@/lib/site-url";
 import { usernameToEmail } from "@/lib/username";
 
 export type AuthState = { error?: string; success?: string };
+
+const DEACTIVATED = "This account has been deactivated. Ask an admin to restore it.";
 
 export async function signIn(
   _prev: AuthState,
@@ -27,6 +29,11 @@ export async function signIn(
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
+    // Deactivating bans the auth user, so this is what a deactivated
+    // person actually hits — never show them GoTrue's "User is banned".
+    if (error.code === "user_banned" || error.message === "User is banned") {
+      return { error: DEACTIVATED };
+    }
     return {
       error:
         error.message === "Invalid login credentials"
@@ -45,8 +52,8 @@ export async function signIn(
       .eq("id", user.id)
       .maybeSingle();
     if (!profile?.is_active) {
-      await supabase.auth.signOut();
-      return { error: "This account has been deactivated." };
+      await supabase.auth.signOut({ scope: "local" });
+      return { error: DEACTIVATED };
     }
   }
 
@@ -57,40 +64,30 @@ export async function signIn(
 
 export async function signOut() {
   const supabase = await createClient();
-  await supabase.auth.signOut();
+  // Local scope only: a global sign-out would also kill this person's
+  // phone session every time they sign out on the desktop.
+  await supabase.auth.signOut({ scope: "local" });
   const h = await headers();
   redirect(sitePath("/login", h));
 }
 
-export async function requestPasswordReset(
-  _prev: AuthState,
-  formData: FormData,
-): Promise<AuthState> {
-  const email = String(formData.get("email") ?? "").trim();
-  if (!email) return { error: "Email is required." };
-
-  const supabase = await createClient();
-  const h = await headers();
-  const siteUrl = getSiteOrigin(h);
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${siteUrl}/auth/reset-password`,
-  });
-  if (error) return { error: error.message };
-  return { success: "Check your email for a reset link." };
-}
-
+/** Signed-in user changing their own password (see /account). */
 export async function updatePassword(
   _prev: AuthState,
   formData: FormData,
 ): Promise<AuthState> {
   const password = String(formData.get("password") ?? "");
+  const confirm = String(formData.get("confirm") ?? "");
+
   if (password.length < 8) {
     return { error: "Password must be at least 8 characters." };
+  }
+  if (password !== confirm) {
+    return { error: "The two passwords don't match." };
   }
 
   const supabase = await createClient();
   const { error } = await supabase.auth.updateUser({ password });
   if (error) return { error: error.message };
-  const h = await headers();
-  redirect(sitePath("/rooms", h));
+  return { success: "Password changed. Use it the next time you sign in." };
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Modal, useModal } from "@/components/Modal";
 import { openDm } from "@/app/actions/rooms";
 import { createClient } from "@/lib/supabase/client";
@@ -54,6 +55,7 @@ export function NewDmButton({
   big?: boolean;
 }) {
   const { open, openModal, closeModal } = useModal();
+  const router = useRouter();
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,14 +78,14 @@ export function NewDmButton({
   async function pick(id: string) {
     setPendingId(id);
     setError(null);
-    try {
-      await openDm(id); // redirects on success
-    } catch (err) {
-      // Next.js redirect() throws a control-flow error — let it through.
-      if (err && typeof err === "object" && "digest" in err) throw err;
-      setError(err instanceof Error ? err.message : "Could not open chat");
-      setPendingId(null);
+    const result = await openDm(id);
+    setPendingId(null);
+    if (result.error || !result.roomId) {
+      setError(result.error ?? "Could not open chat");
+      return;
     }
+    closeModal();
+    router.push(`/rooms/${result.roomId}`);
   }
 
   return (

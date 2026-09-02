@@ -53,7 +53,6 @@ function ChatRow({ room }: { room: MyRoom }) {
   return (
     <Link
       href={`/rooms/${room.room_id}`}
-      prefetch
       className="flex items-center gap-3 px-4 transition-colors active:bg-mist"
     >
       {room.type === "dm" ? (
@@ -83,6 +82,7 @@ function ChatRow({ room }: { room: MyRoom }) {
             {room.display_name}
           </p>
           <span
+            suppressHydrationWarning
             className={`shrink-0 text-[12px] tabular-nums ${
               unread ? "font-semibold text-brand-600" : "text-muted"
             }`}

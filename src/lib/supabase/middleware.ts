@@ -2,12 +2,9 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { sitePath } from "@/lib/site-url";
 
-const PUBLIC_PATHS = [
-  "/login",
-  "/auth/callback",
-  "/auth/reset-password",
-  "/auth/forgot-password",
-];
+// Everything else needs a session. /auth/signout is deliberately NOT
+// here: it runs with the (still valid) session it is about to clear.
+const PUBLIC_PATHS = ["/login"];
 
 function isPublic(pathname: string) {
   return PUBLIC_PATHS.some(

@@ -34,7 +34,16 @@ export function SwapAssistantsButton({
         Swap assistants
       </Button>
       <Modal title="Swap assistants" open={open} onClose={closeModal}>
-        <ActionForm action={swapAssistants} className="space-y-4">
+        {/* Clearing the checked ids matters: they are submitted through a
+            hidden field, and a second swap would fail on assistants that
+            are no longer assigned. */}
+        <ActionForm
+          action={swapAssistants}
+          className="space-y-4"
+          onResult={(s) => {
+            if (s.success) setRemoveIds([]);
+          }}
+        >
           <input type="hidden" name="agent_id" value={agentId} />
           <input type="hidden" name="remove_ids" value={removeIds.join(",")} />
 

@@ -42,7 +42,7 @@ const DRAWER_NAV: {
   {
     href: "/admin/users",
     label: "User management",
-    sub: "Invite and deactivate staff",
+    sub: "Create staff logins and reset passwords",
     roles: ["admin"],
     icon: UserCog,
   },
@@ -155,7 +155,11 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
           </DrawerHeader>
 
           <div className="px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
-            <div className="flex items-center gap-3 py-3">
+            <Link
+              href="/account"
+              onClick={() => setYouOpen(false)}
+              className="-mx-2 flex items-center gap-3 rounded-2xl px-2 py-3 active:bg-mist"
+            >
               <span className="relative shrink-0">
                 <Avatar name={profile.full_name} />
                 <PresenceDot
@@ -167,11 +171,12 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
                 <p className="truncate text-[15px] font-semibold text-ink">
                   {profile.full_name}
                 </p>
-                <p className="text-[13px] capitalize text-muted">
-                  {profile.role} · {selfOnline ? "Online" : "Offline"}
+                <p className="text-[13px] text-muted">
+                  Account &amp; password
                 </p>
               </div>
-            </div>
+              <ChevronRight className="size-4 shrink-0 text-line-strong" />
+            </Link>
 
             {drawerNav.length > 0 && (
               <div className="mt-1 overflow-hidden rounded-2xl border border-line bg-paper">
@@ -179,7 +184,6 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
                   <Link
                     key={item.href}
                     href={item.href}
-                    prefetch
                     onClick={() => setYouOpen(false)}
                     className={`flex items-center gap-3 px-3.5 py-3 active:bg-mist ${
                       i > 0 ? "border-t border-line" : ""

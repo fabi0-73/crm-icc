@@ -64,7 +64,14 @@ export function RoomsProvider({
 
   const refetch = useCallback(async () => {
     const { data, error } = await supabase.rpc("get_my_rooms");
-    if (!error && data) setRooms(data as MyRoom[]);
+    if (error || !data) return;
+    // The room being read is read by definition: mark_room_read may not
+    // have landed yet, and showing a badge on the open room is wrong.
+    setRooms(
+      (data as MyRoom[]).map((r) =>
+        r.room_id === activeRef.current ? { ...r, unread_count: 0 } : r,
+      ),
+    );
   }, [supabase]);
 
   // Live updates from message inserts (RLS-filtered per subscriber).
@@ -94,6 +101,9 @@ export function RoomsProvider({
           room.last_message_at = msg.created_at;
           room.last_message_body = msg.body.slice(0, 140);
           room.last_message_kind = msg.kind;
+          // We don't know the new sender's name here; keeping the old one
+          // would label this message with the previous speaker.
+          room.last_message_sender = null;
           next.splice(idx, 1);
           next.unshift(room);
           return next;

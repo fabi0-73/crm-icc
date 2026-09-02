@@ -18,6 +18,12 @@ export function KeyboardInsets() {
     const root = document.documentElement;
 
     const update = () => {
+      // A pinch-zoom also shrinks the visual viewport; treating that as a
+      // keyboard would collapse the whole shell to the zoomed area.
+      if (vv.scale > 1.01) {
+        root.style.removeProperty("--vvh");
+        return;
+      }
       const gap = window.innerHeight - vv.height;
       // Only a keyboard produces a large gap; toolbar collapse is small.
       if (gap > 80) {

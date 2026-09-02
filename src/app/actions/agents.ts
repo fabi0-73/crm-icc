@@ -98,7 +98,8 @@ export async function createAgent(
     metadata: { username, role: "agent", full_name: fullName, agent_id: agentId },
   });
 
-  revalidatePath("/agents");
+  // No revalidatePath — see createUserAccount: refreshing the route here
+  // remounts the form and discards the one-time password.
   return {
     success: `Agent ${displayName} created. Share these — the password isn't shown again:`,
     credentials: { username, password },
@@ -137,6 +138,36 @@ export async function archiveAgent(
   await service.auth.admin.updateUserById(agent.user_id, {
     ban_duration: "876000h",
   });
+
+  // Close the assignments too, otherwise the agent keeps showing as
+  // staffed and the assistants keep the workspace in their sidebar with
+  // no hint that it is closed.
+  await service
+    .from("assignments")
+    .update({
+      removed_at: new Date().toISOString(),
+      removed_by: actor.id,
+      removal_reason: "Agent archived",
+    })
+    .eq("agent_id", agentId)
+    .is("removed_at", null);
+
+  const { data: room } = await service
+    .from("rooms")
+    .select("id")
+    .eq("agent_id", agentId)
+    .eq("type", "agent_workspace")
+    .maybeSingle();
+
+  if (room) {
+    await service.from("messages").insert({
+      room_id: room.id,
+      sender_id: null,
+      kind: "system",
+      body: `${agent.display_name} was archived`,
+      metadata: { event: "agent_archived" },
+    });
+  }
 
   await service.from("audit_logs").insert({
     actor_id: actor.id,

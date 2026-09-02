@@ -56,7 +56,7 @@ export default async function AgentDetailPage({
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="border-b border-line bg-paper px-4 py-4">
+      <div className="border-b border-line bg-paper px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
         <Link
           href="/agents"
           className="inline-flex items-center gap-1 text-[13px] font-medium text-brand-600 hover:text-brand-700"

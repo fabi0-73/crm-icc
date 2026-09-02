@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Modal, useModal } from "@/components/Modal";
-import { createGroupAndRedirect } from "@/app/actions/rooms";
+import { createGroup } from "@/app/actions/rooms";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
@@ -20,6 +21,7 @@ export function NewGroupButton({
   big?: boolean;
 }) {
   const { open, openModal, closeModal } = useModal();
+  const router = useRouter();
   const [staff, setStaff] = useState<Pick<Profile, "id" | "full_name" | "role">[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
@@ -49,12 +51,15 @@ export function NewGroupButton({
     setError(null);
     const fd = new FormData(e.currentTarget);
     fd.set("member_ids", selected.join(","));
-    try {
-      await createGroupAndRedirect(fd);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create group");
-      setPending(false);
+    const result = await createGroup(fd);
+    setPending(false);
+    if (result.error || !result.roomId) {
+      setError(result.error ?? "Failed to create group");
+      return;
     }
+    closeModal();
+    setSelected([]);
+    router.push(`/rooms/${result.roomId}`);
   }
 
   return (

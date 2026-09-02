@@ -6,10 +6,10 @@ import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
 
 const ERROR_MESSAGES: Record<string, string> = {
-  deactivated: "This account has been deactivated.",
+  deactivated:
+    "This account has been deactivated. Ask an admin to restore it.",
   config:
     "Supabase is not configured. Edit .env.local with your project URL and anon key from the Supabase dashboard (Settings → API), then restart npm run dev.",
-  auth: "Authentication link expired or invalid. Try signing in again.",
 };
 
 export function LoginForm({

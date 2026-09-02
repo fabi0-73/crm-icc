@@ -25,7 +25,7 @@ async function loadUsernames(): Promise<Map<string, string>> {
 }
 
 export default async function UsersPage() {
-  const { supabase } = await requireRole(["admin"]);
+  const { supabase, profile: self } = await requireRole(["admin"]);
 
   const [{ data: users, error }, usernames] = await Promise.all([
     supabase
@@ -74,8 +74,17 @@ export default async function UsersPage() {
               </Td>
               <Td>
                 <div className="flex items-center gap-4">
-                  <ResetPasswordButton userId={u.id} name={u.full_name} />
-                  {u.is_active ? (
+                  {u.id === self.id ? (
+                    <span className="text-muted">You</span>
+                  ) : (
+                    <ResetPasswordButton userId={u.id} name={u.full_name} />
+                  )}
+                  {/* Agent accounts are archived from the Agents page —
+                      flipping them here would leave agents.status and the
+                      login state disagreeing. */}
+                  {u.role === "agent" ? (
+                    <span className="text-muted">Manage on Agents</span>
+                  ) : u.id === self.id ? null : u.is_active ? (
                     <ActionForm action={deactivateUser}>
                       <input type="hidden" name="user_id" value={u.id} />
                       <button

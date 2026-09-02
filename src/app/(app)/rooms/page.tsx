@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { requireProfile } from "@/lib/auth";
@@ -25,6 +26,27 @@ export default async function RoomsPage() {
         redirect(sitePath(`/rooms/${room.id}`, h));
       }
     }
+    // Agents have no sidebar and no RoomsProvider — the staff screens
+    // below would crash for them.
+    return (
+      <div className="flex h-app flex-col items-center justify-center gap-4 bg-stream px-6 text-center">
+        <div>
+          <p className="text-[16px] font-semibold text-ink">
+            No workspace yet
+          </p>
+          <p className="mt-1 text-[13px] text-muted">
+            Your account isn&rsquo;t linked to a workspace. Ask your contact at
+            ICC to set it up.
+          </p>
+        </div>
+        <Link
+          href="/account"
+          className="inline-flex h-9 items-center rounded-lg border border-line bg-paper px-3.5 text-[13px] font-medium text-ink shadow-xs"
+        >
+          Your account
+        </Link>
+      </div>
+    );
   }
 
   const canCreateGroup =

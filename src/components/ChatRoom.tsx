@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
   ChevronLeft,
+  CircleUserRound,
   FileText,
   Hash,
   Info,
@@ -14,6 +15,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import {
   ensureRealtimeAuth,
+  fetchMessagesBefore,
   fetchMessagesSince,
   sendTyping,
   subscribeToRoomMessages,
@@ -37,6 +39,21 @@ import type { Message, Profile, RoomType } from "@/lib/types";
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const TYPING_THROTTLE_MS = 2000;
 const TYPING_EXPIRE_MS = 4000;
+const PAGE_SIZE = 50;
+
+/**
+ * Supabase Storage keys accept only an S3-safe ASCII subset, so a file
+ * named "Relazione città.pdf" fails to upload. The real name is kept in
+ * attachment_name; the key only has to be unique and legal.
+ */
+function safeKeyName(name: string) {
+  const cleaned = name
+    .normalize("NFKD")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(-80);
+  return cleaned.length > 0 ? cleaned : "file";
+}
 
 function formatMsgTime(iso: string) {
   return new Date(iso).toLocaleTimeString([], {
@@ -56,7 +73,7 @@ function isImage(msg: Message) {
   return msg.kind === "file" && (msg.attachment_mime ?? "").startsWith("image/");
 }
 
-type SignFn = (path: string, download?: string) => Promise<string | null>;
+type SignFn = (path: string) => Promise<string | null>;
 
 export function ChatRoom({
   roomId,
@@ -66,14 +83,20 @@ export function ChatRoom({
   currentUserId,
   members,
   initialMessages,
+  hasOlder = false,
+  leading = "back",
 }: {
   roomId: string;
   roomName: string;
   roomType?: RoomType;
   dmOtherUserId?: string | null;
   currentUserId: string;
-  members: Pick<Profile, "id" | "full_name" | "role">[];
+  members: Pick<Profile, "id" | "full_name" | "role" | "is_active">[];
   initialMessages: Message[];
+  /** More history exists above the first loaded message. */
+  hasOlder?: boolean;
+  /** Agents have no sidebar or tab bar — their only way out is here. */
+  leading?: "back" | "account";
 }) {
   const supabase = useMemo(() => createClient(), []);
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -82,6 +105,7 @@ export function ChatRoom({
   const [error, setError] = useState<string | null>(null);
   const [showMembers, setShowMembers] = useState(false);
   const [typers, setTypers] = useState<Record<string, number>>({});
+  const [older, setOlder] = useState({ has: hasOlder, loading: false });
 
   const streamRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -91,6 +115,7 @@ export function ChatRoom({
   const nearBottomRef = useRef(true);
   const didInitScrollRef = useRef(false);
   const lastTypingSentRef = useRef(0);
+  const markReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastCreatedAtRef = useRef<string | null>(
     initialMessages[initialMessages.length - 1]?.created_at ?? null,
   );
@@ -133,6 +158,16 @@ export function ChatRoom({
     [currentUserId],
   );
 
+  // Messages that arrive while the room is open are read the moment they
+  // land — otherwise the unread badge for THIS room grows behind your back
+  // and reappears the next time the list is refetched.
+  const scheduleMarkRead = useCallback(() => {
+    if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
+    markReadTimerRef.current = setTimeout(() => {
+      void markRoomRead(roomId).catch(() => {});
+    }, 800);
+  }, [roomId]);
+
   useEffect(() => {
     let cancelled = false;
     let channel: RealtimeChannel | null = null;
@@ -140,7 +175,20 @@ export function ChatRoom({
     (async () => {
       await ensureRealtimeAuth(supabase);
       if (cancelled) return;
-      channel = subscribeToRoomMessages(supabase, roomId, mergeMessage, onTyping);
+      channel = subscribeToRoomMessages(
+        supabase,
+        roomId,
+        (msg) => {
+          mergeMessage(msg);
+          if (
+            msg.sender_id !== currentUserId &&
+            document.visibilityState === "visible"
+          ) {
+            scheduleMarkRead();
+          }
+        },
+        onTyping,
+      );
       channelRef.current = channel;
       await markRoomRead(roomId).catch(() => {});
     })();
@@ -169,11 +217,12 @@ export function ChatRoom({
     return () => {
       cancelled = true;
       channelRef.current = null;
+      if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibility);
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [supabase, roomId, mergeMessage, onTyping]);
+  }, [supabase, roomId, mergeMessage, onTyping, currentUserId, scheduleMarkRead]);
 
   // Expire stale typing entries.
   useEffect(() => {
@@ -224,26 +273,41 @@ export function ChatRoom({
   }, []);
 
   const sign = useCallback<SignFn>(
-    async (path, download) => {
+    async (path) => {
       const { data } = await supabase.storage
         .from("attachments")
-        .createSignedUrl(path, 3600, download ? { download } : undefined);
+        .createSignedUrl(path, 3600);
       return data?.signedUrl ?? null;
     },
     [supabase],
   );
 
-  const openAttachment = useCallback(
-    async (path: string, name: string) => {
-      const url = await sign(path, name);
-      if (!url) {
-        setError("Could not open the attachment.");
-        return;
-      }
-      window.open(url, "_blank", "noopener");
-    },
-    [sign],
-  );
+  /** Prepend one page of history, holding the reader's scroll position. */
+  const loadOlder = useCallback(async () => {
+    const el = streamRef.current;
+    const first = messages[0];
+    if (!el || !first || older.loading) return;
+    setOlder((o) => ({ ...o, loading: true }));
+    const prevHeight = el.scrollHeight;
+    try {
+      const page = await fetchMessagesBefore(
+        supabase,
+        roomId,
+        first.created_at,
+        PAGE_SIZE,
+      );
+      setMessages((prev) => {
+        const seen = new Set(prev.map((m) => m.id));
+        return [...page.filter((m) => !seen.has(m.id)), ...prev];
+      });
+      setOlder({ has: page.length === PAGE_SIZE, loading: false });
+      requestAnimationFrame(() => {
+        el.scrollTop += el.scrollHeight - prevHeight;
+      });
+    } catch {
+      setOlder((o) => ({ ...o, loading: false }));
+    }
+  }, [messages, older.loading, supabase, roomId]);
 
   function autoresize() {
     const ta = taRef.current;
@@ -299,7 +363,7 @@ export function ChatRoom({
     setSending(true);
     setError(null);
 
-    const path = `${roomId}/${crypto.randomUUID()}/${file.name}`;
+    const path = `${roomId}/${crypto.randomUUID()}/${safeKeyName(file.name)}`;
     const { error: uploadError } = await supabase.storage
       .from("attachments")
       .upload(path, file, { contentType: file.type, upsert: false });
@@ -348,14 +412,23 @@ export function ChatRoom({
     <div className="flex h-full flex-col bg-stream">
       {/* ── Header ─────────────────────────────────────────────── */}
       <div className="flex shrink-0 items-center gap-1.5 border-b border-line/80 bg-paper/90 px-1.5 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] backdrop-blur-md sm:px-3">
-        <Link
-          href="/rooms"
-          prefetch
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink active:bg-mist sm:hidden"
-          aria-label="Back to chats"
-        >
-          <ChevronLeft className="size-6" />
-        </Link>
+        {leading === "account" ? (
+          <Link
+            href="/account"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink active:bg-mist"
+            aria-label="Your account"
+          >
+            <CircleUserRound className="size-6" />
+          </Link>
+        ) : (
+          <Link
+            href="/rooms"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink active:bg-mist sm:hidden"
+            aria-label="Back to chats"
+          >
+            <ChevronLeft className="size-6" />
+          </Link>
+        )}
 
         {roomType === "dm" ? (
           <span className="relative ml-1 shrink-0 sm:ml-0">
@@ -394,7 +467,8 @@ export function ChatRoom({
           roomId={roomId}
           roomName={roomName}
           currentUserId={currentUserId}
-          members={members}
+          // Deactivated accounts can't answer — never offer them.
+          members={members.filter((m) => m.is_active !== false)}
         />
         <button
           type="button"
@@ -414,10 +488,25 @@ export function ChatRoom({
           className="h-full overflow-y-auto overscroll-contain px-3 py-3 sm:px-6"
         >
           <div className="mx-auto w-full max-w-3xl">
+          {older.has && (
+            <div className="flex justify-center py-3">
+              <button
+                type="button"
+                onClick={() => void loadOlder()}
+                disabled={older.loading}
+                className="rounded-full border border-line/70 bg-white/80 px-3.5 py-1.5 text-[12px] font-medium text-muted shadow-xs backdrop-blur active:bg-mist disabled:opacity-50"
+              >
+                {older.loading ? "Loading…" : "Load earlier messages"}
+              </button>
+            </div>
+          )}
           {sections.map((day) => (
             <div key={day.key}>
               <div className="my-3 flex justify-center">
-                <span className="rounded-full border border-line/70 bg-white/75 px-3 py-1 text-[11px] font-medium text-muted shadow-xs backdrop-blur">
+                <span
+                  suppressHydrationWarning
+                  className="rounded-full border border-line/70 bg-white/75 px-3 py-1 text-[11px] font-medium text-muted shadow-xs backdrop-blur"
+                >
                   {day.label}
                 </span>
               </div>
@@ -446,14 +535,16 @@ export function ChatRoom({
                             mine
                             tail={i === g.messages.length - 1}
                             sign={sign}
-                            onOpen={openAttachment}
                             onMediaLoad={() => {
                               if (nearBottomRef.current) scrollToBottom(false);
                             }}
                           />
                         </div>
                       ))}
-                      <p className="mt-1 text-[11px] tabular-nums text-muted/80">
+                      <p
+                        suppressHydrationWarning
+                        className="mt-1 text-[11px] tabular-nums text-muted/80"
+                      >
                         {formatMsgTime(last.created_at)}
                       </p>
                     </div>
@@ -477,7 +568,10 @@ export function ChatRoom({
                         <span className="truncate text-[13px] font-semibold text-brand-700">
                           {name}
                         </span>
-                        <span className="shrink-0 text-[11px] tabular-nums text-muted">
+                        <span
+                          suppressHydrationWarning
+                          className="shrink-0 text-[11px] tabular-nums text-muted"
+                        >
                           {formatMsgTime(first.created_at)}
                         </span>
                       </p>
@@ -489,7 +583,6 @@ export function ChatRoom({
                               mine={false}
                               tail={i === g.messages.length - 1}
                               sign={sign}
-                              onOpen={openAttachment}
                               onMediaLoad={() => {
                                 if (nearBottomRef.current)
                                   scrollToBottom(false);
@@ -608,19 +701,47 @@ export function ChatRoom({
 
 /* ── Bubbles & attachments ────────────────────────────────────── */
 
+/**
+ * Signs the object as soon as the bubble renders. Attachments are opened
+ * through a plain <a>: signing inside the click handler leaves the user
+ * gesture behind, and mobile Safari then blocks the window silently.
+ */
+function useSignedUrl(path: string | null, sign: SignFn) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!path) return;
+    let cancelled = false;
+    setFailed(false);
+    void sign(path)
+      .then((signed) => {
+        if (cancelled) return;
+        if (signed) setUrl(signed);
+        else setFailed(true);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [path, sign]);
+
+  return { url, failed, setFailed };
+}
+
 function Bubble({
   msg,
   mine,
   tail,
   sign,
-  onOpen,
   onMediaLoad,
 }: {
   msg: Message;
   mine: boolean;
   tail: boolean;
   sign: SignFn;
-  onOpen: (path: string, name: string) => Promise<void>;
   onMediaLoad: () => void;
 }) {
   if (isImage(msg) && msg.attachment_path) {
@@ -629,7 +750,6 @@ function Bubble({
         path={msg.attachment_path}
         name={msg.attachment_name ?? "image"}
         sign={sign}
-        onOpen={onOpen}
         onLoaded={onMediaLoad}
         tailSide={mine ? "right" : "left"}
         tail={tail}
@@ -646,33 +766,12 @@ function Bubble({
 
   if (msg.kind === "file" && msg.attachment_path) {
     return (
-      <button
-        type="button"
-        onClick={() =>
-          void onOpen(msg.attachment_path!, msg.attachment_name ?? "file")
-        }
-        className={`flex items-center gap-2.5 px-3 py-2.5 text-left ${shape} ${surface}`}
-      >
-        <span
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-            mine ? "bg-white/20" : "bg-brand-50 text-brand-700"
-          }`}
-        >
-          <FileText className="size-[18px]" />
-        </span>
-        <span className="min-w-0">
-          <span className="block max-w-52 truncate text-[14px] font-medium">
-            {msg.attachment_name ?? msg.body}
-          </span>
-          <span
-            className={`block text-[11.5px] ${
-              mine ? "text-white/70" : "text-muted"
-            }`}
-          >
-            {formatBytes(msg.attachment_size) || "Attachment"}
-          </span>
-        </span>
-      </button>
+      <AttachmentFile
+        msg={msg}
+        mine={mine}
+        sign={sign}
+        className={`${shape} ${surface}`}
+      />
     );
   }
 
@@ -685,11 +784,65 @@ function Bubble({
   );
 }
 
+function AttachmentFile({
+  msg,
+  mine,
+  sign,
+  className,
+}: {
+  msg: Message;
+  mine: boolean;
+  sign: SignFn;
+  className: string;
+}) {
+  const { url, failed } = useSignedUrl(msg.attachment_path, sign);
+  const name = msg.attachment_name ?? msg.body;
+
+  const inner = (
+    <>
+      <span
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+          mine ? "bg-white/20" : "bg-brand-50 text-brand-700"
+        }`}
+      >
+        <FileText className="size-[18px]" />
+      </span>
+      <span className="min-w-0">
+        <span className="block max-w-52 truncate text-[14px] font-medium">
+          {name}
+        </span>
+        <span
+          className={`block text-[11.5px] ${
+            mine ? "text-white/70" : "text-muted"
+          }`}
+        >
+          {failed
+            ? "Unavailable"
+            : formatBytes(msg.attachment_size) || "Attachment"}
+        </span>
+      </span>
+    </>
+  );
+
+  const shell = `flex items-center gap-2.5 px-3 py-2.5 text-left ${className}`;
+
+  if (!url) {
+    return (
+      <div className={`${shell} ${failed ? "" : "opacity-70"}`}>{inner}</div>
+    );
+  }
+
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" className={shell}>
+      {inner}
+    </a>
+  );
+}
+
 function AttachmentImage({
   path,
   name,
   sign,
-  onOpen,
   onLoaded,
   tailSide,
   tail,
@@ -697,25 +850,11 @@ function AttachmentImage({
   path: string;
   name: string;
   sign: SignFn;
-  onOpen: (path: string, name: string) => Promise<void>;
   onLoaded: () => void;
   tailSide: "left" | "right";
   tail: boolean;
 }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void sign(path).then((signed) => {
-      if (cancelled) return;
-      if (signed) setUrl(signed);
-      else setFailed(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [path, sign]);
+  const { url, failed, setFailed } = useSignedUrl(path, sign);
 
   const shape = `rounded-2xl ${
     tail ? (tailSide === "right" ? "rounded-br-md" : "rounded-bl-md") : ""
@@ -723,13 +862,11 @@ function AttachmentImage({
 
   if (failed) {
     return (
-      <button
-        type="button"
-        onClick={() => void onOpen(path, name)}
-        className={`border border-line bg-paper px-3.5 py-2 text-[14px] font-medium text-brand-700 underline underline-offset-2 ${shape}`}
+      <div
+        className={`border border-line bg-paper px-3.5 py-2 text-[14px] font-medium text-muted ${shape}`}
       >
-        {name}
-      </button>
+        {name} · unavailable
+      </div>
     );
   }
 
@@ -742,9 +879,10 @@ function AttachmentImage({
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => void onOpen(path, name)}
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
       className={`block overflow-hidden border border-line bg-paper ${shape}`}
       aria-label={`Open image ${name}`}
     >
@@ -758,7 +896,7 @@ function AttachmentImage({
         onError={() => setFailed(true)}
         className="max-h-72 w-auto max-w-full object-cover"
       />
-    </button>
+    </a>
   );
 }
 
