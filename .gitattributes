@@ -4,3 +4,12 @@
 /ios export-ignore
 /mobile export-ignore
 /capacitor.config.ts export-ignore
+
+# Server-side ops (the self-hosted Supabase stack) — deployed with scp to
+# /srv/supabase, not part of the app bundle scripts/deploy.sh builds.
+/ops export-ignore
+
+# /ops is copied verbatim onto a Linux box. core.autocrlf is true on the
+# Windows workstation, and CRLF would break the Kong entrypoint's awk script
+# and the psql init scripts, so pin these to LF regardless of platform.
+/ops/** text eol=lf
