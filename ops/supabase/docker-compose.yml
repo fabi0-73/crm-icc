@@ -49,7 +49,7 @@ services:
       storage:
         condition: service_started
     ports:
-      - "127.0.0.1:8000:8000/tcp"
+      - "127.0.0.1:8001:8000/tcp"
     volumes:
       - ./volumes/api/kong.yml:/home/kong/temp.yml:ro,z
       - ./volumes/api/kong-entrypoint.sh:/home/kong/kong-entrypoint.sh:ro,z
