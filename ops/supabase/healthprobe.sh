@@ -30,8 +30,8 @@ SERVICE_KEY=$(grep -E '^SERVICE_ROLE_KEY=' "$STACK/.env" | cut -d= -f2-)
 
 code() { curl -s -o /dev/null -w '%{http_code}' -m 10 "$@"; }
 
-[ "$(code https://iccdesk.duckdns.org/login)" = "200" ] \
-  || fail "app not answering on https://iccdesk.duckdns.org/login"
+[ "$(code https://chat.icenterconsult.com/login)" = "200" ] \
+  || fail "app not answering on https://chat.icenterconsult.com/login"
 
 [ "$(code -H "apikey: ${ANON_KEY}" "${API}/auth/v1/health")" = "200" ] \
   || fail "auth (GoTrue) not answering"

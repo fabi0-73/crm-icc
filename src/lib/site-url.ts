@@ -2,6 +2,13 @@
  * Public origin for redirects behind nginx.
  * Never use Next's internal listen URL (http://localhost:3010 / 127.0.0.1).
  */
+
+/**
+ * Hostnames nginx terminates TLS for. Only consulted when a proxy fails to
+ * send x-forwarded-proto; the first entry is the canonical one.
+ */
+const PUBLIC_HOSTS = ["chat.icenterconsult.com", "iccdesk.duckdns.org"];
+
 export function getSiteOrigin(headersList?: Headers | null): string {
   const site = (process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/$/, "");
 
@@ -23,7 +30,7 @@ export function getSiteOrigin(headersList?: Headers | null): string {
     if (!isLoopback) {
       const proto = (
         headersList.get("x-forwarded-proto") ||
-        (host.includes("iccdesk.duckdns.org") ? "https" : "http")
+        (PUBLIC_HOSTS.some((h) => host.includes(h)) ? "https" : "http")
       )
         .split(",")[0]
         .trim();
@@ -31,7 +38,7 @@ export function getSiteOrigin(headersList?: Headers | null): string {
     }
   }
 
-  return site || "https://iccdesk.duckdns.org";
+  return site || `https://${PUBLIC_HOSTS[0]}`;
 }
 
 export function sitePath(path: string, headersList?: Headers | null): string {

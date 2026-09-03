@@ -6,7 +6,7 @@ const config: CapacitorConfig = {
   // Placeholder web assets; the shell loads the production app remotely.
   webDir: "mobile/www",
   server: {
-    url: "https://iccdesk.duckdns.org",
+    url: "https://chat.icenterconsult.com",
     // Shown when the remote app fails to load (offline, server down).
     errorPath: "error.html",
   },

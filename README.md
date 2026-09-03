@@ -5,9 +5,11 @@ Assistants support agents in shared workspaces. Swap assistants without WhatsApp
 ## Stack
 
 - Next.js 15 (App Router) + TypeScript
-- Supabase managed cloud (Postgres, Auth, Realtime, Storage)
+- Self-hosted Supabase on the same VPS (Postgres, Auth, Realtime,
+  Storage) — see `ops/supabase/` and `docs/RUNBOOK.md`
 - Deployed on a VPS: systemd service `crm-icc` (`next start -p 3010`)
-  behind nginx at https://iccdesk.duckdns.org
+  behind nginx at https://chat.icenterconsult.com
+  (the older https://iccdesk.duckdns.org still resolves to the same app)
 - coturn on the same VPS relays WebRTC calls (`NEXT_PUBLIC_TURN_*` env;
   no credentials in code — without env the client is STUN-only)
 

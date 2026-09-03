@@ -6,7 +6,8 @@ project's own VPS instead of Supabase Cloud.
 
 It is deployed to `/srv/supabase` on `72.62.42.52` and started by the
 `supabase.service` systemd unit. The only public entrance is nginx on 443,
-which proxies `https://iccdesk.duckdns.org/sb/` to Kong on `127.0.0.1:8000`.
+which proxies `https://chat.icenterconsult.com/sb/` to Kong on
+`127.0.0.1:8001` (port 8000 belongs to an unrelated stack on the same box).
 
 - Day-to-day operations: **[`docs/RUNBOOK.md`](../../docs/RUNBOOK.md)**
 - Why it is built this way: **[the implementation plan](../../docs/superpowers/plans/2026-09-02-self-hosted-supabase.md)**

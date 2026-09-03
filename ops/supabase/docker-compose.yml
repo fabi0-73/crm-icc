@@ -14,8 +14,8 @@
 #   - Six services only: db, auth, rest, realtime, storage, kong.
 #   - Every published port binds 127.0.0.1. The database port is not published
 #     at all; use `docker compose exec -T db psql ...` instead.
-#   - The public entrance is nginx on 443, proxying https://iccdesk.duckdns.org/sb/
-#     to kong on 127.0.0.1:8000.
+#   - The public entrance is nginx on 443, proxying https://chat.icenterconsult.com/sb/
+#     to kong on 127.0.0.1:8001.
 
 name: supabase
 

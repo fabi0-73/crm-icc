@@ -23,11 +23,11 @@ copy-pasteable; the only blanks are values only you can hold, marked
 | Thing | Value |
 | --- | --- |
 | VPS | `72.62.42.52`, Ubuntu 22.04, 7.8 GB RAM, 2 vCPU, 97 GB disk |
-| Public hostname | `https://iccdesk.duckdns.org` (DuckDNS + Let's Encrypt via certbot) |
+| Public hostname | `https://chat.icenterconsult.com` (DNS at Hostinger; the older `iccdesk.duckdns.org` still points here and shares the certificate) |
 | SSH | `ssh -i ~/.ssh/icc_vps_ed25519 root@72.62.42.52` (key only after hardening) |
 | App | `crm-icc.service` → Next.js on `127.0.0.1:3010`, code at `/srv/apps/crm-icc` |
-| Supabase stack | `supabase.service` → Docker Compose at `/srv/supabase`, gateway on `127.0.0.1:8000` |
-| API from the browser | `https://iccdesk.duckdns.org/sb/` → nginx → kong `127.0.0.1:8000` |
+| Supabase stack | `supabase.service` → Docker Compose at `/srv/supabase`, gateway on `127.0.0.1:8001` |
+| API from the browser | `https://chat.icenterconsult.com/sb/` → nginx → kong `127.0.0.1:8001` |
 | Containers | `db` (Postgres 17), `auth` (GoTrue), `rest` (PostgREST), `realtime`, `storage`, `kong` |
 | **Not ours** | PG14 `127.0.0.1:5433`, PG16 `:5432`, coturn `:3478`, xrdp, tor — trading bots and infra |
 
@@ -112,7 +112,7 @@ Is it actually serving?
 cd /srv/supabase && set -a; . ./.env; set +a
 curl -s http://127.0.0.1:8000/auth/v1/health; echo
 curl -s -o /dev/null -w 'rest:%{http_code}\n' -H "apikey: $ANON_KEY" http://127.0.0.1:8000/rest/v1/
-curl -s -o /dev/null -w 'app:%{http_code}\n' https://iccdesk.duckdns.org/login
+curl -s -o /dev/null -w 'app:%{http_code}\n' https://chat.icenterconsult.com/login
 ```
 
 Expect GoTrue version JSON, `rest:200`, `app:200`.
@@ -287,7 +287,7 @@ Confirm end to end:
 ```bash
 ssh -i ~/.ssh/icc_vps_ed25519 root@72.62.42.52 'cd /srv/supabase && set -a; . ./.env; set +a
 curl -s -o /dev/null -w "rest:%{http_code}\n" -H "apikey: $ANON_KEY" http://127.0.0.1:8000/rest/v1/'
-curl -s -o /dev/null -w 'app:%{http_code}\n' https://iccdesk.duckdns.org/login
+curl -s -o /dev/null -w 'app:%{http_code}\n' https://chat.icenterconsult.com/login
 ```
 
 Then sign in in a browser. Everyone else must sign in again too — that is expected, not a
@@ -317,7 +317,7 @@ fault.
 
 ## 6. Add a user
 
-**Normal path — through the app.** `https://iccdesk.duckdns.org/admin/users` → **New user**.
+**Normal path — through the app.** `https://chat.icenterconsult.com/admin/users` → **New user**.
 Full name, username, role (Admin / Manager / Assistant); leave the password blank to
 auto-generate a readable one. **The password is shown exactly once** — copy it before
 closing the dialog. Agent accounts are created from the Agents page, not here.
@@ -371,7 +371,7 @@ Expect a body containing `access_token`.
 
 ## 7. Delete a user
 
-`https://iccdesk.duckdns.org/admin/users` → **Delete** on the row.
+`https://chat.icenterconsult.com/admin/users` → **Delete** on the row.
 
 The dialog fetches and lists exactly what will be destroyed before you can confirm: messages
 they sent (removed from every conversation), their workspace and its messages, direct chats
@@ -555,7 +555,7 @@ nginx is not passing the upgrade. From your workstation:
 curl -s -o /dev/null -w '%{http_code}\n' \
   -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  'https://iccdesk.duckdns.org/sb/realtime/v1/websocket?apikey=<ANON_KEY>&vsn=1.0.0'
+  'https://chat.icenterconsult.com/sb/realtime/v1/websocket?apikey=<ANON_KEY>&vsn=1.0.0'
 ```
 
 `101` is correct. `200` or `400` means the `/sb/` location lost its `proxy_set_header
@@ -601,7 +601,7 @@ ICC_SSH_KEY=~/.ssh/icc_vps_ed25519 bash scripts/deploy.sh
 Confirm the browser bundle no longer points at the self-hosted API:
 
 ```bash
-curl -s https://iccdesk.duckdns.org/login | grep -c 'iccdesk.duckdns.org/sb'
+curl -s https://chat.icenterconsult.com/login | grep -c 'chat.icenterconsult.com/sb'
 ```
 
 Expect `0`. A non-zero count means the build was stale — deploy again.
@@ -622,9 +622,17 @@ both checks). This is the VPS provider's console, not something SSH can fix:
 - Reboot from the panel only as a last resort. It restarts the trading bots too. `supabase`
   and `crm-icc` are both `systemctl enable`d and come back on their own.
 
-**DNS.** `iccdesk.duckdns.org` is a DuckDNS record. The token is `<from password manager>`;
-sign in at <https://www.duckdns.org> with the owner's account to see or update the record.
-If an updater runs on the box, it is a cron entry — find it before assuming there is none:
+**DNS.** Two names resolve here, and they are managed in different places.
+
+`chat.icenterconsult.com` is the one people use. Its zone lives at **Hostinger** (hPanel →
+Domains → `icenterconsult.com` → DNS), as an `A` record to `72.62.42.52` and an `AAAA` to
+`2a02:4780:41:4a9::1`. The parent domain and `www` point at Hostinger *shared hosting* — a
+different machine entirely — so never touch those records while fixing this one.
+
+`iccdesk.duckdns.org` is the older name, kept alive so old bookmarks and installed mobile
+shells keep working. It is a DuckDNS record; the token is `<from password manager>`, sign in
+at <https://www.duckdns.org> with the owner's account. If an updater runs on the box, it is a
+cron entry — find it before assuming there is none:
 
 ```bash
 grep -rl duckdns /etc/cron.d /etc/cron.daily /var/spool/cron 2>/dev/null
@@ -632,12 +640,19 @@ crontab -l
 systemctl list-timers --all --no-pager | grep -i duck
 ```
 
-The IP is static, so DNS rarely moves; if the name stops resolving, check DuckDNS before
+The IP is static, so DNS rarely moves; if a name stops resolving, check its registrar before
 suspecting the server.
 
 **TLS.** The certificate is Let's Encrypt via **certbot, renewed automatically by a systemd
-timer**. There is one certificate covering `iccdesk.duckdns.org`, shared by the app and
-`/sb/` — that is why the API is a path prefix and not a subdomain.
+timer**, using the `webroot` authenticator at `/var/www/html`. One certificate — still filed
+under the cert name `iccdesk.duckdns.org` — covers *both* hostnames and is shared by the app
+and `/sb/`; that is why the API is a path prefix and not a subdomain. To add or drop a name,
+re-run the issuance with the full list and `--expand`, never with a partial one:
+
+```bash
+certbot certonly --webroot -w /var/www/html --cert-name iccdesk.duckdns.org \
+  -d iccdesk.duckdns.org -d chat.icenterconsult.com --expand
+```
 
 ```bash
 systemctl list-timers --no-pager | grep -i certbot
