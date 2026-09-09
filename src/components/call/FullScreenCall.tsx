@@ -121,8 +121,12 @@ export function FullScreenCall() {
               autoPlay
               playsInline
               muted
+              // Mirror your own camera preview, the way every video app
+              // does, so it reads like a mirror instead of "reversed". A
+              // shared screen must never be flipped (its text would go
+              // backwards), so only the camera is mirrored.
               className={`absolute bottom-4 right-4 h-36 w-28 rounded-xl border border-white/20 ${
-                sharing ? "object-contain bg-ink" : "object-cover"
+                sharing ? "object-contain bg-ink" : "object-cover -scale-x-100"
               } ${camOff && !sharing ? "opacity-30" : ""}`}
             />
           </>

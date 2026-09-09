@@ -100,8 +100,9 @@ export function FloatingCallTile() {
               autoPlay
               playsInline
               muted
+              // Mirror the self-view camera (never a shared screen).
               className={`absolute bottom-2 right-2 h-16 w-12 rounded-lg border border-white/25 ${
-                sharing ? "object-contain bg-ink" : "object-cover"
+                sharing ? "object-contain bg-ink" : "object-cover -scale-x-100"
               } ${camOff && !sharing ? "opacity-30" : ""}`}
             />
           </>
