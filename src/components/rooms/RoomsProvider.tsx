@@ -22,7 +22,9 @@ import { createClient } from "@/lib/supabase/client";
 import {
   ensureRealtimeAuth,
   subscribeToAllMessageInserts,
+  subscribeToMyMembershipChanges,
 } from "@/lib/supabase/realtime";
+import { installAutoResume, playMessageChime } from "@/lib/call/tones";
 import type { MyRoom } from "@/lib/types";
 
 type RoomsContextValue = {
@@ -79,11 +81,26 @@ export function RoomsProvider({
     let channel: ReturnType<typeof subscribeToAllMessageInserts> | null = null;
     let cancelled = false;
 
+    // The chime needs an unlocked AudioContext; CallProvider installs the
+    // same gesture hook, but this provider must not depend on that.
+    installAutoResume();
+
     (async () => {
       await ensureRealtimeAuth(supabase);
       if (cancelled) return;
       channel = subscribeToAllMessageInserts(supabase, (msg) => {
         if (msg.sender_id === currentUserId) return;
+        // Someone else's message that you are not currently reading:
+        // another room, or this room while the tab is hidden/unfocused.
+        // System notices ("X joined") stay silent.
+        if (
+          msg.kind !== "system" &&
+          (msg.room_id !== activeRef.current ||
+            document.visibilityState !== "visible" ||
+            !document.hasFocus())
+        ) {
+          playMessageChime();
+        }
         setRooms((prev) => {
           const idx = prev.findIndex((r) => r.room_id === msg.room_id);
           if (idx < 0) {
@@ -111,6 +128,26 @@ export function RoomsProvider({
       });
     })();
 
+    return () => {
+      cancelled = true;
+      if (channel) void supabase.removeChannel(channel);
+    };
+  }, [supabase, currentUserId, refetch]);
+
+  // Being added to or removed from a room produces no message the current
+  // list would notice, and room_members is not something the message
+  // subscription sees. Watch this user's own membership rows and pull the
+  // authoritative list when one appears or disappears.
+  useEffect(() => {
+    let channel: ReturnType<typeof subscribeToMyMembershipChanges> | null = null;
+    let cancelled = false;
+    (async () => {
+      await ensureRealtimeAuth(supabase);
+      if (cancelled) return;
+      channel = subscribeToMyMembershipChanges(supabase, currentUserId, () => {
+        void refetch();
+      });
+    })();
     return () => {
       cancelled = true;
       if (channel) void supabase.removeChannel(channel);

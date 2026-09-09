@@ -46,6 +46,18 @@ export type RoomMember = {
   last_read_at: string;
   added_at: string;
   added_by: string;
+  role: RoomMemberRole;
+};
+
+/** A room member joined to their profile, as the chat roster shows them. */
+export type RoomMemberView = {
+  id: string;
+  full_name: string;
+  /** The person's app-wide role (admin/manager/assistant/agent). */
+  role: Role;
+  is_active: boolean | null;
+  /** Their standing in THIS room. */
+  room_role: RoomMemberRole;
 };
 
 export type MessageKind = "text" | "file" | "system";
@@ -75,6 +87,8 @@ export type AuditLog = {
   created_at: string;
 };
 
+export type RoomMemberRole = "admin" | "member";
+
 export type MyRoom = {
   room_id: string;
   name: string;
@@ -82,6 +96,8 @@ export type MyRoom = {
   display_name: string;
   type: RoomType;
   agent_id: string | null;
+  /** Group avatar (public URL); null for DMs and un-imaged groups. */
+  avatar_url: string | null;
   /** Non-null exactly when type === "dm" — for presence/avatar. */
   dm_other_user_id: string | null;
   last_message_at: string | null;

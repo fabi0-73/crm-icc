@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
   ChevronLeft,
@@ -17,7 +18,9 @@ import {
   ensureRealtimeAuth,
   fetchMessagesBefore,
   fetchMessagesSince,
+  fetchRoomMembers,
   sendTyping,
+  subscribeToRoomMembers,
   subscribeToRoomMessages,
   type TypingEvent,
 } from "@/lib/supabase/realtime";
@@ -33,8 +36,15 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/uikit/sheet";
+import { GroupDetails } from "@/components/GroupDetails";
 import { buildDaySections } from "@/lib/chat/grouping";
-import type { Message, Profile, RoomType } from "@/lib/types";
+import type {
+  Message,
+  Role,
+  RoomMemberRole,
+  RoomMemberView,
+  RoomType,
+} from "@/lib/types";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const TYPING_THROTTLE_MS = 2000;
@@ -79,9 +89,12 @@ export function ChatRoom({
   roomId,
   roomName,
   roomType = "group",
+  roomAvatarUrl = null,
   dmOtherUserId = null,
   currentUserId,
-  members,
+  currentUserRole = "assistant",
+  myRoomRole = "member",
+  members: initialMembers,
   initialMessages,
   hasOlder = false,
   leading = "back",
@@ -89,9 +102,12 @@ export function ChatRoom({
   roomId: string;
   roomName: string;
   roomType?: RoomType;
+  roomAvatarUrl?: string | null;
   dmOtherUserId?: string | null;
   currentUserId: string;
-  members: Pick<Profile, "id" | "full_name" | "role" | "is_active">[];
+  currentUserRole?: Role;
+  myRoomRole?: RoomMemberRole;
+  members: RoomMemberView[];
   initialMessages: Message[];
   /** More history exists above the first loaded message. */
   hasOlder?: boolean;
@@ -99,7 +115,10 @@ export function ChatRoom({
   leading?: "back" | "account";
 }) {
   const supabase = useMemo(() => createClient(), []);
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [members, setMembers] = useState<RoomMemberView[]>(initialMembers);
+  const [myRole, setMyRole] = useState<RoomMemberRole>(myRoomRole);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +138,48 @@ export function ChatRoom({
   const lastCreatedAtRef = useRef<string | null>(
     initialMessages[initialMessages.length - 1]?.created_at ?? null,
   );
+
+  useEffect(() => {
+    setMembers(initialMembers);
+  }, [initialMembers]);
+  useEffect(() => {
+    setMyRole(myRoomRole);
+  }, [myRoomRole]);
+
+  // Live roster: any room_members change for this room re-reads the
+  // authoritative membership. If it no longer includes me (removed or I
+  // left elsewhere), leave the room — staying would 404 on reload.
+  const refreshMembers = useCallback(async () => {
+    try {
+      const roster = await fetchRoomMembers(supabase, roomId);
+      setMembers(roster);
+      const me = roster.find((m) => m.id === currentUserId);
+      if (!me) {
+        if (roomType !== "dm") router.push("/rooms");
+        return;
+      }
+      setMyRole(me.room_role);
+    } catch {
+      // transient; the next event or a reload reconciles
+    }
+  }, [supabase, roomId, currentUserId, roomType, router]);
+
+  useEffect(() => {
+    if (roomType === "dm") return; // dm membership is fixed
+    let channel: ReturnType<typeof subscribeToRoomMembers> | null = null;
+    let cancelled = false;
+    (async () => {
+      await ensureRealtimeAuth(supabase);
+      if (cancelled) return;
+      channel = subscribeToRoomMembers(supabase, roomId, () => {
+        void refreshMembers();
+      });
+    })();
+    return () => {
+      cancelled = true;
+      if (channel) void supabase.removeChannel(channel);
+    };
+  }, [supabase, roomId, roomType, refreshMembers]);
 
   const memberMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -168,6 +229,38 @@ export function ChatRoom({
     }, 800);
   }, [roomId]);
 
+  // The server snapshot can be stale twice over: the client router keeps
+  // a visited room's payload for 30s (next.config staleTimes), and even a
+  // fresh one predates the subscription by a network round-trip. Anything
+  // inserted in between exists in the badge count but not in this list.
+  // So the list never trusts the snapshot alone: every time the channel
+  // (re)joins, it pulls what it may have missed before marking the room
+  // read. The same routine self-heals a tab whose socket dropped.
+  const reconcile = useCallback(async () => {
+    try {
+      // Page forward until caught up: a snapshot from a long-idle tab can
+      // be more than one fetch behind.
+      for (let page = 0; page < 5; page++) {
+        const newer = await fetchMessagesSince(
+          supabase,
+          roomId,
+          lastCreatedAtRef.current,
+        );
+        newer.forEach(mergeMessage);
+        if (newer.length < 100) break;
+      }
+      await markRoomRead(roomId);
+    } catch {
+      // ignore transient network errors
+    }
+  }, [supabase, roomId, mergeMessage]);
+
+  // A re-render with a newer snapshot (revalidatePath after a membership
+  // change) merges rather than replaces, so live messages survive.
+  useEffect(() => {
+    initialMessages.forEach(mergeMessage);
+  }, [initialMessages, mergeMessage]);
+
   useEffect(() => {
     let cancelled = false;
     let channel: RealtimeChannel | null = null;
@@ -188,24 +281,14 @@ export function ChatRoom({
           }
         },
         onTyping,
+        () => {
+          if (!cancelled) void reconcile();
+        },
       );
       channelRef.current = channel;
-      await markRoomRead(roomId).catch(() => {});
     })();
 
-    const onFocus = async () => {
-      try {
-        const newer = await fetchMessagesSince(
-          supabase,
-          roomId,
-          lastCreatedAtRef.current,
-        );
-        newer.forEach(mergeMessage);
-        await markRoomRead(roomId);
-      } catch {
-        // ignore transient network errors
-      }
-    };
+    const onFocus = () => void reconcile();
 
     const onVisibility = () => {
       if (document.visibilityState === "visible") void onFocus();
@@ -222,7 +305,15 @@ export function ChatRoom({
       document.removeEventListener("visibilitychange", onVisibility);
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [supabase, roomId, mergeMessage, onTyping, currentUserId, scheduleMarkRead]);
+  }, [
+    supabase,
+    roomId,
+    mergeMessage,
+    onTyping,
+    currentUserId,
+    scheduleMarkRead,
+    reconcile,
+  ]);
 
   // Expire stale typing entries.
   useEffect(() => {
@@ -437,6 +528,10 @@ export function ChatRoom({
               online={dmOtherOnline}
               className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
             />
+          </span>
+        ) : roomAvatarUrl ? (
+          <span className="ml-1 shrink-0 sm:ml-0">
+            <Avatar name={roomName} size="sm" src={roomAvatarUrl} />
           </span>
         ) : (
           <span className="ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700 sm:ml-0">
@@ -675,24 +770,36 @@ export function ChatRoom({
           side="right"
           className="w-[88%] gap-0 bg-paper sm:max-w-sm"
         >
-          <SheetHeader className="border-b border-line">
-            <SheetTitle>Details</SheetTitle>
-            <SheetDescription>
-              {roomType === "dm"
-                ? "Direct message"
-                : `${roomName} · ${members.length} members`}
-            </SheetDescription>
-          </SheetHeader>
-          <ul className="flex-1 overflow-y-auto p-2">
-            {members.map((m) => (
-              <li
-                key={m.id}
-                className="flex items-center gap-3 rounded-xl px-2.5 py-2.5 hover:bg-mist"
-              >
-                <MemberRow member={m} self={m.id === currentUserId} />
-              </li>
-            ))}
-          </ul>
+          {roomType === "dm" ? (
+            <>
+              <SheetHeader className="border-b border-line">
+                <SheetTitle>Details</SheetTitle>
+                <SheetDescription>Direct message</SheetDescription>
+              </SheetHeader>
+              <ul className="flex-1 overflow-y-auto p-2">
+                {members.map((m) => (
+                  <li
+                    key={m.id}
+                    className="flex items-center gap-3 rounded-xl px-2.5 py-2.5 hover:bg-mist"
+                  >
+                    <MemberRow member={m} self={m.id === currentUserId} />
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <GroupDetails
+              roomId={roomId}
+              roomName={roomName}
+              roomType={roomType}
+              roomAvatarUrl={roomAvatarUrl}
+              members={members}
+              currentUserId={currentUserId}
+              currentUserRole={currentUserRole}
+              myRoomRole={myRole}
+              onRosterChanged={refreshMembers}
+            />
+          )}
         </SheetContent>
       </Sheet>
     </div>
@@ -904,7 +1011,7 @@ function MemberRow({
   member,
   self,
 }: {
-  member: Pick<Profile, "id" | "full_name" | "role">;
+  member: Pick<RoomMemberView, "id" | "full_name" | "role">;
   self?: boolean;
 }) {
   const online = useIsOnline(member.id);

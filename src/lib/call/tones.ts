@@ -100,3 +100,42 @@ export function startRingback() {
 export function stopTones() {
   player.stop();
 }
+
+let lastChimeAt = 0;
+/** A burst of arrivals gets one chime, not a drum roll. */
+const CHIME_MIN_GAP_MS = 1500;
+
+/**
+ * Short two-note chime for a message landing in a room you are not
+ * looking at. Same autoplay story as the ring tones: silent until the
+ * page has seen a gesture, never throws, no assets.
+ */
+export function playMessageChime() {
+  const now = Date.now();
+  if (now - lastChimeAt < CHIME_MIN_GAP_MS) return;
+  lastChimeAt = now;
+
+  const c = ensureCtx();
+  if (!c) return;
+  if (c.state === "suspended") void c.resume().catch(() => undefined);
+  if (c.state !== "running") return;
+
+  const t = c.currentTime;
+  const notes: Array<[number, number]> = [
+    [880, 0], // A5
+    [1174.66, 0.09], // D6
+  ];
+  for (const [freq, offset] of notes) {
+    const osc = c.createOscillator();
+    const gain = c.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    const start = t + offset;
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.05, start + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0005, start + 0.22);
+    osc.connect(gain).connect(c.destination);
+    osc.start(start);
+    osc.stop(start + 0.25);
+  }
+}

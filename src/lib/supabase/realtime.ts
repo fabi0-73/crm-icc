@@ -1,5 +1,5 @@
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
-import type { Message } from "@/lib/types";
+import type { Message, RoomMemberRole, RoomMemberView } from "@/lib/types";
 
 type MessageHandler = (message: Message) => void;
 
@@ -15,6 +15,7 @@ export function subscribeToRoomMessages(
   roomId: string,
   onInsert: MessageHandler,
   onTyping?: (event: TypingEvent) => void,
+  onSubscribed?: () => void,
 ): RealtimeChannel {
   const channel = supabase.channel(`room:${roomId}`).on(
     "postgres_changes",
@@ -33,7 +34,11 @@ export function subscribeToRoomMessages(
       onTyping(payload as TypingEvent);
     });
   }
-  return channel.subscribe();
+  // Fires on the initial join AND every rejoin after the socket drops, so
+  // the caller can pull whatever was inserted while it was not listening.
+  return channel.subscribe((status) => {
+    if (status === "SUBSCRIBED") onSubscribed?.();
+  });
 }
 
 /** Ephemeral "I'm typing" ping to everyone else in the room's channel. */
@@ -43,6 +48,59 @@ export function sendTyping(channel: RealtimeChannel, userId: string) {
     event: "typing",
     payload: { user_id: userId } satisfies TypingEvent,
   });
+}
+
+/**
+ * Watch the membership of one room. Fires on INSERT/UPDATE/DELETE of
+ * room_members for this room so the roster (and each viewer's own
+ * standing) updates live — someone added, removed, promoted, or leaving
+ * lands without a refresh. The callback just says "something changed";
+ * the caller re-reads the authoritative roster.
+ */
+export function subscribeToRoomMembers(
+  supabase: SupabaseClient,
+  roomId: string,
+  onChange: () => void,
+): RealtimeChannel {
+  return supabase
+    .channel(`room_members:${roomId}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "room_members",
+        filter: `room_id=eq.${roomId}`,
+      },
+      () => onChange(),
+    )
+    .subscribe();
+}
+
+/**
+ * Watch the current user's own membership rows across all rooms, so the
+ * room list reacts when they are added to or removed from a room. The
+ * filter is on user_id, so it only ever carries this user's rows (RLS
+ * agrees), and the callback re-reads the list authoritatively.
+ */
+export function subscribeToMyMembershipChanges(
+  supabase: SupabaseClient,
+  userId: string,
+  onChange: () => void,
+): RealtimeChannel {
+  return supabase
+    .channel(`my_memberships:${userId}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "room_members",
+        filter: `user_id=eq.${userId}`,
+      },
+      () => onChange(),
+    )
+    .subscribe();
 }
 
 /** Global INSERT listener for room-list unread badges. */
@@ -89,8 +147,10 @@ export async function ensureRealtimeAuth(supabase: SupabaseClient) {
 }
 
 /**
- * Fetch messages newer than `after` (exclusive) for focus reconciliation.
- * Append-only model makes this trivial.
+ * Fetch messages at or after `after` for reconciliation (mount, rejoin,
+ * focus). Inclusive on purpose: two messages can share a timestamp, and
+ * the caller dedupes by id, so re-reading the boundary row is free while
+ * skipping it would lose a message for good.
  */
 export async function fetchMessagesSince(
   supabase: SupabaseClient,
@@ -106,12 +166,50 @@ export async function fetchMessagesSince(
     .limit(limit);
 
   if (after) {
-    query = query.gt("created_at", after);
+    query = query.gte("created_at", after);
   }
 
   const { data, error } = await query;
   if (error) throw error;
   return (data ?? []) as Message[];
+}
+
+/**
+ * Read a room's current roster (members joined to their profiles), used
+ * to seed and to reconcile after a room_members change. Returns each
+ * person with their in-room role. RLS lets a member see co-members.
+ */
+export async function fetchRoomMembers(
+  supabase: SupabaseClient,
+  roomId: string,
+): Promise<RoomMemberView[]> {
+  const { data, error } = await supabase
+    .from("room_members")
+    .select("role, profiles!inner(id, full_name, role, is_active)")
+    .eq("room_id", roomId);
+  if (error) throw error;
+
+  type Row = {
+    role: RoomMemberRole;
+    profiles: {
+      id: string;
+      full_name: string;
+      role: RoomMemberView["role"];
+      is_active: boolean | null;
+    } | null;
+  };
+
+  return ((data ?? []) as unknown as Row[])
+    .filter((r): r is Row & { profiles: NonNullable<Row["profiles"]> } =>
+      Boolean(r.profiles),
+    )
+    .map((r) => ({
+      id: r.profiles.id,
+      full_name: r.profiles.full_name,
+      role: r.profiles.role,
+      is_active: r.profiles.is_active,
+      room_role: r.role,
+    }));
 }
 
 /** Older page for "load earlier messages" (exclusive of `before`). */

@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Modal, useModal } from "@/components/Modal";
 import { createGroup } from "@/app/actions/rooms";
 import { createClient } from "@/lib/supabase/client";
+import { uploadGroupAvatar } from "@/lib/avatars";
+import { Avatar } from "@/components/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
 import { PlusIcon } from "@/components/icons";
@@ -24,8 +26,12 @@ export function NewGroupButton({
   const router = useRouter();
   const [staff, setStaff] = useState<Pick<Profile, "id" | "full_name" | "role">[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  const [name, setName] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -39,10 +45,32 @@ export function NewGroupButton({
       .then(({ data }) => setStaff((data ?? []) as typeof staff));
   }, [open]);
 
+  function reset() {
+    setSelected([]);
+    setName("");
+    setAvatarUrl(null);
+    setError(null);
+  }
+
   function toggle(id: string) {
     setSelected((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
+  }
+
+  async function onPickAvatar(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    const res = await uploadGroupAvatar(file);
+    setUploading(false);
+    if (res.error || !res.url) {
+      setError(res.error ?? "Could not upload the image.");
+      return;
+    }
+    setAvatarUrl(res.url);
   }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -51,6 +79,7 @@ export function NewGroupButton({
     setError(null);
     const fd = new FormData(e.currentTarget);
     fd.set("member_ids", selected.join(","));
+    if (avatarUrl) fd.set("avatar_url", avatarUrl);
     const result = await createGroup(fd);
     setPending(false);
     if (result.error || !result.roomId) {
@@ -58,7 +87,7 @@ export function NewGroupButton({
       return;
     }
     closeModal();
-    setSelected([]);
+    reset();
     router.push(`/rooms/${result.roomId}`);
   }
 
@@ -87,39 +116,96 @@ export function NewGroupButton({
           New group
         </Button>
       )}
-      <Modal title="New group" open={open} onClose={closeModal}>
+      <Modal
+        title="New group"
+        open={open}
+        onClose={() => {
+          closeModal();
+          reset();
+        }}
+      >
         <form onSubmit={onSubmit} className="space-y-4">
           {error && (
             <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
               {error}
             </p>
           )}
+
+          <div className="flex items-center gap-3">
+            <Avatar name={name || "Group"} size="lg" src={avatarUrl} />
+            <div className="min-w-0">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+                className="rounded-md border border-line px-3 py-1.5 text-sm font-medium text-ink hover:bg-mist disabled:opacity-50"
+              >
+                {uploading
+                  ? "Uploading…"
+                  : avatarUrl
+                    ? "Change image"
+                    : "Add image"}
+              </button>
+              {avatarUrl && (
+                <button
+                  type="button"
+                  onClick={() => setAvatarUrl(null)}
+                  className="ml-2 text-sm text-muted hover:text-ink"
+                >
+                  Remove
+                </button>
+              )}
+              <p className="mt-1 text-[12px] text-muted">Optional · up to 2 MB</p>
+            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={onPickAvatar}
+            />
+          </div>
+
           <div>
             <Label htmlFor="group-name">Name</Label>
-            <Input id="group-name" name="name" required />
+            <Input
+              id="group-name"
+              name="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoComplete="off"
+              required
+            />
           </div>
+
           <div>
             <p className="mb-1.5 text-[13px] font-medium text-ink">Members</p>
-            <ul className="max-h-48 overflow-y-auto space-y-1 rounded-md border border-line p-2">
+            <ul className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-line p-2">
               {staff.map((p) => (
                 <li key={p.id}>
-                  <label className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-mist cursor-pointer">
+                  <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-ink hover:bg-mist">
                     <input
                       type="checkbox"
                       checked={selected.includes(p.id)}
                       onChange={() => toggle(p.id)}
                     />
-                    <span className="flex-1">{p.full_name}</span>
-                    <span className="text-xs text-muted capitalize">
+                    <span className="flex-1 text-ink">{p.full_name}</span>
+                    <span className="text-xs capitalize text-muted">
                       {p.role}
                     </span>
                   </label>
                 </li>
               ))}
+              {staff.length === 0 && (
+                <li className="px-2 py-1.5 text-sm text-muted">
+                  No other staff to add yet.
+                </li>
+              )}
             </ul>
           </div>
-          <Button type="submit" disabled={pending} className="w-full">
-            Create
+
+          <Button type="submit" disabled={pending || uploading} className="w-full">
+            {pending ? "Creating…" : "Create"}
           </Button>
         </form>
       </Modal>

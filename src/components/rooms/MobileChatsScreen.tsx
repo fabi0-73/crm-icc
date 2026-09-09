@@ -66,6 +66,12 @@ function ChatRow({ room }: { room: MyRoom }) {
             className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
           />
         </span>
+      ) : room.avatar_url ? (
+        <Avatar
+          name={room.display_name}
+          src={room.avatar_url}
+          className="ring-1 ring-black/5"
+        />
       ) : (
         <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-50 to-brand-100 text-brand-700 ring-1 ring-brand-200/60">
           <Hash className="size-5" strokeWidth={2.2} />

@@ -26,6 +26,7 @@ export function FullScreenCall() {
     sharing,
     localStream,
     remoteStream,
+    remoteHasVideo,
     connectedAt,
     hangup,
     toggleMic,
@@ -38,23 +39,35 @@ export function FullScreenCall() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const duration = useDuration(connectedAt);
 
-  const remoteHasVideo = Boolean(remoteStream?.getVideoTracks().some((t) => t.readyState === "live"));
+  // remoteHasVideo now comes from the provider, which recomputes it from
+  // the remote track's live/mute events (FIX C) so the frame doesn't freeze
+  // after the peer stops sharing.
   const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
   const fitClass =
     sharing || (!call?.video && remoteHasVideo) ? "object-contain" : "object-cover";
 
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      void remoteVideoRef.current.play().catch(() => undefined);
+    const el = remoteVideoRef.current;
+    if (el && remoteStream) {
+      el.srcObject = remoteStream;
+      void el.play().catch(() => undefined);
     }
+    // FIX C: drop the stream on cleanup so a stopped stream's last frame
+    // can't persist.
+    return () => {
+      if (el) el.srcObject = null;
+    };
   }, [remoteStream]);
 
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
-      void localVideoRef.current.play().catch(() => undefined);
+    const el = localVideoRef.current;
+    if (el && localStream) {
+      el.srcObject = localStream;
+      void el.play().catch(() => undefined);
     }
+    return () => {
+      if (el) el.srcObject = null;
+    };
   }, [localStream]);
 
   if (!call) return null;

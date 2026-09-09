@@ -28,6 +28,7 @@ export function FloatingCallTile() {
     sharing,
     localStream,
     remoteStream,
+    remoteHasVideo,
     connectedAt,
     hangup,
     toggleMic,
@@ -39,25 +40,35 @@ export function FloatingCallTile() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const duration = useDuration(connectedAt);
 
-  const remoteHasVideo = Boolean(
-    remoteStream?.getVideoTracks().some((t) => t.readyState === "live"),
-  );
+  // remoteHasVideo comes from the provider (recomputed from remote track
+  // live/mute events, FIX C) so the tile drops back to the avatar instead
+  // of freezing on the last shared frame.
   const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
   const fitClass =
     sharing || (!call?.video && remoteHasVideo) ? "object-contain" : "object-cover";
 
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      void remoteVideoRef.current.play().catch(() => undefined);
+    const el = remoteVideoRef.current;
+    if (el && remoteStream) {
+      el.srcObject = remoteStream;
+      void el.play().catch(() => undefined);
     }
+    // FIX C: clear srcObject on cleanup so a stopped stream can't leave a
+    // frozen last frame.
+    return () => {
+      if (el) el.srcObject = null;
+    };
   }, [remoteStream]);
 
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
-      void localVideoRef.current.play().catch(() => undefined);
+    const el = localVideoRef.current;
+    if (el && localStream) {
+      el.srcObject = localStream;
+      void el.play().catch(() => undefined);
     }
+    return () => {
+      if (el) el.srcObject = null;
+    };
   }, [localStream]);
 
   if (!call) return null;

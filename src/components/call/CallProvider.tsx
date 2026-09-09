@@ -51,7 +51,7 @@ type SignalPayload = {
   fromName?: string;
   roomName?: string;
   video?: boolean;
-  reason?: "busy" | "timeout";
+  reason?: "busy" | "timeout" | "media";
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
 };
@@ -91,6 +91,7 @@ type CallContextValue = {
   signalReady: boolean;
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
+  remoteHasVideo: boolean;
   connectedAt: number | null;
   dial: (
     roomId: string,
@@ -116,6 +117,44 @@ export function useCall() {
   return ctx;
 }
 
+/** Maps a getUserMedia/getDisplayMedia failure to a message worth showing a user. */
+function mediaErrorMessage(err: unknown): string {
+  if (err instanceof DOMException) {
+    switch (err.name) {
+      case "NotAllowedError":
+      case "SecurityError":
+        return "Camera/microphone permission was blocked. Allow access in your browser, then try again.";
+      case "NotFoundError":
+        return "No microphone or camera was found.";
+      case "NotReadableError":
+        return "Your camera or microphone is already in use by another app.";
+    }
+  }
+  if (err instanceof Error && err.message) return err.message;
+  return "Could not access your microphone or camera.";
+}
+
+/** True when an error came from failing to acquire the mic/camera. */
+function isMediaError(err: unknown): boolean {
+  if (err instanceof DOMException) {
+    return [
+      "NotAllowedError",
+      "SecurityError",
+      "NotFoundError",
+      "NotReadableError",
+      "OverconstrainedError",
+      "AbortError",
+    ].includes(err.name);
+  }
+  if (err instanceof Error) {
+    return (
+      err.message === "Calls need HTTPS." ||
+      err.message === "This browser cannot access mic/camera."
+    );
+  }
+  return false;
+}
+
 export function CallProvider({
   userId,
   userName,
@@ -139,6 +178,7 @@ export function CallProvider({
   const [signalReady, setSignalReady] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [remoteHasVideo, setRemoteHasVideo] = useState(false);
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -168,6 +208,8 @@ export function CallProvider({
   const connectedAtRef = useRef<number | null>(null);
   /** Set once hangup exists; lets the ICE handler end a dead call. */
   const endCallRef = useRef<(() => void) | null>(null);
+  /** Bumped whenever a call begins or is torn down, so stale async aborts. */
+  const callGenRef = useRef(0);
 
   phaseRef.current = phase;
   incomingRef.current = incoming;
@@ -224,6 +266,10 @@ export function CallProvider({
 
   const cleanup = useCallback(
     (opts?: { purge?: boolean }) => {
+      // FIX A: bump the generation so any in-flight async (getMedia/dial/
+      // accept/answerOffer/toggleNoise) sees the change and aborts its
+      // continuation instead of resurrecting a torn-down call.
+      callGenRef.current += 1;
       clearTimers();
       if (dropTimerRef.current) {
         clearTimeout(dropTimerRef.current);
@@ -259,6 +305,7 @@ export function CallProvider({
       setStatusText("");
       setLocalStream(null);
       setRemoteStream(null);
+      setRemoteHasVideo(false);
       setConnectedAt(null);
     },
     [clearTimers, purgeSignals],
@@ -346,6 +393,32 @@ export function CallProvider({
           }
           return next;
         });
+        // FIX C: keep remoteHasVideo honest as the peer's video comes and
+        // goes (screen share stop/start, camera off) so the receiver drops
+        // back to audio/avatar instead of freezing on the last frame.
+        if (e.track.kind === "video") {
+          const recompute = () => {
+            const active = pcRef.current;
+            setRemoteHasVideo(
+              Boolean(
+                active &&
+                  active
+                    .getReceivers()
+                    .some(
+                      (r) =>
+                        r.track?.kind === "video" &&
+                        r.track.readyState === "live" &&
+                        !r.track.muted,
+                    ),
+              ),
+            );
+          };
+          e.track.addEventListener("ended", recompute);
+          e.track.addEventListener("mute", recompute);
+          e.track.addEventListener("unmute", recompute);
+          incoming.addEventListener("removetrack", recompute);
+          recompute();
+        }
       };
       pc.oniceconnectionstatechange = () => {
         const s = pc.iceConnectionState;
@@ -392,6 +465,9 @@ export function CallProvider({
   );
 
   const getMedia = useCallback(async (video: boolean) => {
+    // FIX A: capture the generation so a stream that arrives after the call
+    // ended is stopped, never stored (this is what kept the webcam light on).
+    const gen = callGenRef.current;
     if (!window.isSecureContext && location.hostname !== "localhost") {
       throw new Error("Calls need HTTPS.");
     }
@@ -406,6 +482,10 @@ export function CallProvider({
       },
       video: video ? { facingMode: "user" } : false,
     });
+    if (callGenRef.current !== gen) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw new Error("call ended");
+    }
     localStreamRef.current = stream;
     cameraTrackRef.current = stream.getVideoTracks()[0] ?? null;
     setLocalStream(stream);
@@ -432,6 +512,10 @@ export function CallProvider({
 
   const answerOffer = useCallback(
     async (offer: { callId: string; from: string; payload: SignalPayload }) => {
+      // FIX A: capture the generation; abort after any await if cleanup ran,
+      // so a stale continuation never sends an answer or flips phase after
+      // the call already ended.
+      const gen = callGenRef.current;
       if (!offer.payload.sdp) return;
       if (answeredCallIdRef.current === offer.callId || remoteSetRef.current) return;
       const pc = ensurePc(offer.from);
@@ -439,6 +523,7 @@ export function CallProvider({
 
       const video = Boolean(offer.payload.video);
       if (!localStreamRef.current) await getMedia(video);
+      if (callGenRef.current !== gen) return; // FIX A
       const stream = localStreamRef.current!;
       for (const track of stream.getTracks()) {
         if (!pc.getSenders().some((s) => s.track?.id === track.id)) {
@@ -446,17 +531,24 @@ export function CallProvider({
         }
       }
       await pc.setRemoteDescription(offer.payload.sdp);
+      if (callGenRef.current !== gen) return; // FIX A — do not assign refs
       remoteSetRef.current = true;
       answeredCallIdRef.current = offer.callId;
       await loadMissedIce(offer.callId);
+      if (callGenRef.current !== gen) return; // FIX A
       await flushIce();
+      if (callGenRef.current !== gen) return; // FIX A
       const answer = await pc.createAnswer();
+      if (callGenRef.current !== gen) return; // FIX A
       await pc.setLocalDescription(answer);
+      if (callGenRef.current !== gen) return; // FIX A
       await waitForIceGathering(pc);
+      if (callGenRef.current !== gen) return; // FIX A
       const finalAnswer = pc.localDescription ?? answer;
       await send("answer", offer.callId, offer.from, roomIdRef.current!, {
         sdp: { type: finalAnswer.type, sdp: finalAnswer.sdp },
       });
+      if (callGenRef.current !== gen) return; // FIX A — do not flip phase
       // On a fast network ICE can reach "connected" before this resolves.
       // Without this guard the callee is knocked back to "Connecting…"
       // for the rest of the call — audio flowing, timer never starting.
@@ -480,13 +572,9 @@ export function CallProvider({
           incomingRef.current?.callId === row.call_id &&
           !acceptedRef.current
         ) {
-          stopTones();
-          clearTimers();
-          callIdRef.current = null;
-          roomIdRef.current = null;
-          peerIdRef.current = null;
-          setIncoming(null);
-          setPhase("idle");
+          // FIX E: full cleanup (not a partial reset) so any peer connection
+          // or media this tab spun up for the same call can't leak.
+          cleanup();
         }
         return;
       }
@@ -536,7 +624,9 @@ export function CallProvider({
               row.kind === "decline"
                 ? p.reason === "busy"
                   ? "Busy on another call"
-                  : "Call declined"
+                  : p.reason === "media"
+                    ? "They couldn't access their mic/camera."
+                    : "Call declined"
                 : "Call ended",
             );
           } else if (phaseRef.current === "ringing") {
@@ -646,6 +736,11 @@ export function CallProvider({
       }
       if (phaseRef.current !== "idle") return;
 
+      // FIX A: a new call begins here — bump the generation so any async
+      // continuation from a previous (torn-down) call aborts itself.
+      callGenRef.current += 1;
+      const gen = callGenRef.current;
+
       const callId = crypto.randomUUID();
       callIdRef.current = callId;
       roomIdRef.current = roomId;
@@ -658,6 +753,7 @@ export function CallProvider({
 
       try {
         const stream = await getMedia(video);
+        if (callGenRef.current !== gen) return; // FIX A
         const pc = ensurePc(peer.id);
         stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
@@ -667,11 +763,14 @@ export function CallProvider({
           video,
         };
         await send("invite", callId, peer.id, roomId, invitePayload);
+        if (callGenRef.current !== gen) return; // FIX A
 
         const offer = await pc.createOffer();
+        if (callGenRef.current !== gen) return; // FIX A
         await pc.setLocalDescription(offer);
         // Embed candidates in the SDP so a late accept still has a full offer.
         await waitForIceGathering(pc);
+        if (callGenRef.current !== gen) return; // FIX A
         const finalOffer = pc.localDescription ?? offer;
         const offerPayload: SignalPayload = {
           fromName: userName,
@@ -680,6 +779,7 @@ export function CallProvider({
           sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
         };
         await send("offer", callId, peer.id, roomId, offerPayload);
+        if (callGenRef.current !== gen) return; // FIX A
 
         startRingback();
 
@@ -710,7 +810,8 @@ export function CallProvider({
           cleanup({ purge: true });
         }, RING_TIMEOUT_MS);
       } catch (err) {
-        showNotice(err instanceof Error ? err.message : "Could not start call");
+        if (callGenRef.current !== gen) return; // FIX A: cleanup already ran
+        showNotice(mediaErrorMessage(err)); // FIX B: truthful media failure
         cleanup({ purge: true });
       }
     },
@@ -720,6 +821,9 @@ export function CallProvider({
   const accept = useCallback(async () => {
     const inc = incomingRef.current;
     if (!inc) return;
+    // FIX A: a new call begins here — bump the generation.
+    callGenRef.current += 1;
+    const gen = callGenRef.current;
     acceptedRef.current = true;
     stopTones();
     clearTimers();
@@ -736,17 +840,29 @@ export function CallProvider({
     setStatusText("Connecting…");
     try {
       await getMedia(inc.video);
+      if (callGenRef.current !== gen) return; // FIX A
       const pending = pendingOfferRef.current;
       if (pending && pending.callId === inc.callId) {
         await answerOffer(pending);
+        if (callGenRef.current !== gen) return; // FIX A
         pendingOfferRef.current = null;
       } else {
         setStatusText("Waiting for call data…");
       }
       setIncoming(null);
     } catch (err) {
-      showNotice(err instanceof Error ? err.message : "Microphone blocked");
-      void send("decline", inc.callId, inc.peerId, inc.roomId);
+      if (callGenRef.current !== gen) return; // FIX A: cleanup already ran
+      // FIX B: when OUR media fails, tell the caller the truth (not a bare
+      // "declined") and show ourselves a friendly reason.
+      const media = isMediaError(err);
+      showNotice(mediaErrorMessage(err));
+      void send(
+        "decline",
+        inc.callId,
+        inc.peerId,
+        inc.roomId,
+        media ? { reason: "media" } : {},
+      );
       cleanup();
     }
   }, [answerOffer, armConnectTimeout, cleanup, clearTimers, getMedia, send, showNotice]);
@@ -789,21 +905,52 @@ export function CallProvider({
   }, []);
 
   const toggleNoise = useCallback(() => {
-    setNoiseOff((prev) => {
-      const next = !prev;
-      const track = localStreamRef.current?.getAudioTracks()[0];
-      if (track) {
-        void track
-          .applyConstraints({
+    const next = !noiseOff;
+    setNoiseOff(next);
+    // FIX D: applyConstraints is silently ignored for noiseSuppression by
+    // several browsers, so re-acquire the audio track with the desired
+    // setting and hot-swap it onto the sender.
+    const gen = callGenRef.current;
+    const pc = pcRef.current;
+    const ls = localStreamRef.current;
+    const oldTrack = ls?.getAudioTracks()[0] ?? null;
+    void (async () => {
+      try {
+        const fresh = await navigator.mediaDevices.getUserMedia({
+          audio: {
             echoCancellation: true,
             noiseSuppression: !next,
             autoGainControl: true,
-          })
-          .catch(() => undefined); // some browsers only honor these at getUserMedia time
+          },
+          video: false,
+        });
+        const newTrack = fresh.getAudioTracks()[0] ?? null;
+        // FIX A: call ended mid-acquire — stop the fresh track, keep nothing.
+        if (callGenRef.current !== gen || !newTrack) {
+          fresh.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        // Preserve the current mute state on the replacement track.
+        newTrack.enabled = oldTrack ? oldTrack.enabled : true;
+        const sender = pc?.getSenders().find((s) => s.track?.kind === "audio");
+        if (sender) {
+          try {
+            await sender.replaceTrack(newTrack);
+          } catch {
+            /* ignore */
+          }
+        }
+        // Keep localStreamRef owning the live audio track so cleanup stops it.
+        if (ls) {
+          if (oldTrack) ls.removeTrack(oldTrack);
+          ls.addTrack(newTrack);
+        }
+        oldTrack?.stop();
+      } catch {
+        /* ignore — leave the toggle state flipped; it can be retried */
       }
-      return next;
-    });
-  }, []);
+    })();
+  }, [noiseOff]);
 
   const refreshLocalPreview = useCallback((screenTrack: MediaStreamTrack | null) => {
     const mic = localStreamRef.current?.getAudioTracks() ?? [];
@@ -852,11 +999,42 @@ export function CallProvider({
             console.warn("screenshare stop renegotiation failed", err);
           }
         }
-      } else if (videoSender && cameraTrackRef.current) {
-        try {
-          await videoSender.replaceTrack(cameraTrackRef.current);
-        } catch {
-          /* ignore */
+      } else if (videoSender) {
+        if (cameraTrackRef.current) {
+          try {
+            await videoSender.replaceTrack(cameraTrackRef.current);
+          } catch {
+            /* ignore */
+          }
+        } else {
+          // FIX C: camera was off, so there's no track to restore. Leaving
+          // the sender pointed at the stopped screen track freezes the last
+          // frame on the peer — drop the sender and renegotiate so the peer
+          // cleanly sees the video go away (same as the voice-call path).
+          try {
+            pc.removeTrack(videoSender);
+          } catch {
+            /* ignore */
+          }
+          if (
+            peerIdRef.current &&
+            callIdRef.current &&
+            roomIdRef.current &&
+            pc.signalingState === "stable"
+          ) {
+            try {
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              await waitForIceGathering(pc);
+              const finalOffer = pc.localDescription ?? offer;
+              await send("offer", callIdRef.current, peerIdRef.current, roomIdRef.current, {
+                video: true,
+                sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
+              });
+            } catch (err) {
+              console.warn("screenshare stop renegotiation failed", err);
+            }
+          }
         }
       }
     }
@@ -1010,6 +1188,7 @@ export function CallProvider({
       signalReady,
       localStream,
       remoteStream,
+      remoteHasVideo,
       connectedAt,
       dial,
       accept,
@@ -1034,6 +1213,7 @@ export function CallProvider({
       signalReady,
       localStream,
       remoteStream,
+      remoteHasVideo,
       connectedAt,
       dial,
       accept,
@@ -1059,7 +1239,7 @@ export function CallProvider({
       {notice && (
         <div
           role="status"
-          className="fixed bottom-20 left-1/2 z-[130] -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-white shadow-lg"
+          className="pointer-events-none fixed bottom-20 left-1/2 z-[130] -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-white shadow-lg"
         >
           {notice}
         </div>

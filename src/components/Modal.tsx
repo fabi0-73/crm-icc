@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Drawer,
   DrawerContent,
@@ -35,6 +36,11 @@ export function Modal({
 }) {
   const titleId = useId();
   const mobile = useIsMobile();
+  // Portal target. Until mounted this is null and the desktop branch
+  // renders nothing (the mobile Drawer portals itself), which is correct
+  // for SSR and the first paint.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (!open || mobile) return;
@@ -68,10 +74,15 @@ export function Modal({
     );
   }
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+  // Portalled to <body>: rendered inline, the panel sat inside the
+  // sidebar's dark, `text-white` stacking context, so its contents drew
+  // white-on-white (the "invisible text" when creating a group) and the
+  // panel layered beneath fixed app overlays. At the body root it owns a
+  // clean context and inherits the app's default ink text colour.
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 text-ink">
       <button
         type="button"
         aria-label="Close"
@@ -98,7 +109,8 @@ export function Modal({
         </div>
         <div className="p-4">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

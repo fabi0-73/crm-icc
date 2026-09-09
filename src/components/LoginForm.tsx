@@ -40,6 +40,7 @@ export function LoginForm({
           type="text"
           autoComplete="username"
           autoCapitalize="none"
+          autoCorrect="off"
           spellCheck={false}
           placeholder="Your username or email"
           className="py-3 text-[16px]"

@@ -52,6 +52,13 @@ function RoomRow({ room, active }: { room: MyRoom; active: boolean }) {
             className="absolute -bottom-0.5 -right-0.5 ring-2 ring-ink"
           />
         </span>
+      ) : room.avatar_url ? (
+        <Avatar
+          name={room.display_name}
+          size="sm"
+          src={room.avatar_url}
+          className="!h-5 !w-5"
+        />
       ) : (
         <HashIcon className="shrink-0 opacity-70" />
       )}

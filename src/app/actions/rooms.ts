@@ -32,11 +32,14 @@ export async function createGroup(formData: FormData): Promise<RoomActionResult>
       .map((s) => s.trim())
       .filter(Boolean);
 
+    const avatarUrl = String(formData.get("avatar_url") ?? "").trim();
+
     if (!name) return { error: "Give the group a name." };
 
     const { data: roomId, error } = await supabase.rpc("create_group_room", {
       p_name: name,
       p_member_ids: memberIds,
+      p_avatar_url: avatarUrl || null,
     });
 
     if (error) return { error: error.message };
@@ -88,7 +91,10 @@ export async function addRoomMember(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { supabase } = await requireRole(["admin", "manager"]);
+  // Any active staff member may reach the RPC; the group-vs-workspace
+  // and admin-only rules are enforced there against the caller's
+  // membership, not by app role alone.
+  const { supabase } = await requireRole(["admin", "manager", "assistant"]);
   const roomId = String(formData.get("room_id") ?? "");
   const userId = String(formData.get("user_id") ?? "");
   const preset = String(
@@ -112,7 +118,7 @@ export async function removeRoomMember(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { supabase } = await requireRole(["admin", "manager"]);
+  const { supabase } = await requireRole(["admin", "manager", "assistant"]);
   const roomId = String(formData.get("room_id") ?? "");
   const userId = String(formData.get("user_id") ?? "");
 
@@ -126,6 +132,84 @@ export async function removeRoomMember(
   if (error) return { error: error.message };
   revalidatePath(`/rooms/${roomId}`);
   return { success: "Member removed." };
+}
+
+export async function leaveRoom(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const roomId = String(formData.get("room_id") ?? "");
+  if (!roomId) return { error: "Missing room." };
+
+  try {
+    const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+    const { error } = await supabase.rpc("leave_room", { p_room_id: roomId });
+    if (error) return { error: error.message };
+  } catch (e) {
+    return { error: actionError(e, "Could not leave the group.") };
+  }
+
+  // Refresh the shell's room list; the client navigates away itself
+  // (calling this action imperatively means we can't redirect here).
+  revalidatePath("/rooms", "layout");
+  return { success: "You left the group." };
+}
+
+export async function setRoomMemberRole(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+  const roomId = String(formData.get("room_id") ?? "");
+  const userId = String(formData.get("user_id") ?? "");
+  const role = String(formData.get("role") ?? "");
+  if (!roomId || !userId) return { error: "Missing room or user." };
+
+  const { error } = await supabase.rpc("set_room_member_role", {
+    p_room_id: roomId,
+    p_user_id: userId,
+    p_role: role,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/rooms/${roomId}`);
+  return { success: role === "admin" ? "Now an admin." : "Now a member." };
+}
+
+export async function renameRoom(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+  const roomId = String(formData.get("room_id") ?? "");
+  const name = String(formData.get("name") ?? "").trim();
+  if (!roomId) return { error: "Missing room." };
+  if (!name) return { error: "Give the group a name." };
+
+  const { error } = await supabase.rpc("rename_room", {
+    p_room_id: roomId,
+    p_name: name,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/rooms/${roomId}`);
+  return { success: "Group renamed." };
+}
+
+export async function setRoomAvatar(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+  const roomId = String(formData.get("room_id") ?? "");
+  const avatarUrl = String(formData.get("avatar_url") ?? "").trim();
+  if (!roomId) return { error: "Missing room." };
+
+  const { error } = await supabase.rpc("set_room_avatar", {
+    p_room_id: roomId,
+    p_avatar_url: avatarUrl || null,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/rooms/${roomId}`);
+  return { success: "Group image updated." };
 }
 
 export async function markRoomRead(roomId: string) {

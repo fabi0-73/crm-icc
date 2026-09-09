@@ -29,13 +29,27 @@ export function Avatar({
   name,
   size = "md",
   className = "",
+  src = null,
 }: {
   name: string;
   size?: "sm" | "md" | "lg";
   className?: string;
+  /** When set, show this image instead of initials (group avatars). */
+  src?: string | null;
 }) {
   const dim =
     size === "sm" ? "h-9 w-9 text-xs" : size === "lg" ? "h-14 w-14 text-lg" : "h-11 w-11 text-sm";
+  if (src) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- public bucket
+      // URL, not a Next-optimizable asset
+      <img
+        src={src}
+        alt={name}
+        className={`shrink-0 rounded-full object-cover ${dim} ${className}`}
+      />
+    );
+  }
   return (
     <div
       className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-white ${dim} ${avatarTone(name)} ${className}`}

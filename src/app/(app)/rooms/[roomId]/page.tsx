@@ -3,7 +3,7 @@ import { requireProfile } from "@/lib/auth";
 import { ChatRoom } from "@/components/ChatRoom";
 import { JoinRoomPrompt } from "@/components/JoinRoomPrompt";
 import { fetchRecentMessages } from "@/lib/supabase/realtime";
-import type { Profile, RoomType } from "@/lib/types";
+import type { RoomMemberRole, RoomMemberView, RoomType } from "@/lib/types";
 
 /** First page of history; older messages load on demand. */
 const INITIAL_MESSAGES = 60;
@@ -18,9 +18,14 @@ export default async function RoomPage({
 
   const { data: room } = await supabase
     .from("rooms")
-    .select("id, name, type")
+    .select("id, name, type, avatar_url")
     .eq("id", roomId)
-    .maybeSingle<{ id: string; name: string; type: RoomType }>();
+    .maybeSingle<{
+      id: string;
+      name: string;
+      type: RoomType;
+      avatar_url: string | null;
+    }>();
 
   if (!room) notFound();
 
@@ -33,10 +38,10 @@ export default async function RoomPage({
   // chat. DMs are private: never joinable.
   const { data: membership } = await supabase
     .from("room_members")
-    .select("user_id")
+    .select("user_id, role")
     .eq("room_id", roomId)
     .eq("user_id", user.id)
-    .maybeSingle();
+    .maybeSingle<{ user_id: string; role: RoomMemberRole }>();
 
   if (!membership) {
     const canJoin =
@@ -48,10 +53,13 @@ export default async function RoomPage({
 
   const { data: memberRows } = await supabase
     .from("room_members")
-    .select("user_id")
+    .select("user_id, role")
     .eq("room_id", roomId);
 
-  const memberIds = (memberRows ?? []).map((m) => m.user_id);
+  const roleById = new Map<string, RoomMemberRole>(
+    (memberRows ?? []).map((m) => [m.user_id, m.role as RoomMemberRole]),
+  );
+  const memberIds = [...roleById.keys()];
   const { data: memberProfiles } = await supabase
     .from("profiles")
     .select("id, full_name, role, is_active")
@@ -66,10 +74,13 @@ export default async function RoomPage({
     INITIAL_MESSAGES,
   );
 
-  const memberList = (memberProfiles ?? []) as Pick<
-    Profile,
-    "id" | "full_name" | "role" | "is_active"
-  >[];
+  const memberList: RoomMemberView[] = (memberProfiles ?? []).map((p) => ({
+    id: p.id,
+    full_name: p.full_name,
+    role: p.role,
+    is_active: p.is_active,
+    room_role: roleById.get(p.id) ?? "member",
+  }));
   const dmOther =
     room.type === "dm"
       ? (memberList.find((m) => m.id !== user.id) ?? null)
@@ -80,8 +91,11 @@ export default async function RoomPage({
       roomId={room.id}
       roomName={dmOther ? dmOther.full_name : room.name}
       roomType={room.type}
+      roomAvatarUrl={room.avatar_url}
       dmOtherUserId={dmOther?.id ?? null}
       currentUserId={user.id}
+      currentUserRole={profile.role}
+      myRoomRole={membership.role}
       members={memberList}
       initialMessages={messages}
       hasOlder={messages.length === INITIAL_MESSAGES}
