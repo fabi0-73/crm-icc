@@ -169,9 +169,11 @@ export function FullScreenCall() {
             <ScreenShareIcon />
           </CallControlButton>
         )}
+        {/* FIX 5: suppression is ON by default (noiseOff starts false), so the
+            control shows as engaged (active) whenever the filter is on. */}
         <CallControlButton
           onClick={toggleNoise}
-          active={noiseOff}
+          active={!noiseOff}
           label={noiseOff ? "Noise filter off" : "Noise filter on"}
         >
           <NoiseIcon />

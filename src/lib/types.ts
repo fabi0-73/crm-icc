@@ -74,6 +74,12 @@ export type Message = {
   attachment_mime: string | null;
   metadata: Record<string, unknown> | null;
   created_at: string;
+  /** Id of the message this one replies to, if any. */
+  reply_to: string | null;
+  /** Set when the sender has edited the body. */
+  edited_at: string | null;
+  /** Set when the message was deleted (soft tombstone). */
+  deleted_at: string | null;
 };
 
 export type AuditLog = {

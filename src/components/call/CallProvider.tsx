@@ -31,6 +31,7 @@ import {
   startRingtone,
   stopTones,
 } from "@/lib/call/tones";
+import { readNotifyPrefs } from "@/lib/notify-prefs";
 import { IncomingCallOverlay } from "@/components/call/IncomingCallOverlay";
 import { FloatingCallTile } from "@/components/call/FloatingCallTile";
 import { FullScreenCall } from "@/components/call/FullScreenCall";
@@ -458,6 +459,18 @@ export function CallProvider({
           endCallRef.current?.();
         }
       };
+      // FIX 1: connectionState changes fire on network/peer state and are NOT
+      // subject to background-tab setTimeout throttling, so a hidden tab still
+      // tears down (stops mic/camera, closes pc) the instant the peer closes
+      // their connection — even when the realtime `hangup` row is delayed
+      // while the tab is backgrounded. This is what keeps B's camera/mic LED
+      // from staying on after A hangs up.
+      pc.onconnectionstatechange = () => {
+        const s = pc.connectionState;
+        if (s === "failed" || s === "closed") {
+          endCallRef.current?.();
+        }
+      };
       pcRef.current = pc;
       return pc;
     },
@@ -475,10 +488,14 @@ export function CallProvider({
       throw new Error("This browser cannot access mic/camera.");
     }
     const stream = await navigator.mediaDevices.getUserMedia({
+      // FIX 5: request mono + the full suppression trio explicitly. Mono keeps
+      // voice constraints from being widened to a stereo track that some
+      // browsers pass through with less processing.
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
+        channelCount: 1,
       },
       video: video ? { facingMode: "user" } : false,
     });
@@ -488,6 +505,20 @@ export function CallProvider({
     }
     localStreamRef.current = stream;
     cameraTrackRef.current = stream.getVideoTracks()[0] ?? null;
+    // FIX 5: re-assert suppression on the live track for browsers that honor
+    // runtime applyConstraints. Best-effort — never throw if unsupported.
+    const audioTrack = stream.getAudioTracks()[0];
+    if (audioTrack) {
+      try {
+        await audioTrack.applyConstraints({
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        });
+      } catch {
+        /* ignore — this browser doesn't honor runtime audio constraints */
+      }
+    }
     setLocalStream(stream);
     return stream;
   }, []);
@@ -608,7 +639,10 @@ export function CallProvider({
           video: Boolean(p.video),
         });
         setPhase("ringing");
-        startRingtone();
+        // FIX 4: honor the per-device "calls" mute. When calls are muted we
+        // still show the incoming-call overlay (setIncoming above) — only the
+        // ring tone is silenced. The outgoing ringback is left untouched.
+        if (readNotifyPrefs().calls) startRingtone();
         if (ringTimerRef.current) clearTimeout(ringTimerRef.current);
         ringTimerRef.current = setTimeout(() => {
           // Caller times out on its own side; just go quiet locally.
@@ -1126,6 +1160,15 @@ export function CallProvider({
     let cancelled = false;
     let channel: RealtimeChannel | null = null;
 
+    // FIX 1: releasing the camera/mic must never depend on a throttled timer
+    // or a realtime signal arriving. Navigating away or closing the tab
+    // always tears the call down so the OS device LEDs go off. NOTE: this is
+    // pagehide/beforeunload only — deliberately NOT visibilitychange, since a
+    // backgrounded tab is a normal ongoing call and must keep running.
+    const releaseOnUnload = () => cleanup();
+    window.addEventListener("pagehide", releaseOnUnload);
+    window.addEventListener("beforeunload", releaseOnUnload);
+
     (async () => {
       await ensureRealtimeAuth(supabase);
       if (cancelled) return;
@@ -1167,6 +1210,8 @@ export function CallProvider({
     return () => {
       cancelled = true;
       setSignalReady(false);
+      window.removeEventListener("pagehide", releaseOnUnload);
+      window.removeEventListener("beforeunload", releaseOnUnload);
       if (channel) void supabase.removeChannel(channel);
       cleanup();
     };

@@ -4,6 +4,7 @@ import { requireProfile } from "@/lib/auth";
 import { signOut } from "@/app/actions/auth";
 import { emailToUsername } from "@/lib/username";
 import { ChangePasswordForm } from "@/components/PasswordForms";
+import { NotificationSettings } from "@/components/NotificationSettings";
 import { Avatar } from "@/components/Avatar";
 
 /** Every role reaches this page — it is the only sign-out and
@@ -49,6 +50,8 @@ export default async function AccountPage() {
           </p>
           <ChangePasswordForm />
         </div>
+
+        <NotificationSettings />
 
         <form action={signOut}>
           <button

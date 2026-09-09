@@ -25,6 +25,8 @@ import {
   subscribeToMyMembershipChanges,
 } from "@/lib/supabase/realtime";
 import { installAutoResume, playMessageChime } from "@/lib/call/tones";
+import { readNotifyPrefs } from "@/lib/notify-prefs";
+import { setTabBadge } from "@/lib/tab-badge";
 import type { MyRoom } from "@/lib/types";
 
 type RoomsContextValue = {
@@ -93,13 +95,21 @@ export function RoomsProvider({
         // Someone else's message that you are not currently reading:
         // another room, or this room while the tab is hidden/unfocused.
         // System notices ("X joined") stay silent.
-        if (
-          msg.kind !== "system" &&
-          (msg.room_id !== activeRef.current ||
-            document.visibilityState !== "visible" ||
-            !document.hasFocus())
-        ) {
-          playMessageChime();
+        const notLooking =
+          msg.room_id !== activeRef.current ||
+          document.visibilityState !== "visible" ||
+          !document.hasFocus();
+        if (msg.kind !== "system" && notLooking) {
+          const prefs = readNotifyPrefs();
+          const mentions = (msg.metadata as { mentions?: string[] } | null)
+            ?.mentions;
+          const mentioned =
+            Array.isArray(mentions) && mentions.includes(currentUserId);
+          // @mentions keep their own switch so muting the room's general
+          // sound doesn't silence someone calling you out by name.
+          if (mentioned ? prefs.mentions : prefs.messages) {
+            playMessageChime();
+          }
         }
         setRooms((prev) => {
           const idx = prev.findIndex((r) => r.room_id === msg.room_id);
@@ -178,6 +188,12 @@ export function RoomsProvider({
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [refetch]);
+
+  // #9 Browser-tab unread indicator: title prefix + favicon dot. Cleared
+  // automatically as the unread count returns to zero (rooms marked read).
+  useEffect(() => {
+    setTabBadge(rooms.reduce((n, r) => n + r.unread_count, 0));
+  }, [rooms]);
 
   const value = useMemo(() => ({ rooms, refetch }), [rooms, refetch]);
 

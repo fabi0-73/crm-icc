@@ -212,6 +212,49 @@ export async function setRoomAvatar(
   return { success: "Group image updated." };
 }
 
+export async function editMessage(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const id = String(formData.get("message_id") ?? "");
+  const body = String(formData.get("body") ?? "").trim();
+  const roomId = String(formData.get("room_id") ?? "");
+  if (!id) return { error: "Missing message." };
+  if (!body) return { error: "Message cannot be empty." };
+
+  try {
+    const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+    const { error } = await supabase.rpc("edit_message", {
+      p_id: id,
+      p_body: body,
+    });
+    if (error) return { error: error.message };
+  } catch (e) {
+    return { error: actionError(e, "Could not edit the message.") };
+  }
+  if (roomId) revalidatePath(`/rooms/${roomId}`);
+  return { success: "Message edited." };
+}
+
+export async function deleteMessage(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const id = String(formData.get("message_id") ?? "");
+  const roomId = String(formData.get("room_id") ?? "");
+  if (!id) return { error: "Missing message." };
+
+  try {
+    const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+    const { error } = await supabase.rpc("delete_message", { p_id: id });
+    if (error) return { error: error.message };
+  } catch (e) {
+    return { error: actionError(e, "Could not delete the message.") };
+  }
+  if (roomId) revalidatePath(`/rooms/${roomId}`);
+  return { success: "Message deleted." };
+}
+
 export async function markRoomRead(roomId: string) {
   const { supabase } = await requireProfile();
   await supabase.rpc("mark_room_read", { p_room_id: roomId });

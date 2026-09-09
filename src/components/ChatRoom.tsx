@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
+  ChevronDown,
   ChevronLeft,
   CircleUserRound,
   FileText,
@@ -12,6 +13,7 @@ import {
   Info,
   Paperclip,
   SendHorizontal,
+  X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -24,9 +26,12 @@ import {
   subscribeToRoomMessages,
   type TypingEvent,
 } from "@/lib/supabase/realtime";
-import { markRoomRead } from "@/app/actions/rooms";
+import { deleteMessage, editMessage, markRoomRead } from "@/app/actions/rooms";
 import { CallButton } from "@/components/call/CallButton";
 import { Avatar } from "@/components/Avatar";
+import { AttachmentPreview } from "@/components/AttachmentPreview";
+import { MentionPopup } from "@/components/MentionPopup";
+import { MessageActions } from "@/components/MessageActions";
 import { PresenceDot } from "@/components/PresenceDot";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
 import {
@@ -126,6 +131,22 @@ export function ChatRoom({
   const [typers, setTypers] = useState<Record<string, number>>({});
   const [older, setOlder] = useState({ has: hasOlder, loading: false });
 
+  // #2 attachment staging — a picked-but-unsent file plus its preview URL.
+  const [staged, setStaged] = useState<File | null>(null);
+  const stagedUrlRef = useRef<string | null>(null);
+  // #6 mentions — the active "@…" token (if any) and the ids we've inserted.
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(
+    null,
+  );
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const recordedMentionsRef = useRef<Map<string, string>>(new Map());
+  // #7 reply/edit — the message being replied to and the id being edited.
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  // #8 jump-to-latest visibility, derived from scroll position.
+  const [showJump, setShowJump] = useState(false);
+
   const streamRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -188,6 +209,11 @@ export function ChatRoom({
   }, [members]);
 
   const sections = useMemo(() => buildDaySections(messages), [messages]);
+  const msgById = useMemo(() => {
+    const m = new Map<string, Message>();
+    messages.forEach((msg) => m.set(msg.id, msg));
+    return m;
+  }, [messages]);
   const dmOtherOnline = useIsOnline(dmOtherUserId);
 
   const mergeMessage = useCallback((msg: Message) => {
@@ -209,6 +235,26 @@ export function ChatRoom({
         return next;
       });
     }
+  }, []);
+
+  // Edits and soft-deletes arrive as UPDATEs: replace the row in place by
+  // id. If the id isn't loaded yet (rare — an edit racing the insert), fall
+  // back to appending so nothing is lost.
+  const upsertMessage = useCallback((msg: Message) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === msg.id);
+      if (idx === -1) {
+        const next = [...prev, msg].sort(
+          (a, b) =>
+            new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+        );
+        lastCreatedAtRef.current = next[next.length - 1]?.created_at ?? null;
+        return next;
+      }
+      const next = prev.slice();
+      next[idx] = msg;
+      return next;
+    });
   }, []);
 
   const onTyping = useCallback(
@@ -284,6 +330,7 @@ export function ChatRoom({
         () => {
           if (!cancelled) void reconcile();
         },
+        upsertMessage,
       );
       channelRef.current = channel;
     })();
@@ -309,6 +356,7 @@ export function ChatRoom({
     supabase,
     roomId,
     mergeMessage,
+    upsertMessage,
     onTyping,
     currentUserId,
     scheduleMarkRead,
@@ -359,8 +407,15 @@ export function ChatRoom({
   const onStreamScroll = useCallback(() => {
     const el = streamRef.current;
     if (!el) return;
-    nearBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    nearBottomRef.current = distFromBottom < 140;
+    setShowJump(distFromBottom > 200);
+  }, []);
+
+  /** Scroll the stream to a specific message (used by reply quotes). */
+  const jumpToMessage = useCallback((id: string) => {
+    const el = streamRef.current?.querySelector(`[data-mid="${id}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   }, []);
 
   const sign = useCallback<SignFn>(
@@ -417,21 +472,121 @@ export function ChatRoom({
     }
   }
 
-  async function sendText(e: React.FormEvent) {
+  // ── #6 mentions ─────────────────────────────────────────────
+  // Match an active "@token" ending at the caret: the "@" must open the
+  // word (line start or after whitespace) and hold no whitespace after it.
+  function detectMention(value: string, caret: number) {
+    const upto = value.slice(0, caret);
+    const m = upto.match(/(?:^|\s)@([^\s@]*)$/);
+    if (!m) return null;
+    const query = m[1];
+    return { query, start: caret - query.length - 1 };
+  }
+
+  const mentionMatches = useMemo(() => {
+    if (!mention) return [];
+    const q = mention.query.toLowerCase();
+    return members
+      .filter((m) => m.id !== currentUserId)
+      .filter((m) => m.full_name.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [mention, members, currentUserId]);
+
+  useEffect(() => {
+    setMentionIndex(0);
+  }, [mention?.query]);
+
+  function insertMention(member: RoomMemberView) {
+    if (!mention) return;
+    const before = body.slice(0, mention.start);
+    const after = body.slice(mention.start + 1 + mention.query.length);
+    const token = `@${member.full_name} `;
+    const next = before + token + after;
+    recordedMentionsRef.current.set(member.id, member.full_name);
+    setBody(next);
+    setMention(null);
+    const caret = (before + token).length;
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (ta) {
+        ta.focus();
+        ta.setSelectionRange(caret, caret);
+        autoresize();
+      }
+    });
+  }
+
+  // Only report ids whose "@Name" text still survives at send time — a
+  // recorded mention whose text was deleted before sending is dropped.
+  function collectMentions(text: string): string[] {
+    const ids: string[] = [];
+    recordedMentionsRef.current.forEach((name, id) => {
+      if (text.includes(`@${name}`)) ids.push(id);
+    });
+    return Array.from(new Set(ids));
+  }
+
+  // ── #2 attachment staging ───────────────────────────────────
+  function stageFile(file: File) {
+    if (file.size > MAX_FILE_BYTES) {
+      setError("File must be under 25 MB.");
+      return;
+    }
+    setError(null);
+    if (stagedUrlRef.current) {
+      URL.revokeObjectURL(stagedUrlRef.current);
+      stagedUrlRef.current = null;
+    }
+    if (file.type.startsWith("image/")) {
+      stagedUrlRef.current = URL.createObjectURL(file);
+    }
+    setStaged(file);
+    requestAnimationFrame(() => taRef.current?.focus());
+  }
+
+  function cancelStaged() {
+    if (stagedUrlRef.current) {
+      URL.revokeObjectURL(stagedUrlRef.current);
+      stagedUrlRef.current = null;
+    }
+    setStaged(null);
+  }
+
+  // Revoke any dangling preview URL when the room unmounts.
+  useEffect(
+    () => () => {
+      if (stagedUrlRef.current) URL.revokeObjectURL(stagedUrlRef.current);
+    },
+    [],
+  );
+
+  // ── send (text / staged file share the composer) ────────────
+  function submit(e: React.FormEvent | React.KeyboardEvent) {
     e.preventDefault();
+    if (sending) return;
+    if (staged) void sendStagedFile();
+    else void sendText();
+  }
+
+  async function sendText() {
     const text = body.trim();
     if (!text || sending) return;
     setSending(true);
     setError(null);
 
+    const mentions = collectMentions(text);
+    const payload: Record<string, unknown> = {
+      room_id: roomId,
+      sender_id: currentUserId,
+      kind: "text",
+      body: text,
+    };
+    if (replyTo) payload.reply_to = replyTo.id;
+    if (mentions.length) payload.metadata = { mentions };
+
     const { data, error: insertError } = await supabase
       .from("messages")
-      .insert({
-        room_id: roomId,
-        sender_id: currentUserId,
-        kind: "text",
-        body: text,
-      })
+      .insert(payload)
       .select("*")
       .single();
 
@@ -441,12 +596,20 @@ export function ChatRoom({
       return;
     }
     setBody("");
+    setReplyTo(null);
+    setMention(null);
+    recordedMentionsRef.current.clear();
     requestAnimationFrame(autoresize);
     if (data) mergeMessage(data as Message);
     await markRoomRead(roomId).catch(() => {});
   }
 
-  async function sendFile(file: File) {
+  async function sendStagedFile() {
+    if (!staged) return;
+    await sendFile(staged, body.trim());
+  }
+
+  async function sendFile(file: File, caption?: string) {
     if (file.size > MAX_FILE_BYTES) {
       setError("File must be under 25 MB.");
       return;
@@ -465,18 +628,21 @@ export function ChatRoom({
       return;
     }
 
+    const payload: Record<string, unknown> = {
+      room_id: roomId,
+      sender_id: currentUserId,
+      kind: "file",
+      body: caption && caption.length > 0 ? caption : file.name,
+      attachment_path: path,
+      attachment_name: file.name,
+      attachment_size: file.size,
+      attachment_mime: file.type || null,
+    };
+    if (replyTo) payload.reply_to = replyTo.id;
+
     const { data, error: insertError } = await supabase
       .from("messages")
-      .insert({
-        room_id: roomId,
-        sender_id: currentUserId,
-        kind: "file",
-        body: file.name,
-        attachment_path: path,
-        attachment_name: file.name,
-        attachment_size: file.size,
-        attachment_mime: file.type || null,
-      })
+      .insert(payload)
       .select("*")
       .single();
 
@@ -485,9 +651,63 @@ export function ChatRoom({
       setError(insertError.message);
       return;
     }
+    cancelStaged();
+    setBody("");
+    setReplyTo(null);
+    requestAnimationFrame(autoresize);
     if (data) mergeMessage(data as Message);
     await markRoomRead(roomId).catch(() => {});
   }
+
+  // ── #7 edit / delete ────────────────────────────────────────
+  async function saveEdit(msg: Message, nextBody: string) {
+    const text = nextBody.trim();
+    if (!text || actionBusy) return;
+    setActionBusy(true);
+    setError(null);
+    const fd = new FormData();
+    fd.set("message_id", msg.id);
+    fd.set("room_id", roomId);
+    fd.set("body", text);
+    const res = await editMessage({}, fd);
+    setActionBusy(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    // Optimistic; the realtime UPDATE confirms the same row shortly after.
+    upsertMessage({ ...msg, body: text, edited_at: new Date().toISOString() });
+    setEditing(null);
+  }
+
+  async function removeMessage(msg: Message) {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setError(null);
+    const fd = new FormData();
+    fd.set("message_id", msg.id);
+    fd.set("room_id", roomId);
+    const res = await deleteMessage({}, fd);
+    setActionBusy(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    upsertMessage({ ...msg, deleted_at: new Date().toISOString() });
+    if (editing === msg.id) setEditing(null);
+    if (replyTo?.id === msg.id) setReplyTo(null);
+  }
+
+  const canDeleteMessage = useCallback(
+    (msg: Message) =>
+      !msg.deleted_at &&
+      msg.kind !== "system" &&
+      (msg.sender_id === currentUserId ||
+        currentUserRole === "admin" ||
+        currentUserRole === "manager" ||
+        myRole === "admin"),
+    [currentUserId, currentUserRole, myRole],
+  );
 
   const typingNames = Object.keys(typers)
     .map((id) => memberMap.get(id))
@@ -623,17 +843,54 @@ export function ChatRoom({
                       {g.messages.map((msg, i) => (
                         <div
                           key={msg.id}
-                          className="mt-[3px] max-w-[85%] sm:max-w-[70%]"
+                          data-mid={msg.id}
+                          className="group mt-[3px] flex max-w-[85%] flex-row-reverse items-center gap-1 sm:max-w-[70%]"
                         >
-                          <Bubble
-                            msg={msg}
-                            mine
-                            tail={i === g.messages.length - 1}
-                            sign={sign}
-                            onMediaLoad={() => {
-                              if (nearBottomRef.current) scrollToBottom(false);
-                            }}
-                          />
+                          <div className="min-w-0">
+                            {editing === msg.id ? (
+                              <EditBox
+                                initial={msg.body}
+                                busy={actionBusy}
+                                onCancel={() => setEditing(null)}
+                                onSave={(v) => void saveEdit(msg, v)}
+                              />
+                            ) : (
+                              <Bubble
+                                msg={msg}
+                                mine
+                                tail={i === g.messages.length - 1}
+                                sign={sign}
+                                repliedMsg={
+                                  msg.reply_to
+                                    ? (msgById.get(msg.reply_to) ?? null)
+                                    : null
+                                }
+                                repliedName={repliedName(msg, msgById, memberMap)}
+                                mentionsMe={mentionsUser(msg, currentUserId)}
+                                memberMap={memberMap}
+                                onJumpToReply={
+                                  msg.reply_to
+                                    ? () => jumpToMessage(msg.reply_to!)
+                                    : undefined
+                                }
+                                onMediaLoad={() => {
+                                  if (nearBottomRef.current)
+                                    scrollToBottom(false);
+                                }}
+                              />
+                            )}
+                          </div>
+                          {!msg.deleted_at && editing !== msg.id && (
+                            <MessageActions
+                              align="right"
+                              canReply
+                              canEdit={msg.kind === "text"}
+                              canDelete={canDeleteMessage(msg)}
+                              onReply={() => setReplyTo(msg)}
+                              onEdit={() => setEditing(msg.id)}
+                              onDelete={() => void removeMessage(msg)}
+                            />
+                          )}
                         </div>
                       ))}
                       <p
@@ -671,19 +928,47 @@ export function ChatRoom({
                         </span>
                       </p>
                       {g.messages.map((msg, i) => (
-                        <div key={msg.id} className="mt-[3px] flex">
-                          <div className="max-w-[85%] sm:max-w-[70%]">
+                        <div
+                          key={msg.id}
+                          data-mid={msg.id}
+                          className="group mt-[3px] flex max-w-[85%] items-center gap-1 sm:max-w-[70%]"
+                        >
+                          <div className="min-w-0">
                             <Bubble
                               msg={msg}
                               mine={false}
                               tail={i === g.messages.length - 1}
                               sign={sign}
+                              repliedMsg={
+                                msg.reply_to
+                                  ? (msgById.get(msg.reply_to) ?? null)
+                                  : null
+                              }
+                              repliedName={repliedName(msg, msgById, memberMap)}
+                              mentionsMe={mentionsUser(msg, currentUserId)}
+                              memberMap={memberMap}
+                              onJumpToReply={
+                                msg.reply_to
+                                  ? () => jumpToMessage(msg.reply_to!)
+                                  : undefined
+                              }
                               onMediaLoad={() => {
                                 if (nearBottomRef.current)
                                   scrollToBottom(false);
                               }}
                             />
                           </div>
+                          {!msg.deleted_at && (
+                            <MessageActions
+                              align="left"
+                              canReply
+                              canEdit={false}
+                              canDelete={canDeleteMessage(msg)}
+                              onReply={() => setReplyTo(msg)}
+                              onEdit={() => {}}
+                              onDelete={() => void removeMessage(msg)}
+                            />
+                          )}
                         </div>
                       ))}
                     </div>
@@ -695,6 +980,16 @@ export function ChatRoom({
           <div ref={bottomRef} className="h-px" />
           </div>
         </div>
+        {showJump && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom(true)}
+            aria-label="Jump to latest messages"
+            className="absolute bottom-4 right-4 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-line/70 bg-paper text-ink shadow-md backdrop-blur transition hover:bg-mist active:scale-95"
+          >
+            <ChevronDown className="size-5" />
+          </button>
+        )}
       </div>
 
       {/* ── Composer ───────────────────────────────────────────── */}
@@ -704,8 +999,38 @@ export function ChatRoom({
             {error}
           </p>
         )}
+        {replyTo && (
+          <div className="mx-auto mb-2 flex w-full max-w-3xl items-center gap-2 rounded-xl border-l-2 border-brand-500 bg-secondary px-3 py-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-[12px] font-semibold text-brand-700">
+                Replying to{" "}
+                {replyTo.sender_id
+                  ? (memberMap.get(replyTo.sender_id) ?? "Unknown")
+                  : "System"}
+              </p>
+              <p className="truncate text-[13px] text-muted">
+                {messageSnippet(replyTo)}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReplyTo(null)}
+              aria-label="Cancel reply"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-mist active:bg-mist"
+            >
+              <X className="size-[18px]" />
+            </button>
+          </div>
+        )}
+        {staged && (
+          <AttachmentPreview
+            file={staged}
+            previewUrl={stagedUrlRef.current}
+            onCancel={cancelStaged}
+          />
+        )}
         <form
-          onSubmit={sendText}
+          onSubmit={submit}
           className="mx-auto flex w-full max-w-3xl items-end gap-1.5"
         >
           <input
@@ -714,27 +1039,36 @@ export function ChatRoom({
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) void sendFile(f);
+              if (f) stageFile(f);
               e.target.value = "";
             }}
           />
           <button
             type="button"
-            disabled={sending}
+            disabled={sending || !!staged}
             onClick={() => fileRef.current?.click()}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-mist active:bg-mist disabled:opacity-40"
             aria-label="Attach file"
           >
             <Paperclip className="size-[21px]" />
           </button>
-          <div className="flex min-h-10 flex-1 items-end rounded-3xl bg-secondary px-4 py-2">
+          <div className="relative flex min-h-10 flex-1 items-end rounded-3xl bg-secondary px-4 py-2">
+            <MentionPopup
+              matches={mentionMatches}
+              activeIndex={mentionIndex}
+              onSelect={insertMention}
+              onHover={setMentionIndex}
+            />
             <textarea
               ref={taRef}
               value={body}
               onChange={(e) => {
-                setBody(e.target.value);
+                const val = e.target.value;
+                setBody(val);
                 autoresize();
-                if (e.target.value.trim()) noteTyping();
+                if (val.trim()) noteTyping();
+                const caret = e.target.selectionStart ?? val.length;
+                setMention(detectMention(val, caret));
               }}
               onFocus={() => {
                 // Keep the latest messages visible above the keyboard.
@@ -743,19 +1077,45 @@ export function ChatRoom({
                 }, 250);
               }}
               rows={1}
-              placeholder="Message"
+              placeholder={staged ? "Add a caption…" : "Message"}
               className="max-h-32 w-full resize-none bg-transparent text-[16px] leading-snug text-ink outline-none placeholder:text-muted"
               onKeyDown={(e) => {
+                if (mention && mentionMatches.length > 0) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setMentionIndex((i) => (i + 1) % mentionMatches.length);
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setMentionIndex(
+                      (i) =>
+                        (i - 1 + mentionMatches.length) % mentionMatches.length,
+                    );
+                    return;
+                  }
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    const pick = mentionMatches[mentionIndex] ?? mentionMatches[0];
+                    if (pick) insertMention(pick);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setMention(null);
+                    return;
+                  }
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  void sendText(e);
+                  submit(e);
                 }
               }}
             />
           </div>
           <button
             type="submit"
-            disabled={sending || !body.trim()}
+            disabled={sending || (!staged && !body.trim())}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-grad text-white shadow-brand transition-[opacity,transform] hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:shadow-none"
             aria-label="Send"
           >
@@ -838,31 +1198,204 @@ function useSignedUrl(path: string | null, sign: SignFn) {
   return { url, failed, setFailed };
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** True when `userId` is listed in the message's metadata.mentions. */
+function mentionsUser(msg: Message, userId: string): boolean {
+  const ids = (msg.metadata as { mentions?: unknown } | null)?.mentions;
+  return Array.isArray(ids) && ids.includes(userId);
+}
+
+/** Display name of the author of the message `msg` replies to. */
+function repliedName(
+  msg: Message,
+  byId: Map<string, Message>,
+  names: Map<string, string>,
+): string {
+  if (!msg.reply_to) return "Message";
+  const target = byId.get(msg.reply_to);
+  if (!target) return "Message";
+  if (!target.sender_id) return "System";
+  return names.get(target.sender_id) ?? "Unknown";
+}
+
+/** One-line preview used in reply bars and reply quotes. */
+function messageSnippet(msg: Message): string {
+  if (msg.deleted_at) return "Deleted message";
+  if (msg.kind === "file") return msg.attachment_name ?? "Attachment";
+  const text = msg.body ?? "";
+  return text.length > 64 ? `${text.slice(0, 64)}…` : text;
+}
+
+/**
+ * Render a message body with any @mentions highlighted. Mentions are the
+ * literal "@Full Name" strings whose ids are in metadata.mentions; longest
+ * names match first so "@Anna Maria" wins over "@Anna".
+ */
+function renderMentions(
+  body: string,
+  msg: Message,
+  memberMap: Map<string, string> | undefined,
+  mine: boolean,
+): React.ReactNode {
+  const ids = (msg.metadata as { mentions?: unknown } | null)?.mentions;
+  if (!memberMap || !Array.isArray(ids) || ids.length === 0) return body;
+  const names = ids
+    .map((id) => (typeof id === "string" ? memberMap.get(id) : undefined))
+    .filter((n): n is string => Boolean(n));
+  if (names.length === 0) return body;
+  const unique = Array.from(new Set(names)).sort((a, b) => b.length - a.length);
+  const re = new RegExp(`(${unique.map((n) => `@${escapeRegExp(n)}`).join("|")})`, "g");
+  return body.split(re).map((part, i) =>
+    i % 2 === 1 ? (
+      <span
+        key={i}
+        className={
+          mine
+            ? "font-semibold underline decoration-white/40 underline-offset-2"
+            : "font-semibold text-brand-700"
+        }
+      >
+        {part}
+      </span>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
+/** Inline editor swapped in for a bubble while a message is being edited. */
+function EditBox({
+  initial,
+  busy,
+  onSave,
+  onCancel,
+}: {
+  initial: string;
+  busy: boolean;
+  onSave: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const ta = ref.current;
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+      ta.style.height = "0px";
+      ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+    }
+  }, []);
+
+  return (
+    <div className="w-72 max-w-full rounded-2xl border border-brand-200 bg-paper px-3 py-2 shadow-xs">
+      <textarea
+        ref={ref}
+        value={value}
+        rows={1}
+        onChange={(e) => {
+          setValue(e.target.value);
+          const ta = e.target;
+          ta.style.height = "0px";
+          ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            onSave(value);
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        className="max-h-40 w-full resize-none bg-transparent text-[15px] leading-relaxed text-ink outline-none"
+      />
+      <div className="mt-1 flex justify-end gap-2 text-[13px]">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg px-2.5 py-1 text-muted hover:bg-mist"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={busy || !value.trim()}
+          onClick={() => onSave(value)}
+          className="rounded-lg bg-brand-grad px-3 py-1 font-medium text-white disabled:opacity-40"
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Bubble({
   msg,
   mine,
   tail,
   sign,
   onMediaLoad,
+  repliedMsg = null,
+  repliedName: repliedAuthor = "Message",
+  mentionsMe = false,
+  memberMap,
+  onJumpToReply,
 }: {
   msg: Message;
   mine: boolean;
   tail: boolean;
   sign: SignFn;
   onMediaLoad: () => void;
+  repliedMsg?: Message | null;
+  repliedName?: string;
+  mentionsMe?: boolean;
+  memberMap?: Map<string, string>;
+  onJumpToReply?: () => void;
 }) {
-  if (isImage(msg) && msg.attachment_path) {
+  // Soft-deleted messages collapse to a muted tombstone — no body,
+  // attachment, or actions (actions are suppressed by the caller).
+  if (msg.deleted_at) {
     return (
-      <AttachmentImage
-        path={msg.attachment_path}
-        name={msg.attachment_name ?? "image"}
-        sign={sign}
-        onLoaded={onMediaLoad}
-        tailSide={mine ? "right" : "left"}
-        tail={tail}
-      />
+      <div className="rounded-2xl border border-line/60 px-3.5 py-2 text-[13px] italic text-muted">
+        This message was deleted
+      </div>
     );
   }
+
+  const accent = mentionsMe ? "border-l-2 border-brand-500 pl-2" : undefined;
+
+  const replyQuote = msg.reply_to ? (
+    <button
+      type="button"
+      onClick={onJumpToReply}
+      className={`mb-1 block w-full truncate rounded-lg border-l-2 px-2 py-1 text-left text-[12px] ${
+        mine
+          ? "border-white/50 bg-white/10 text-white/85"
+          : "border-brand-400 bg-brand-50/70 text-muted"
+      }`}
+    >
+      <span className="font-semibold">{repliedAuthor}</span>
+      {" — "}
+      {repliedMsg ? messageSnippet(repliedMsg) : "Message"}
+    </button>
+  ) : null;
+
+  const edited = msg.edited_at ? (
+    <span
+      className={`ml-1.5 align-baseline text-[10.5px] ${
+        mine ? "text-white/70" : "text-muted"
+      }`}
+    >
+      (edited)
+    </span>
+  ) : null;
 
   const shape = mine
     ? `rounded-2xl ${tail ? "rounded-br-md" : ""}`
@@ -871,22 +1404,68 @@ function Bubble({
     ? "bg-brand-grad text-white shadow-bubble"
     : "border border-line/70 bg-paper text-ink shadow-xs";
 
+  // A caption lives in body; show it only when it differs from the
+  // filename (a captionless file send stores the filename in body).
+  const caption =
+    msg.kind === "file" && msg.body && msg.body !== msg.attachment_name
+      ? msg.body
+      : null;
+
+  if (isImage(msg) && msg.attachment_path) {
+    return (
+      <div className={accent}>
+        {replyQuote}
+        <AttachmentImage
+          path={msg.attachment_path}
+          name={msg.attachment_name ?? "image"}
+          sign={sign}
+          onLoaded={onMediaLoad}
+          tailSide={mine ? "right" : "left"}
+          tail={tail}
+        />
+        {caption ? (
+          <p className="mt-1 whitespace-pre-wrap break-words px-1 text-[14px] text-ink">
+            {renderMentions(caption, msg, memberMap, false)}
+            {edited}
+          </p>
+        ) : (
+          edited && <div className="mt-0.5 px-1">{edited}</div>
+        )}
+      </div>
+    );
+  }
+
   if (msg.kind === "file" && msg.attachment_path) {
     return (
-      <AttachmentFile
-        msg={msg}
-        mine={mine}
-        sign={sign}
-        className={`${shape} ${surface}`}
-      />
+      <div className={accent}>
+        {replyQuote}
+        <AttachmentFile
+          msg={msg}
+          mine={mine}
+          sign={sign}
+          className={`${shape} ${surface}`}
+        />
+        {caption ? (
+          <p className="mt-1 whitespace-pre-wrap break-words px-1 text-[14px] text-ink">
+            {renderMentions(caption, msg, memberMap, false)}
+            {edited}
+          </p>
+        ) : (
+          edited && <div className="mt-0.5 px-1">{edited}</div>
+        )}
+      </div>
     );
   }
 
   return (
-    <div className={`px-3.5 py-2 ${shape} ${surface}`}>
-      <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
-        {msg.body}
-      </p>
+    <div className={accent}>
+      {replyQuote}
+      <div className={`px-3.5 py-2 ${shape} ${surface}`}>
+        <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
+          {renderMentions(msg.body, msg, memberMap, mine)}
+          {edited}
+        </p>
+      </div>
     </div>
   );
 }

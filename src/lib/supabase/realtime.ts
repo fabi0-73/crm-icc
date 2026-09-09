@@ -16,6 +16,7 @@ export function subscribeToRoomMessages(
   onInsert: MessageHandler,
   onTyping?: (event: TypingEvent) => void,
   onSubscribed?: () => void,
+  onUpdate?: MessageHandler,
 ): RealtimeChannel {
   const channel = supabase.channel(`room:${roomId}`).on(
     "postgres_changes",
@@ -29,6 +30,22 @@ export function subscribeToRoomMessages(
       onInsert(payload.new as Message);
     },
   );
+  // Edits and deletes are UPDATEs (delete is a soft tombstone), so the
+  // open chat reflects them live without a refresh.
+  if (onUpdate) {
+    channel.on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "messages",
+        filter: `room_id=eq.${roomId}`,
+      },
+      (payload) => {
+        onUpdate(payload.new as Message);
+      },
+    );
+  }
   if (onTyping) {
     channel.on("broadcast", { event: "typing" }, ({ payload }) => {
       onTyping(payload as TypingEvent);
