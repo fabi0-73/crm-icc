@@ -59,8 +59,11 @@ export function GroupDetails({
   const isGroup = roomType === "group";
   const appManager = currentUserRole === "admin" || currentUserRole === "manager";
   // Group admins run the room; app admins/managers can run any group.
+  // Adding members, leaving, removing, renaming, roles, avatar — all
+  // group-admin / app-manager actions. A plain assistant member sees none
+  // of them (they're placed and removed by an admin).
   const canManage = isGroup && (myRoomRole === "admin" || appManager);
-  const canAdd = isGroup; // any member may add staff to a group
+  const canAdd = canManage;
 
   const addModal = useModal();
   const settingsModal = useModal();
@@ -183,7 +186,7 @@ export function GroupDetails({
           ))}
         </ul>
 
-        {isGroup && (
+        {canManage && (
           <div className="border-t border-line p-3">
             {confirmLeave ? (
               <div className="flex items-center gap-2">
