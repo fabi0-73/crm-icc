@@ -15,7 +15,7 @@ import type { MyRoom, Profile } from "@/lib/types";
 
 export const NAV: { href: string; label: string; roles: Profile["role"][] }[] = [
   { href: "/agents", label: "Agents", roles: ["admin", "manager"] },
-  { href: "/admin/users", label: "Users", roles: ["admin"] },
+  { href: "/admin/users", label: "Users", roles: ["admin", "manager"] },
   { href: "/admin/audit", label: "Audit", roles: ["admin", "manager"] },
 ];
 

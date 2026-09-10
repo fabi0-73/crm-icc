@@ -25,7 +25,8 @@ import {
   subscribeToMyMembershipChanges,
 } from "@/lib/supabase/realtime";
 import { installAutoResume, playMessageChime } from "@/lib/call/tones";
-import { readNotifyPrefs } from "@/lib/notify-prefs";
+import { readNotifyPrefs, isRoomMuted } from "@/lib/notify-prefs";
+import { notify } from "@/lib/notify";
 import { setTabBadge } from "@/lib/tab-badge";
 import type { MyRoom } from "@/lib/types";
 
@@ -58,6 +59,11 @@ export function RoomsProvider({
 }) {
   const supabase = useMemo(() => createClient(), []);
   const [rooms, setRooms] = useState(initialRooms);
+  // A ref mirror so the message-insert handler can look up a room's name
+  // for the notification without re-subscribing on every rooms change.
+  const roomsRef = useRef(rooms);
+  roomsRef.current = rooms;
+  const prev_find = (id: string) => roomsRef.current.find((r) => r.room_id === id);
   const pathname = usePathname();
   const activeRef = useRef<string | null>(activeRoomId(pathname));
   activeRef.current = activeRoomId(pathname);
@@ -99,16 +105,30 @@ export function RoomsProvider({
           msg.room_id !== activeRef.current ||
           document.visibilityState !== "visible" ||
           !document.hasFocus();
-        if (msg.kind !== "system" && notLooking) {
+        if (msg.kind !== "system" && notLooking && !isRoomMuted(msg.room_id)) {
           const prefs = readNotifyPrefs();
           const mentions = (msg.metadata as { mentions?: string[] } | null)
             ?.mentions;
           const mentioned =
             Array.isArray(mentions) && mentions.includes(currentUserId);
           // @mentions keep their own switch so muting the room's general
-          // sound doesn't silence someone calling you out by name.
+          // sound doesn't silence someone calling you out by name. A room
+          // the user muted (isRoomMuted) stays fully silent — no chime and
+          // no pop-up — regardless of the global switches.
           if (mentioned ? prefs.mentions : prefs.messages) {
             playMessageChime();
+            const room = prev_find(msg.room_id);
+            const preview =
+              msg.kind === "file" ? "Sent an attachment" : msg.body.slice(0, 140);
+            // Desktop/mobile pop-up: notify() only fires when the app is
+            // not the focused surface, so it covers another tab, another
+            // section, or a backgrounded PWA. No-ops without permission.
+            notify({
+              title: room?.display_name || "New message",
+              body: preview,
+              tag: `room:${msg.room_id}`,
+              url: `/rooms/${msg.room_id}`,
+            });
           }
         }
         setRooms((prev) => {

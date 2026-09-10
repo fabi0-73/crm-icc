@@ -18,10 +18,9 @@ export async function createAgent(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { profile: actor, supabase } = await requireRole([
-    "admin",
-    "manager",
-  ]);
+  // Agent creation is admin-only. Managers manage assistants and are
+  // assigned agents by an admin, but do not create agents. (#2)
+  const { profile: actor, supabase } = await requireRole(["admin"]);
 
   const username = String(formData.get("username") ?? "").trim().toLowerCase();
   const displayName = String(formData.get("display_name") ?? "").trim();

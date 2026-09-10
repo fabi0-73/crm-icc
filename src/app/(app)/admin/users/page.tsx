@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { emailToUsername } from "@/lib/username";
 import { NewUserButton } from "@/components/NewUserButton";
 import { ResetPasswordButton } from "@/components/ResetPasswordButton";
+import { RenameUserButton } from "@/components/RenameUserButton";
 import { DeleteUserButton } from "@/components/DeleteUserButton";
 import { ActionForm } from "@/components/ActionForm";
 import { deactivateUser, reactivateUser } from "@/app/actions/admin";
@@ -26,7 +27,10 @@ async function loadUsernames(): Promise<Map<string, string>> {
 }
 
 export default async function UsersPage() {
-  const { supabase, profile: self } = await requireRole(["admin"]);
+  // Managers reach this page to create assistants; only admins get the
+  // per-row management controls.
+  const { supabase, profile: self } = await requireRole(["admin", "manager"]);
+  const isAdmin = self.role === "admin";
 
   const [{ data: users, error }, usernames] = await Promise.all([
     supabase
@@ -42,7 +46,7 @@ export default async function UsersPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <PageHeader title="Users" actions={<NewUserButton />} />
+      <PageHeader title="Users" actions={<NewUserButton actorRole={self.role} />} />
       <Table>
         <THead>
           <Th>Name</Th>
@@ -74,42 +78,51 @@ export default async function UsersPage() {
                 </span>
               </Td>
               <Td>
-                <div className="flex items-center gap-4">
-                  {u.id === self.id ? (
-                    <span className="text-muted">You</span>
-                  ) : (
-                    <ResetPasswordButton userId={u.id} name={u.full_name} />
-                  )}
-                  {/* Agent accounts are archived from the Agents page —
-                      flipping them here would leave agents.status and the
-                      login state disagreeing. */}
-                  {u.role === "agent" ? (
-                    <span className="text-muted">Manage on Agents</span>
-                  ) : u.id === self.id ? null : u.is_active ? (
-                    <ActionForm action={deactivateUser}>
-                      <input type="hidden" name="user_id" value={u.id} />
-                      <button
-                        type="submit"
-                        className="font-medium text-red-600 hover:underline"
-                      >
-                        Deactivate
-                      </button>
-                    </ActionForm>
-                  ) : (
-                    <ActionForm action={reactivateUser}>
-                      <input type="hidden" name="user_id" value={u.id} />
-                      <button
-                        type="submit"
-                        className="font-medium text-brand-600 hover:underline"
-                      >
-                        Reactivate
-                      </button>
-                    </ActionForm>
-                  )}
-                  {u.id !== self.id && (
-                    <DeleteUserButton userId={u.id} name={u.full_name} />
-                  )}
-                </div>
+                {isAdmin ? (
+                  <div className="flex items-center gap-4">
+                    {u.id === self.id ? (
+                      <span className="text-muted">You</span>
+                    ) : (
+                      <>
+                        <ResetPasswordButton userId={u.id} name={u.full_name} />
+                        {u.role !== "agent" && (
+                          <RenameUserButton userId={u.id} name={u.full_name} />
+                        )}
+                      </>
+                    )}
+                    {/* Agent accounts are archived from the Agents page —
+                        flipping them here would leave agents.status and the
+                        login state disagreeing. */}
+                    {u.role === "agent" ? (
+                      <span className="text-muted">Manage on Agents</span>
+                    ) : u.id === self.id ? null : u.is_active ? (
+                      <ActionForm action={deactivateUser}>
+                        <input type="hidden" name="user_id" value={u.id} />
+                        <button
+                          type="submit"
+                          className="font-medium text-red-600 hover:underline"
+                        >
+                          Deactivate
+                        </button>
+                      </ActionForm>
+                    ) : (
+                      <ActionForm action={reactivateUser}>
+                        <input type="hidden" name="user_id" value={u.id} />
+                        <button
+                          type="submit"
+                          className="font-medium text-brand-600 hover:underline"
+                        >
+                          Reactivate
+                        </button>
+                      </ActionForm>
+                    )}
+                    {u.id !== self.id && (
+                      <DeleteUserButton userId={u.id} name={u.full_name} />
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-muted">—</span>
+                )}
               </Td>
             </tr>
           ))}

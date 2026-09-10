@@ -2,7 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
@@ -114,6 +114,68 @@
   --sidebar-accent-foreground: #ffffff;
   --sidebar-border: rgb(255 255 255 / 0.1);
   --sidebar-ring: #1d4ed8;
+}
+
+/* ── Dark mode ─────────────────────────────────────────────────────────────
+   Class strategy: ThemeProvider toggles `.dark` on <html>. This block only
+   ADDS overrides — light mode above is untouched. Components consume the
+   semantic tokens (bg-paper, text-ink, text-muted, border-line, bg-secondary …),
+   so redefining the tokens under `.dark` flips the whole app without editing
+   components. Brand is left as-is on purpose (the deep blue stays usable and
+   recognizable). A few utilities carry HARD-CODED colors that don't read a
+   token — bg-stream (chat backdrop) and bg-ink/bg-ink-soft used as dark
+   *surfaces* rather than as text — so those are re-pinned just below, since
+   --color-ink now resolves to near-white for text. */
+.dark {
+  /* Brand semantic tokens (same names as the @theme block) */
+  --color-ink: #e7eaef; /* primary text → near-white */
+  --color-ink-soft: #b4bcc8; /* secondary text */
+  --color-mist: #0e1116; /* app background — not pure black */
+  --color-paper: #161b23; /* panels, cards, headers, peer bubbles */
+  --color-line: #272d38; /* hairline borders, dividers */
+  --color-line-strong: #3a424f; /* form-control borders */
+  --color-muted: #8a94a3; /* secondary / meta text (AA on paper) */
+
+  /* shadcn semantic tokens */
+  --background: #0e1116;
+  --foreground: #e7eaef;
+  --card: #161b23;
+  --card-foreground: #e7eaef;
+  --popover: #161b23;
+  --popover-foreground: #e7eaef;
+  --primary: #1d4ed8; /* keep the brand blue */
+  --primary-foreground: #ffffff;
+  --secondary: #1e2530;
+  --secondary-foreground: #e7eaef;
+  --muted: #1e2530; /* muted SURFACE (bg-muted / bg-secondary) */
+  --muted-foreground: #8a94a3;
+  --accent: #1e2530;
+  --accent-foreground: #e7eaef;
+  --destructive: #ef4444;
+  --border: #272d38;
+  --input: #3a424f;
+  --ring: #3b82f6; /* lighter focus ring for dark surfaces */
+}
+
+/* Hard-coded-color utilities re-pinned for dark so intentionally-dark chrome
+   (the chat backdrop, call/toast/modal surfaces, the mobile active-chat pill)
+   stays dark even though --color-ink now maps to near-white for text. */
+.dark .bg-stream {
+  background-color: #0c1015;
+  background-image: linear-gradient(180deg, #12161d 0%, #0c1015 100%);
+}
+.dark .bg-ink,
+.dark .hover\:bg-ink:hover {
+  background-color: #232a37;
+}
+.dark .bg-ink-soft {
+  background-color: #2b3441;
+}
+.dark .bg-ink\/70 {
+  background-color: rgb(6 9 14 / 0.72);
+}
+.dark .bg-ink\/50 {
+  background-color: rgb(6 9 14 / 0.58);
 }
 
 @layer base {

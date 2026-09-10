@@ -29,9 +29,14 @@ import {
 import { deleteMessage, editMessage, markRoomRead } from "@/app/actions/rooms";
 import { CallButton } from "@/components/call/CallButton";
 import { Avatar } from "@/components/Avatar";
-import { AttachmentPreview } from "@/components/AttachmentPreview";
 import { MentionPopup } from "@/components/MentionPopup";
 import { MessageActions } from "@/components/MessageActions";
+import { MessageStatus, type DeliveryStatus } from "@/components/MessageStatus";
+import { MuteToggle } from "@/components/MuteToggle";
+import {
+  StagedAttachments,
+  type StagedItem,
+} from "@/components/StagedAttachments";
 import { PresenceDot } from "@/components/PresenceDot";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
 import {
@@ -84,10 +89,6 @@ function formatBytes(n: number | null) {
   return `${(n / 1048576).toFixed(1)} MB`;
 }
 
-function isImage(msg: Message) {
-  return msg.kind === "file" && (msg.attachment_mime ?? "").startsWith("image/");
-}
-
 type SignFn = (path: string) => Promise<string | null>;
 
 export function ChatRoom({
@@ -103,6 +104,7 @@ export function ChatRoom({
   initialMessages,
   hasOlder = false,
   leading = "back",
+  readOnly = false,
 }: {
   roomId: string;
   roomName: string;
@@ -118,6 +120,11 @@ export function ChatRoom({
   hasOlder?: boolean;
   /** Agents have no sidebar or tab bar — their only way out is here. */
   leading?: "back" | "account";
+  /**
+   * A non-member admin previewing history: read the conversation but no
+   * composer, no reply/edit affordances, no marking the room read.
+   */
+  readOnly?: boolean;
 }) {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
@@ -131,9 +138,10 @@ export function ChatRoom({
   const [typers, setTypers] = useState<Record<string, number>>({});
   const [older, setOlder] = useState({ has: hasOlder, loading: false });
 
-  // #2 attachment staging — a picked-but-unsent file plus its preview URL.
-  const [staged, setStaged] = useState<File | null>(null);
-  const stagedUrlRef = useRef<string | null>(null);
+  // #8 attachment staging — one OR MORE picked-but-unsent files, each with
+  // its own preview object URL. A mirror ref lets unmount revoke them all.
+  const [staged, setStaged] = useState<StagedItem[]>([]);
+  const stagedRef = useRef<StagedItem[]>([]);
   // #6 mentions — the active "@…" token (if any) and the ids we've inserted.
   const [mention, setMention] = useState<{ query: string; start: number } | null>(
     null,
@@ -159,6 +167,18 @@ export function ChatRoom({
   const lastCreatedAtRef = useRef<string | null>(
     initialMessages[initialMessages.length - 1]?.created_at ?? null,
   );
+  // #10 guard so an unknown-sender roster refresh fires once (debounced),
+  // never in a loop even if the sender genuinely isn't in the room.
+  const senderRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const requestedSenderRefreshRef = useRef<Set<string>>(new Set());
+
+  // Keep a mirror of staged files so the unmount cleanup can revoke every
+  // preview URL without re-subscribing on each change.
+  useEffect(() => {
+    stagedRef.current = staged;
+  }, [staged]);
 
   useEffect(() => {
     setMembers(initialMembers);
@@ -176,14 +196,15 @@ export function ChatRoom({
       setMembers(roster);
       const me = roster.find((m) => m.id === currentUserId);
       if (!me) {
-        if (roomType !== "dm") router.push("/rooms");
+        // A read-only admin is intentionally not a member — don't evict them.
+        if (roomType !== "dm" && !readOnly) router.push("/rooms");
         return;
       }
       setMyRole(me.room_role);
     } catch {
       // transient; the next event or a reload reconciles
     }
-  }, [supabase, roomId, currentUserId, roomType, router]);
+  }, [supabase, roomId, currentUserId, roomType, router, readOnly]);
 
   useEffect(() => {
     if (roomType === "dm") return; // dm membership is fixed
@@ -207,6 +228,42 @@ export function ChatRoom({
     members.forEach((p) => m.set(p.id, p.full_name));
     return m;
   }, [members]);
+
+  // #10 A message can arrive from someone who joined after this roster was
+  // loaded — their name would read as a placeholder until reload. When we
+  // meet an unknown, non-null sender, pull the roster once (debounced, and
+  // guarded per id so a sender who truly isn't a member can't loop).
+  const ensureSenderKnown = useCallback(
+    (senderId: string | null) => {
+      if (!senderId || memberMap.has(senderId)) return;
+      if (requestedSenderRefreshRef.current.has(senderId)) return;
+      requestedSenderRefreshRef.current.add(senderId);
+      if (senderRefreshTimerRef.current) {
+        clearTimeout(senderRefreshTimerRef.current);
+      }
+      senderRefreshTimerRef.current = setTimeout(() => {
+        void refreshMembers();
+      }, 400);
+    },
+    [memberMap, refreshMembers],
+  );
+
+  useEffect(() => {
+    for (const msg of messages) {
+      if (msg.sender_id && !memberMap.has(msg.sender_id)) {
+        ensureSenderKnown(msg.sender_id);
+      }
+    }
+  }, [messages, memberMap, ensureSenderKnown]);
+
+  useEffect(
+    () => () => {
+      if (senderRefreshTimerRef.current) {
+        clearTimeout(senderRefreshTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const sections = useMemo(() => buildDaySections(messages), [messages]);
   const msgById = useMemo(() => {
@@ -269,11 +326,12 @@ export function ChatRoom({
   // land — otherwise the unread badge for THIS room grows behind your back
   // and reappears the next time the list is refetched.
   const scheduleMarkRead = useCallback(() => {
+    if (readOnly) return; // a non-member admin has no read state to update
     if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
     markReadTimerRef.current = setTimeout(() => {
       void markRoomRead(roomId).catch(() => {});
     }, 800);
-  }, [roomId]);
+  }, [roomId, readOnly]);
 
   // The server snapshot can be stale twice over: the client router keeps
   // a visited room's payload for 30s (next.config staleTimes), and even a
@@ -295,11 +353,11 @@ export function ChatRoom({
         newer.forEach(mergeMessage);
         if (newer.length < 100) break;
       }
-      await markRoomRead(roomId);
+      if (!readOnly) await markRoomRead(roomId);
     } catch {
       // ignore transient network errors
     }
-  }, [supabase, roomId, mergeMessage]);
+  }, [supabase, roomId, mergeMessage, readOnly]);
 
   // A re-render with a newer snapshot (revalidatePath after a membership
   // change) merges rather than replaces, so live messages survive.
@@ -526,36 +584,51 @@ export function ChatRoom({
     return Array.from(new Set(ids));
   }
 
-  // ── #2 attachment staging ───────────────────────────────────
-  function stageFile(file: File) {
-    if (file.size > MAX_FILE_BYTES) {
-      setError("File must be under 25 MB.");
-      return;
+  // ── #8 attachment staging (multiple) ────────────────────────
+  function stageFiles(files: File[]) {
+    if (files.length === 0) return;
+    const additions: StagedItem[] = [];
+    let rejected = false;
+    for (const file of files) {
+      if (file.size > MAX_FILE_BYTES) {
+        rejected = true;
+        continue;
+      }
+      additions.push({
+        id: crypto.randomUUID(),
+        file,
+        url: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+      });
     }
-    setError(null);
-    if (stagedUrlRef.current) {
-      URL.revokeObjectURL(stagedUrlRef.current);
-      stagedUrlRef.current = null;
-    }
-    if (file.type.startsWith("image/")) {
-      stagedUrlRef.current = URL.createObjectURL(file);
-    }
-    setStaged(file);
+    setError(rejected ? "Each file must be under 25 MB." : null);
+    if (additions.length === 0) return;
+    setStaged((prev) => [...prev, ...additions]);
     requestAnimationFrame(() => taRef.current?.focus());
   }
 
-  function cancelStaged() {
-    if (stagedUrlRef.current) {
-      URL.revokeObjectURL(stagedUrlRef.current);
-      stagedUrlRef.current = null;
-    }
-    setStaged(null);
+  function removeStaged(id: string) {
+    setStaged((prev) => {
+      const item = prev.find((s) => s.id === id);
+      if (item?.url) URL.revokeObjectURL(item.url);
+      return prev.filter((s) => s.id !== id);
+    });
   }
 
-  // Revoke any dangling preview URL when the room unmounts.
+  function cancelStaged() {
+    setStaged((prev) => {
+      prev.forEach((s) => {
+        if (s.url) URL.revokeObjectURL(s.url);
+      });
+      return [];
+    });
+  }
+
+  // Revoke any dangling preview URLs when the room unmounts.
   useEffect(
     () => () => {
-      if (stagedUrlRef.current) URL.revokeObjectURL(stagedUrlRef.current);
+      stagedRef.current.forEach((s) => {
+        if (s.url) URL.revokeObjectURL(s.url);
+      });
     },
     [],
   );
@@ -564,7 +637,7 @@ export function ChatRoom({
   function submit(e: React.FormEvent | React.KeyboardEvent) {
     e.preventDefault();
     if (sending) return;
-    if (staged) void sendStagedFile();
+    if (staged.length > 0) void sendStaged();
     else void sendText();
   }
 
@@ -604,40 +677,52 @@ export function ChatRoom({
     await markRoomRead(roomId).catch(() => {});
   }
 
-  async function sendStagedFile() {
-    if (!staged) return;
-    await sendFile(staged, body.trim());
-  }
-
-  async function sendFile(file: File, caption?: string) {
-    if (file.size > MAX_FILE_BYTES) {
-      setError("File must be under 25 MB.");
-      return;
-    }
+  async function sendStaged() {
+    if (staged.length === 0 || sending) return;
     setSending(true);
     setError(null);
 
-    const path = `${roomId}/${crypto.randomUUID()}/${safeKeyName(file.name)}`;
-    const { error: uploadError } = await supabase.storage
-      .from("attachments")
-      .upload(path, file, { contentType: file.type, upsert: false });
-
-    if (uploadError) {
-      setSending(false);
-      setError(uploadError.message);
-      return;
+    const caption = body.trim();
+    // Upload every file first; the message row only points at them.
+    const uploaded: {
+      path: string;
+      name: string;
+      size: number;
+      mime: string | null;
+    }[] = [];
+    for (const item of staged) {
+      const file = item.file;
+      const path = `${roomId}/${crypto.randomUUID()}/${safeKeyName(file.name)}`;
+      const { error: uploadError } = await supabase.storage
+        .from("attachments")
+        .upload(path, file, { contentType: file.type, upsert: false });
+      if (uploadError) {
+        setSending(false);
+        setError(uploadError.message);
+        return;
+      }
+      uploaded.push({
+        path,
+        name: file.name,
+        size: file.size,
+        mime: file.type || null,
+      });
     }
 
+    // The schema has single attachment_* columns: the first file fills
+    // them; any extras ride along in metadata.attachments as an array.
+    const [head, ...rest] = uploaded;
     const payload: Record<string, unknown> = {
       room_id: roomId,
       sender_id: currentUserId,
       kind: "file",
-      body: caption && caption.length > 0 ? caption : file.name,
-      attachment_path: path,
-      attachment_name: file.name,
-      attachment_size: file.size,
-      attachment_mime: file.type || null,
+      body: caption.length > 0 ? caption : head.name,
+      attachment_path: head.path,
+      attachment_name: head.name,
+      attachment_size: head.size,
+      attachment_mime: head.mime,
     };
+    if (rest.length > 0) payload.metadata = { attachments: rest };
     if (replyTo) payload.reply_to = replyTo.id;
 
     const { data, error: insertError } = await supabase
@@ -781,7 +866,9 @@ export function ChatRoom({
         <CallButton
           roomId={roomId}
           roomName={roomName}
+          roomType={roomType}
           currentUserId={currentUserId}
+          currentUserRole={currentUserRole}
           // Deactivated accounts can't answer — never offer them.
           members={members.filter((m) => m.is_active !== false)}
         />
@@ -883,8 +970,8 @@ export function ChatRoom({
                           {!msg.deleted_at && editing !== msg.id && (
                             <MessageActions
                               align="right"
-                              canReply
-                              canEdit={msg.kind === "text"}
+                              canReply={!readOnly}
+                              canEdit={!readOnly && msg.kind === "text"}
                               canDelete={canDeleteMessage(msg)}
                               onReply={() => setReplyTo(msg)}
                               onEdit={() => setEditing(msg.id)}
@@ -895,15 +982,24 @@ export function ChatRoom({
                       ))}
                       <p
                         suppressHydrationWarning
-                        className="mt-1 text-[11px] tabular-nums text-muted/80"
+                        className="mt-1 flex items-center gap-1 text-[11px] tabular-nums text-muted/80"
                       >
                         {formatMsgTime(last.created_at)}
+                        {!last.deleted_at && (
+                          <MessageStatus
+                            status={deliveryStatus(
+                              last,
+                              members,
+                              currentUserId,
+                            )}
+                          />
+                        )}
                       </p>
                     </div>
                   );
                 }
                 const name = g.senderId
-                  ? (memberMap.get(g.senderId) ?? "Unknown")
+                  ? (memberMap.get(g.senderId) ?? "Member")
                   : "";
                 const first = g.messages[0];
                 return (
@@ -961,7 +1057,7 @@ export function ChatRoom({
                           {!msg.deleted_at && (
                             <MessageActions
                               align="left"
-                              canReply
+                              canReply={!readOnly}
                               canEdit={false}
                               canDelete={canDeleteMessage(msg)}
                               onReply={() => setReplyTo(msg)}
@@ -992,7 +1088,8 @@ export function ChatRoom({
         )}
       </div>
 
-      {/* ── Composer ───────────────────────────────────────────── */}
+      {/* ── Composer (hidden for a read-only admin preview) ────── */}
+      {!readOnly && (
       <div className="shrink-0 border-t border-line/80 bg-paper/95 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur sm:px-3">
         {error && (
           <p className="mx-auto mb-2 w-full max-w-3xl rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700">
@@ -1005,7 +1102,7 @@ export function ChatRoom({
               <p className="text-[12px] font-semibold text-brand-700">
                 Replying to{" "}
                 {replyTo.sender_id
-                  ? (memberMap.get(replyTo.sender_id) ?? "Unknown")
+                  ? (memberMap.get(replyTo.sender_id) ?? "Member")
                   : "System"}
               </p>
               <p className="truncate text-[13px] text-muted">
@@ -1022,13 +1119,7 @@ export function ChatRoom({
             </button>
           </div>
         )}
-        {staged && (
-          <AttachmentPreview
-            file={staged}
-            previewUrl={stagedUrlRef.current}
-            onCancel={cancelStaged}
-          />
-        )}
+        <StagedAttachments items={staged} onRemove={removeStaged} />
         <form
           onSubmit={submit}
           className="mx-auto flex w-full max-w-3xl items-end gap-1.5"
@@ -1036,16 +1127,17 @@ export function ChatRoom({
           <input
             ref={fileRef}
             type="file"
+            multiple
             className="hidden"
             onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) stageFile(f);
+              const files = e.target.files ? Array.from(e.target.files) : [];
+              if (files.length) stageFiles(files);
               e.target.value = "";
             }}
           />
           <button
             type="button"
-            disabled={sending || !!staged}
+            disabled={sending}
             onClick={() => fileRef.current?.click()}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-mist active:bg-mist disabled:opacity-40"
             aria-label="Attach file"
@@ -1077,7 +1169,7 @@ export function ChatRoom({
                 }, 250);
               }}
               rows={1}
-              placeholder={staged ? "Add a caption…" : "Message"}
+              placeholder={staged.length > 0 ? "Add a caption…" : "Message"}
               className="max-h-32 w-full resize-none bg-transparent text-[16px] leading-snug text-ink outline-none placeholder:text-muted"
               onKeyDown={(e) => {
                 if (mention && mentionMatches.length > 0) {
@@ -1115,7 +1207,7 @@ export function ChatRoom({
           </div>
           <button
             type="submit"
-            disabled={sending || (!staged && !body.trim())}
+            disabled={sending || (staged.length === 0 && !body.trim())}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-grad text-white shadow-brand transition-[opacity,transform] hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:shadow-none"
             aria-label="Send"
           >
@@ -1123,6 +1215,7 @@ export function ChatRoom({
           </button>
         </form>
       </div>
+      )}
 
       {/* ── Details sheet ──────────────────────────────────────── */}
       <Sheet open={showMembers} onOpenChange={setShowMembers}>
@@ -1146,6 +1239,9 @@ export function ChatRoom({
                   </li>
                 ))}
               </ul>
+              <div className="border-t border-line p-2">
+                <MuteToggle roomId={roomId} />
+              </div>
             </>
           ) : (
             <GroupDetails
@@ -1208,6 +1304,76 @@ function mentionsUser(msg: Message, userId: string): boolean {
   return Array.isArray(ids) && ids.includes(userId);
 }
 
+/**
+ * #9 delivery state for one of the current user's own messages, derived
+ * from the live roster. No other member → "sent"; otherwise "seen" once
+ * everyone else has read past it (their last_read_at ≥ created_at), else
+ * "delivered".
+ */
+function deliveryStatus(
+  msg: Message,
+  members: RoomMemberView[],
+  currentUserId: string,
+): DeliveryStatus {
+  const others = members.filter((m) => m.id !== currentUserId);
+  if (others.length === 0) return "sent";
+  const created = new Date(msg.created_at).getTime();
+  const allSeen = others.every(
+    (m) => m.last_read_at != null && new Date(m.last_read_at).getTime() >= created,
+  );
+  return allSeen ? "seen" : "delivered";
+}
+
+type MessageAttachment = {
+  path: string;
+  name: string;
+  size: number | null;
+  mime: string | null;
+};
+
+/**
+ * #8 every attachment a file message carries: the first lives in the
+ * attachment_* columns, any extras in metadata.attachments. A plain
+ * single-file message yields exactly one entry, so its bubble is
+ * unchanged.
+ */
+function messageAttachments(msg: Message): MessageAttachment[] {
+  if (msg.kind !== "file") return [];
+  const out: MessageAttachment[] = [];
+  if (msg.attachment_path) {
+    out.push({
+      path: msg.attachment_path,
+      name: msg.attachment_name ?? msg.body,
+      size: msg.attachment_size,
+      mime: msg.attachment_mime,
+    });
+  }
+  const extra = (msg.metadata as { attachments?: unknown } | null)?.attachments;
+  if (Array.isArray(extra)) {
+    for (const a of extra) {
+      if (
+        a &&
+        typeof a === "object" &&
+        typeof (a as { path?: unknown }).path === "string"
+      ) {
+        const rec = a as {
+          path: string;
+          name?: unknown;
+          size?: unknown;
+          mime?: unknown;
+        };
+        out.push({
+          path: rec.path,
+          name: typeof rec.name === "string" ? rec.name : "file",
+          size: typeof rec.size === "number" ? rec.size : null,
+          mime: typeof rec.mime === "string" ? rec.mime : null,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 /** Display name of the author of the message `msg` replies to. */
 function repliedName(
   msg: Message,
@@ -1218,7 +1384,7 @@ function repliedName(
   const target = byId.get(msg.reply_to);
   if (!target) return "Message";
   if (!target.sender_id) return "System";
-  return names.get(target.sender_id) ?? "Unknown";
+  return names.get(target.sender_id) ?? "Member";
 }
 
 /** One-line preview used in reply bars and reply quotes. */
@@ -1411,48 +1577,57 @@ function Bubble({
       ? msg.body
       : null;
 
-  if (isImage(msg) && msg.attachment_path) {
-    return (
-      <div className={accent}>
-        {replyQuote}
-        <AttachmentImage
-          path={msg.attachment_path}
-          name={msg.attachment_name ?? "image"}
-          sign={sign}
-          onLoaded={onMediaLoad}
-          tailSide={mine ? "right" : "left"}
-          tail={tail}
-        />
-        {caption ? (
-          <p className="mt-1 whitespace-pre-wrap break-words px-1 text-[14px] text-ink">
-            {renderMentions(caption, msg, memberMap, false)}
-            {edited}
-          </p>
-        ) : (
-          edited && <div className="mt-0.5 px-1">{edited}</div>
-        )}
-      </div>
+  const attachments = messageAttachments(msg);
+  if (attachments.length > 0) {
+    const captionBlock = caption ? (
+      <p className="mt-1 whitespace-pre-wrap break-words px-1 text-[14px] text-ink">
+        {renderMentions(caption, msg, memberMap, false)}
+        {edited}
+      </p>
+    ) : (
+      edited && <div className="mt-0.5 px-1">{edited}</div>
     );
-  }
-
-  if (msg.kind === "file" && msg.attachment_path) {
     return (
       <div className={accent}>
         {replyQuote}
-        <AttachmentFile
-          msg={msg}
-          mine={mine}
-          sign={sign}
-          className={`${shape} ${surface}`}
-        />
-        {caption ? (
-          <p className="mt-1 whitespace-pre-wrap break-words px-1 text-[14px] text-ink">
-            {renderMentions(caption, msg, memberMap, false)}
-            {edited}
-          </p>
-        ) : (
-          edited && <div className="mt-0.5 px-1">{edited}</div>
-        )}
+        <div
+          className={
+            attachments.length > 1 ? "flex flex-col gap-1" : undefined
+          }
+        >
+          {attachments.map((a, i) => {
+            const isLast = i === attachments.length - 1;
+            if ((a.mime ?? "").startsWith("image/")) {
+              return (
+                <AttachmentImage
+                  key={a.path}
+                  path={a.path}
+                  name={a.name}
+                  sign={sign}
+                  onLoaded={onMediaLoad}
+                  tailSide={mine ? "right" : "left"}
+                  tail={tail && isLast}
+                />
+              );
+            }
+            return (
+              <AttachmentFile
+                key={a.path}
+                path={a.path}
+                name={a.name}
+                size={a.size}
+                mine={mine}
+                sign={sign}
+                className={`${
+                  mine
+                    ? `rounded-2xl ${tail && isLast ? "rounded-br-md" : ""}`
+                    : `rounded-2xl ${tail && isLast ? "rounded-bl-md" : ""}`
+                } ${surface}`}
+              />
+            );
+          })}
+        </div>
+        {captionBlock}
       </div>
     );
   }
@@ -1471,18 +1646,21 @@ function Bubble({
 }
 
 function AttachmentFile({
-  msg,
+  path,
+  name,
+  size,
   mine,
   sign,
   className,
 }: {
-  msg: Message;
+  path: string | null;
+  name: string;
+  size: number | null;
   mine: boolean;
   sign: SignFn;
   className: string;
 }) {
-  const { url, failed } = useSignedUrl(msg.attachment_path, sign);
-  const name = msg.attachment_name ?? msg.body;
+  const { url, failed } = useSignedUrl(path, sign);
 
   const inner = (
     <>
@@ -1502,9 +1680,7 @@ function AttachmentFile({
             mine ? "text-white/70" : "text-muted"
           }`}
         >
-          {failed
-            ? "Unavailable"
-            : formatBytes(msg.attachment_size) || "Attachment"}
+          {failed ? "Unavailable" : formatBytes(size) || "Attachment"}
         </span>
       </span>
     </>

@@ -16,6 +16,7 @@ import {
 } from "@/components/uikit/sheet";
 import { Modal, useModal } from "@/components/Modal";
 import { Avatar } from "@/components/Avatar";
+import { MuteToggle } from "@/components/MuteToggle";
 import { PresenceDot } from "@/components/PresenceDot";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
 import { Button } from "@/components/ui/Button";
@@ -25,6 +26,7 @@ import { uploadGroupAvatar } from "@/lib/avatars";
 import {
   addRoomMember,
   leaveRoom,
+  openDm,
   removeRoomMember,
   renameRoom,
   setRoomAvatar,
@@ -112,6 +114,12 @@ export function GroupDetails({
     );
     if (ok) router.push("/rooms");
   }
+  // An agent's only entry point to start a private DM with an assistant
+  // they share a workspace with (agents have no sidebar / DM list).
+  async function onMessage(userId: string) {
+    const res = await openDm(userId);
+    if (res.roomId) router.push(`/rooms/${res.roomId}`);
+  }
 
   const admins = members.filter((m) => m.room_role === "admin").length;
 
@@ -153,6 +161,11 @@ export function GroupDetails({
           )}
         </div>
 
+        {/* Per-conversation mute (device-local) */}
+        <div className="border-b border-line px-2 py-2">
+          <MuteToggle roomId={roomId} />
+        </div>
+
         {error && (
           <p className="mx-4 mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
             {error}
@@ -182,6 +195,13 @@ export function GroupDetails({
               busy={busy}
               onRemove={() => onRemove(m.id)}
               onSetRole={(role) => onSetRole(m.id, role)}
+              onMessage={
+                currentUserRole === "agent" &&
+                m.role === "assistant" &&
+                m.id !== currentUserId
+                  ? () => void onMessage(m.id)
+                  : undefined
+              }
             />
           ))}
         </ul>
@@ -249,6 +269,7 @@ function MemberItem({
   busy,
   onRemove,
   onSetRole,
+  onMessage,
 }: {
   member: RoomMemberView;
   self: boolean;
@@ -257,6 +278,7 @@ function MemberItem({
   busy: string | null;
   onRemove: () => void;
   onSetRole: (role: RoomMemberRole) => void;
+  onMessage?: () => void;
 }) {
   const online = useIsOnline(member.id);
   const isAdmin = member.room_role === "admin";
@@ -287,6 +309,16 @@ function MemberItem({
           {member.is_active === false && " · deactivated"}
         </p>
       </div>
+
+      {onMessage && !self && (
+        <button
+          type="button"
+          onClick={onMessage}
+          className="shrink-0 rounded-md border border-line px-2.5 py-1 text-[12px] font-medium text-brand-700 hover:bg-brand-50"
+        >
+          Message
+        </button>
+      )}
 
       {canManage && !self && (
         <div className="flex shrink-0 items-center gap-1">

@@ -5,6 +5,7 @@ import { Avatar } from "@/components/Avatar";
 import { Modal } from "@/components/Modal";
 import { useCall } from "@/components/call/CallProvider";
 import { PhoneIcon, VideoIcon } from "@/components/icons";
+import type { Role, RoomType } from "@/lib/types";
 
 type CallMember = { id: string; full_name: string };
 
@@ -15,11 +16,19 @@ export function CallButton({
   roomName,
   currentUserId,
   members,
+  roomType,
+  currentUserRole,
 }: {
   roomId: string;
   roomName: string;
   currentUserId: string;
   members: CallMember[];
+  /** Room kind. When omitted, no group restriction is applied (behaves
+   *  as before). Only "group"/"agent_workspace" are ever gated. */
+  roomType?: RoomType;
+  /** The current user's app-wide role, used to gate starting group calls.
+   *  When omitted, no restriction is applied. */
+  currentUserRole?: Role;
 }) {
   const { dial, phase, signalReady } = useCall();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -31,7 +40,18 @@ export function CallButton({
     location.hostname === "localhost";
   const busy = phase !== "idle";
 
+  // #9/#10: in a NON-dm room only admins/managers may START a call. We only
+  // restrict when we positively know the room is a group/workspace AND the
+  // role is assistant/agent — an undefined roomType or role preserves the
+  // previous unrestricted behavior so nothing breaks if the props are absent.
+  const restricted =
+    roomType !== undefined &&
+    roomType !== "dm" &&
+    (currentUserRole === "assistant" || currentUserRole === "agent");
+  const restrictionTitle = "Only admins and managers can start group calls";
+
   async function start(peer: CallMember, video: boolean) {
+    if (restricted) return;
     setPickerOpen(false);
     await dial(roomId, roomName, peer, video);
   }
@@ -41,10 +61,18 @@ export function CallButton({
       <button
         type="button"
         onClick={() => setPickerOpen(true)}
-        disabled={busy}
+        disabled={busy || restricted}
         className="rounded-full p-2 text-muted hover:bg-mist disabled:opacity-40"
         aria-label="Call"
-        title={busy ? "Already on a call" : signalReady ? "Call" : "Connecting…"}
+        title={
+          restricted
+            ? restrictionTitle
+            : busy
+              ? "Already on a call"
+              : signalReady
+                ? "Call"
+                : "Connecting…"
+        }
       >
         <PhoneIcon />
       </button>

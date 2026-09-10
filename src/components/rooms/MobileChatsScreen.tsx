@@ -166,7 +166,7 @@ export function MobileChatsScreen({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search conversations"
-            className="h-11 rounded-full border-line/80 bg-white pl-10 text-[16px] shadow-xs placeholder:text-muted"
+            className="h-11 rounded-full border-line/80 bg-paper pl-10 text-[16px] shadow-xs placeholder:text-muted"
             aria-label="Search conversations"
           />
         </div>
@@ -182,7 +182,7 @@ export function MobileChatsScreen({
                 className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold transition-colors ${
                   active
                     ? "bg-ink text-white shadow-soft"
-                    : "border border-line/80 bg-white text-muted shadow-xs active:bg-mist"
+                    : "border border-line/80 bg-paper text-muted shadow-xs active:bg-mist"
                 }`}
               >
                 {f.label}

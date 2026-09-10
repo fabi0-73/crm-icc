@@ -6,10 +6,12 @@ import { ActionForm } from "@/components/ActionForm";
 import { CredentialsPanel } from "@/components/CredentialsPanel";
 import { createUserAccount, type ActionState } from "@/app/actions/admin";
 import { USERNAME_HINT } from "@/lib/username";
+import type { Role } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { Input, Label, Select } from "@/components/ui/Field";
 
-export function NewUserButton() {
+export function NewUserButton({ actorRole = "admin" }: { actorRole?: Role }) {
+  const isAdmin = actorRole === "admin";
   const { open, openModal, closeModal } = useModal();
   // Controlled: React resets uncontrolled fields when a form action
   // returns, so a rejected username used to wipe everything typed.
@@ -92,22 +94,32 @@ export function NewUserButton() {
                 placeholder="Leave empty to auto-generate"
               />
             </div>
-            <div>
-              <Label htmlFor="new-user-role">Role</Label>
-              <Select
-                id="new-user-role"
-                name="role"
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-              >
-                <option value="admin">Admin</option>
-                <option value="manager">Manager</option>
-                <option value="assistant">Assistant</option>
-              </Select>
-              <p className="mt-1 text-xs text-muted">
-                Agent accounts are created from the Agents page.
-              </p>
-            </div>
+            {isAdmin ? (
+              <div>
+                <Label htmlFor="new-user-role">Role</Label>
+                <Select
+                  id="new-user-role"
+                  name="role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                >
+                  <option value="admin">Admin</option>
+                  <option value="manager">Manager</option>
+                  <option value="assistant">Assistant</option>
+                </Select>
+                <p className="mt-1 text-xs text-muted">
+                  Agent accounts are created from the Agents page.
+                </p>
+              </div>
+            ) : (
+              <div>
+                {/* Managers create regular assistants only. */}
+                <input type="hidden" name="role" value="assistant" />
+                <p className="text-xs text-muted">
+                  New accounts are created as assistants.
+                </p>
+              </div>
+            )}
             <Button type="submit" className="w-full">
               Create user
             </Button>

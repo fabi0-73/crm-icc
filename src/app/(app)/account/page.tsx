@@ -4,6 +4,7 @@ import { requireProfile } from "@/lib/auth";
 import { signOut } from "@/app/actions/auth";
 import { emailToUsername } from "@/lib/username";
 import { ChangePasswordForm } from "@/components/PasswordForms";
+import { DisplayNameForm } from "@/components/DisplayNameForm";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { Avatar } from "@/components/Avatar";
 
@@ -38,6 +39,16 @@ export default async function AccountPage() {
             </p>
             <p className="text-[12px] capitalize text-muted">{profile.role}</p>
           </div>
+        </div>
+
+        <div className="rounded-2xl border border-line bg-paper p-4 shadow-xs">
+          <h2 className="mb-1 text-[15px] font-semibold text-ink">
+            Display name
+          </h2>
+          <p className="mb-3 text-[13px] text-muted">
+            Change the name other people see across the app.
+          </p>
+          <DisplayNameForm initialName={profile.full_name} />
         </div>
 
         <div className="rounded-2xl border border-line bg-paper p-4 shadow-xs">

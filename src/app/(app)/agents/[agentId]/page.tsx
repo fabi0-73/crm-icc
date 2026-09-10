@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireRole } from "@/lib/auth";
 import { SwapAssistantsButton } from "@/components/SwapAssistantsButton";
+import { AgentManagerSelect } from "@/components/AgentManagerSelect";
 import { ActionForm } from "@/components/ActionForm";
 import { archiveAgent } from "@/app/actions/agents";
 import { buttonClasses } from "@/components/ui/Button";
@@ -13,15 +14,32 @@ export default async function AgentDetailPage({
   params: Promise<{ agentId: string }>;
 }) {
   const { agentId } = await params;
-  const { supabase } = await requireRole(["admin", "manager"]);
+  const { supabase, profile: self } = await requireRole(["admin", "manager"]);
+  const isAdmin = self.role === "admin";
 
   const { data: agent } = await supabase
     .from("agents")
-    .select("id, display_name, status, user_id, created_at")
+    .select("id, display_name, status, user_id, created_at, manager_id")
     .eq("id", agentId)
-    .maybeSingle();
+    .maybeSingle<{
+      id: string;
+      display_name: string;
+      status: string;
+      user_id: string;
+      created_at: string;
+      manager_id: string | null;
+    }>();
 
   if (!agent) notFound();
+
+  const { data: managers } = await supabase
+    .from("profiles")
+    .select("id, full_name")
+    .eq("role", "manager")
+    .eq("is_active", true)
+    .order("full_name");
+  const managerName =
+    (managers ?? []).find((m) => m.id === agent.manager_id)?.full_name ?? null;
 
   const { data: room } = await supabase
     .from("rooms")
@@ -97,6 +115,24 @@ export default async function AgentDetailPage({
       </div>
 
       <section className="p-4 space-y-4 max-w-xl">
+        <div className="rounded-lg border border-line bg-paper p-4">
+          <h2 className="text-sm font-semibold text-ink mb-3">Manager</h2>
+          {isAdmin ? (
+            <AgentManagerSelect
+              agentId={agent.id}
+              managers={(managers ?? []).map((m) => ({
+                id: m.id,
+                full_name: m.full_name,
+              }))}
+              currentManagerId={agent.manager_id}
+            />
+          ) : (
+            <p className="text-sm text-muted">
+              {managerName ? managerName : "No manager assigned."}
+            </p>
+          )}
+        </div>
+
         <div className="rounded-lg border border-line bg-paper p-4">
           <h2 className="text-sm font-semibold text-ink mb-3">
             Assigned assistants

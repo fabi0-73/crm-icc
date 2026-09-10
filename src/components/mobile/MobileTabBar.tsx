@@ -43,7 +43,7 @@ const DRAWER_NAV: {
     href: "/admin/users",
     label: "User management",
     sub: "Create staff logins and reset passwords",
-    roles: ["admin"],
+    roles: ["admin", "manager"],
     icon: UserCog,
   },
   {

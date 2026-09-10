@@ -1,11 +1,20 @@
 "use client";
 
-import { Bell, AtSign, Phone } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AtSign, Bell, MonitorSmartphone, Phone, SunMoon } from "lucide-react";
 import {
   useNotifyPrefs,
   setNotifyPref,
   type NotifyPrefs,
 } from "@/lib/notify-prefs";
+import {
+  ensureNotifyPermission,
+  notificationPermission,
+  notificationsSupported,
+  registerServiceWorker,
+  subscribeToPush,
+} from "@/lib/notify";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const ROWS: {
   key: keyof NotifyPrefs;
@@ -63,6 +72,90 @@ function Toggle({
   );
 }
 
+type PermState = NotificationPermission | "unsupported";
+
+/** Row that requests/reports desktop + mobile pop-up permission. */
+function DesktopNotificationsRow() {
+  const [perm, setPerm] = useState<PermState>("default");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!notificationsSupported()) {
+      setPerm("unsupported");
+      return;
+    }
+    setPerm(notificationPermission());
+  }, []);
+
+  async function enable() {
+    setBusy(true);
+    try {
+      const granted = await ensureNotifyPermission();
+      setPerm(notificationsSupported() ? notificationPermission() : "unsupported");
+      if (granted) {
+        // Register the SW (click routing + Web Push readiness). subscribeToPush
+        // is a no-op unless a VAPID key is configured, so it's safe to call.
+        await registerServiceWorker();
+        await subscribeToPush();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  let control: React.ReactNode;
+  if (perm === "granted") {
+    control = (
+      <span className="inline-flex shrink-0 items-center rounded-full bg-brand-50 px-2.5 py-1 text-[12px] font-semibold text-brand-700">
+        On
+      </span>
+    );
+  } else if (perm === "denied") {
+    control = (
+      <span className="shrink-0 text-right text-[12px] font-medium text-muted">
+        Blocked
+      </span>
+    );
+  } else if (perm === "unsupported") {
+    control = (
+      <span className="shrink-0 text-right text-[12px] font-medium text-muted">
+        Unavailable
+      </span>
+    );
+  } else {
+    control = (
+      <button
+        type="button"
+        onClick={enable}
+        disabled={busy}
+        className="shrink-0 rounded-full bg-brand-600 px-3.5 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-brand-700 disabled:opacity-50"
+      >
+        {busy ? "Enabling…" : "Enable"}
+      </button>
+    );
+  }
+
+  const hint =
+    perm === "denied"
+      ? "Blocked for this site. Re-enable notifications in your browser's site settings, then reload."
+      : perm === "unsupported"
+        ? "This browser can't show pop-up notifications."
+        : "Pop up new messages and calls even when the app is in another tab or the background.";
+
+  return (
+    <li className="flex items-center gap-3 py-3">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700">
+        <MonitorSmartphone className="size-[18px]" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[14px] font-medium text-ink">Desktop notifications</p>
+        <p className="text-[12px] leading-snug text-muted">{hint}</p>
+      </div>
+      {control}
+    </li>
+  );
+}
+
 export function NotificationSettings() {
   const prefs = useNotifyPrefs();
   return (
@@ -73,6 +166,7 @@ export function NotificationSettings() {
         calls through.
       </p>
       <ul className="divide-y divide-line/70">
+        <DesktopNotificationsRow />
         {ROWS.map((row) => (
           <li key={row.key} className="flex items-center gap-3 py-3">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700">
@@ -89,6 +183,18 @@ export function NotificationSettings() {
             />
           </li>
         ))}
+        <li className="flex items-center gap-3 py-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700">
+            <SunMoon className="size-[18px]" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[14px] font-medium text-ink">Appearance</p>
+            <p className="text-[12px] leading-snug text-muted">
+              Match your system, or force light or dark for this device.
+            </p>
+          </div>
+          <ThemeToggle />
+        </li>
       </ul>
     </div>
   );

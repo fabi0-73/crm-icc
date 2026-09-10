@@ -44,8 +44,11 @@ export function FloatingCallTile() {
   // live/mute events, FIX C) so the tile drops back to the avatar instead
   // of freezing on the last shared frame.
   const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
-  const fitClass =
-    sharing || (!call?.video && remoteHasVideo) ? "object-contain" : "object-cover";
+  // #5: fit the REMOTE element to the REMOTE content — camera fills
+  // (object-cover), a shared screen is never cropped (object-contain). On a
+  // voice call remote video only appears via a screen share, so that's the cue.
+  const remoteIsScreen = !call?.video && remoteHasVideo;
+  const fitClass = remoteIsScreen ? "object-contain" : "object-cover";
 
   useEffect(() => {
     const el = remoteVideoRef.current;

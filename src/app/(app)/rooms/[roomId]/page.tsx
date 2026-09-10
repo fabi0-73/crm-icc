@@ -29,7 +29,14 @@ export default async function RoomPage({
 
   if (!room) notFound();
 
-  if (profile.role === "agent" && room.type !== "agent_workspace") {
+  // Agents live in their workspace; they may also open a DM they belong
+  // to (membership is enforced below, so a non-member agent still 404s).
+  // Group rooms stay off-limits to agents.
+  if (
+    profile.role === "agent" &&
+    room.type !== "agent_workspace" &&
+    room.type !== "dm"
+  ) {
     notFound();
   }
 
@@ -43,21 +50,35 @@ export default async function RoomPage({
     .eq("user_id", user.id)
     .maybeSingle<{ user_id: string; role: RoomMemberRole }>();
 
+  // A non-member with row-level read access: an admin drops straight into
+  // a READ-ONLY view (read history without joining); a manager still gets
+  // the join prompt; everyone else — and any non-member on a private DM —
+  // gets a 404.
+  const readOnly = !membership;
   if (!membership) {
-    const canJoin =
-      room.type !== "dm" &&
-      (profile.role === "admin" || profile.role === "manager");
-    if (!canJoin) notFound();
-    return <JoinRoomPrompt roomId={room.id} roomName={room.name} />;
+    if (room.type === "dm") notFound();
+    if (profile.role === "manager") {
+      return <JoinRoomPrompt roomId={room.id} roomName={room.name} />;
+    }
+    if (profile.role !== "admin") notFound();
+    // admin → fall through and render the room read-only
   }
 
   const { data: memberRows } = await supabase
     .from("room_members")
-    .select("user_id, role")
+    .select("user_id, role, last_read_at")
     .eq("room_id", roomId);
 
   const roleById = new Map<string, RoomMemberRole>(
     (memberRows ?? []).map((m) => [m.user_id, m.role as RoomMemberRole]),
+  );
+  // Seeds per-message "seen" state on first paint; the live room_members
+  // subscription keeps it current thereafter.
+  const readAtById = new Map<string, string | null>(
+    (memberRows ?? []).map((m) => [
+      m.user_id,
+      (m as { last_read_at: string | null }).last_read_at ?? null,
+    ]),
   );
   const memberIds = [...roleById.keys()];
   const { data: memberProfiles } = await supabase
@@ -80,6 +101,7 @@ export default async function RoomPage({
     role: p.role,
     is_active: p.is_active,
     room_role: roleById.get(p.id) ?? "member",
+    last_read_at: readAtById.get(p.id) ?? null,
   }));
   const dmOther =
     room.type === "dm"
@@ -95,11 +117,12 @@ export default async function RoomPage({
       dmOtherUserId={dmOther?.id ?? null}
       currentUserId={user.id}
       currentUserRole={profile.role}
-      myRoomRole={membership.role}
+      myRoomRole={membership?.role ?? "member"}
       members={memberList}
       initialMessages={messages}
       hasOlder={messages.length === INITIAL_MESSAGES}
       leading={profile.role === "agent" ? "account" : "back"}
+      readOnly={readOnly}
     />
   );
 }

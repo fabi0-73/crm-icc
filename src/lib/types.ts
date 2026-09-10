@@ -58,6 +58,8 @@ export type RoomMemberView = {
   is_active: boolean | null;
   /** Their standing in THIS room. */
   room_role: RoomMemberRole;
+  /** When they last read the room — drives per-message seen state. */
+  last_read_at?: string | null;
 };
 
 export type MessageKind = "text" | "file" | "system";

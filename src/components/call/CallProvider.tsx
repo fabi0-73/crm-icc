@@ -32,6 +32,7 @@ import {
   stopTones,
 } from "@/lib/call/tones";
 import { readNotifyPrefs } from "@/lib/notify-prefs";
+import { notify } from "@/lib/notify";
 import { IncomingCallOverlay } from "@/components/call/IncomingCallOverlay";
 import { FloatingCallTile } from "@/components/call/FloatingCallTile";
 import { FullScreenCall } from "@/components/call/FullScreenCall";
@@ -156,6 +157,17 @@ function isMediaError(err: unknown): boolean {
   return false;
 }
 
+/** mm:ss (or h:mm:ss) for a connected-call duration, used in call-history. */
+function formatCallDuration(totalSeconds: number): string {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
 export function CallProvider({
   userId,
   userName,
@@ -211,6 +223,11 @@ export function CallProvider({
   const endCallRef = useRef<(() => void) | null>(null);
   /** Bumped whenever a call begins or is torn down, so stale async aborts. */
   const callGenRef = useRef(0);
+  /** True only on the side that dialed — the caller logs call-history so
+   *  both sides don't double-insert the started/ended system messages. */
+  const isCallerRef = useRef(false);
+  /** Guards the one-time "Call started" insert per connected call. */
+  const startedLoggedRef = useRef(false);
 
   phaseRef.current = phase;
   incomingRef.current = incoming;
@@ -272,6 +289,24 @@ export function CallProvider({
       // continuation instead of resurrecting a torn-down call.
       callGenRef.current += 1;
       clearTimers();
+      // Call history (#2): only the CALLER logs, and only for a call that
+      // actually connected — a no-answer is already covered by the missed
+      // call trace. connectedAtRef is nulled just below, so a re-entrant
+      // cleanup (pc.close → connectionstatechange → hangup → cleanup) can
+      // never double-insert this.
+      if (isCallerRef.current && connectedAtRef.current && roomIdRef.current) {
+        const durationS = Math.max(
+          0,
+          Math.round((Date.now() - connectedAtRef.current) / 1000),
+        );
+        void supabase.from("messages").insert({
+          room_id: roomIdRef.current,
+          sender_id: userId,
+          kind: "text",
+          body: `📞 Call ended · ${formatCallDuration(durationS)}`,
+          metadata: { event: "call_ended", duration_s: durationS },
+        });
+      }
       if (dropTimerRef.current) {
         clearTimeout(dropTimerRef.current);
         dropTimerRef.current = null;
@@ -281,6 +316,11 @@ export function CallProvider({
       if (opts?.purge) purgeSignals(callIdRef.current);
       pcRef.current?.close();
       pcRef.current = null;
+      // Drop the persistent audio sink's stream so a torn-down call leaves
+      // nothing playing (the element itself never unmounts).
+      if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+      isCallerRef.current = false;
+      startedLoggedRef.current = false;
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current = null;
       cameraTrackRef.current = null;
@@ -309,7 +349,7 @@ export function CallProvider({
       setRemoteHasVideo(false);
       setConnectedAt(null);
     },
-    [clearTimers, purgeSignals],
+    [clearTimers, purgeSignals, supabase, userId],
   );
 
   const send = useCallback(
@@ -437,6 +477,19 @@ export function CallProvider({
             connectedAtRef.current = at;
             return at;
           });
+          // Call history (#2): the caller logs "Call started" once, the first
+          // time ICE reaches connected. The callee never logs, so the pair of
+          // system messages isn't double-inserted.
+          if (isCallerRef.current && !startedLoggedRef.current && roomIdRef.current) {
+            startedLoggedRef.current = true;
+            void supabase.from("messages").insert({
+              room_id: roomIdRef.current,
+              sender_id: userId,
+              kind: "text",
+              body: "📞 Call started",
+              metadata: { event: "call_started" },
+            });
+          }
         } else if (s === "checking") {
           setStatusText("Connecting…");
         } else if (s === "disconnected") {
@@ -474,7 +527,7 @@ export function CallProvider({
       pcRef.current = pc;
       return pc;
     },
-    [clearTimers, send],
+    [clearTimers, send, supabase, userId],
   );
 
   const getMedia = useCallback(async (video: boolean) => {
@@ -643,6 +696,16 @@ export function CallProvider({
         // still show the incoming-call overlay (setIncoming above) — only the
         // ring tone is silenced. The outgoing ringback is left untouched.
         if (readNotifyPrefs().calls) startRingtone();
+        // #8: desktop/mobile pop-up for the incoming call. CallProvider is
+        // mounted app-wide, so this fires whatever section the app is on and
+        // even when another tab/app is focused (force:true).
+        notify({
+          title: "Incoming call",
+          body: `${p.fromName ?? "Someone"} is calling`,
+          tag: "call",
+          url: "/rooms/" + row.room_id,
+          force: true,
+        });
         if (ringTimerRef.current) clearTimeout(ringTimerRef.current);
         ringTimerRef.current = setTimeout(() => {
           // Caller times out on its own side; just go quiet locally.
@@ -780,6 +843,8 @@ export function CallProvider({
       roomIdRef.current = roomId;
       peerIdRef.current = peer.id;
       acceptedRef.current = true;
+      isCallerRef.current = true; // #2: this side logs call-history
+      startedLoggedRef.current = false;
       setCall({ callId, roomId, peerId: peer.id, peerName: peer.full_name, video });
       setPhase("dialing");
       setView("full");
@@ -859,6 +924,8 @@ export function CallProvider({
     callGenRef.current += 1;
     const gen = callGenRef.current;
     acceptedRef.current = true;
+    isCallerRef.current = false; // #2: the callee never logs call-history
+    startedLoggedRef.current = false;
     stopTones();
     clearTimers();
     armConnectTimeout();
@@ -1095,7 +1162,11 @@ export function CallProvider({
 
     try {
       const screen = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
+        // #7: hint whole-monitor capture so the browser offers "Entire
+        // Screen" (incl. other tabs + the taskbar), not just a window/tab.
+        // The browser still shows its own picker — this only makes the
+        // full-screen option available; we can't preselect it.
+        video: { displaySurface: "monitor" },
         audio: false,
       });
       const screenTrack = screen.getVideoTracks()[0];

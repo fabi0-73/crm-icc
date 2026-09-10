@@ -43,8 +43,12 @@ export function FullScreenCall() {
   // the remote track's live/mute events (FIX C) so the frame doesn't freeze
   // after the peer stops sharing.
   const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
-  const fitClass =
-    sharing || (!call?.video && remoteHasVideo) ? "object-contain" : "object-cover";
+  // #5: the REMOTE element fit is about the REMOTE content, not our local
+  // share. A camera fills the frame (object-cover, no letterbox bars); a
+  // shared screen must never be cropped (object-contain). On a voice call the
+  // only way remote video appears is a screen share, so that's our signal.
+  const remoteIsScreen = !call?.video && remoteHasVideo;
+  const fitClass = remoteIsScreen ? "object-contain" : "object-cover";
 
   useEffect(() => {
     const el = remoteVideoRef.current;

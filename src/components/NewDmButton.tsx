@@ -64,12 +64,25 @@ export function NewDmButton({
     if (!open) return;
     const supabase = createClient();
     void supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) return;
+      // Who you may DM mirrors the get_or_create_dm rules: staff DM staff;
+      // an assistant may also DM agents (private agent↔assistant chats),
+      // so include agents in the picker only for assistants.
+      const { data: me } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .maybeSingle<{ role: StaffRow["role"] }>();
+      const allowed: StaffRow["role"][] =
+        me?.role === "assistant"
+          ? ["admin", "manager", "assistant", "agent"]
+          : ["admin", "manager", "assistant"];
       const { data } = await supabase
         .from("profiles")
         .select("id, full_name, role")
         .eq("is_active", true)
-        .in("role", ["admin", "manager", "assistant"])
-        .neq("id", user?.id ?? "")
+        .in("role", allowed)
+        .neq("id", user.id)
         .order("full_name");
       setStaff((data ?? []) as StaffRow[]);
     });

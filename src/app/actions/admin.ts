@@ -48,11 +48,17 @@ export async function createUserAccount(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { profile: actor } = await requireRole(["admin"]);
+  // Admins create any staff role (incl. managers); managers create only
+  // regular assistants. (#2 / #3)
+  const { profile: actor } = await requireRole(["admin", "manager"]);
 
   const fullName = String(formData.get("full_name") ?? "").trim();
   const username = String(formData.get("username") ?? "").trim().toLowerCase();
   const role = String(formData.get("role") ?? "") as Role;
+
+  if (actor.role === "manager" && role !== "assistant") {
+    return { error: "Managers can only create assistant accounts." };
+  }
   let password = String(formData.get("password") ?? "").trim();
 
   if (!fullName || !username) {
@@ -536,4 +542,145 @@ export async function deleteUserAccount(
   // result, so the dialog would never close. The client refreshes the
   // table once it has handled the outcome.
   return { success: `${footprint.fullName} was deleted.` };
+}
+
+
+/**
+ * Admin renames a staff member (assistant/manager/admin). Updates the
+ * profile display name and the auth metadata so it shows everywhere.
+ * Agents are renamed from the Agents area (their name also drives the
+ * workspace), so this refuses agent targets.
+ */
+export async function renameUser(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireRole(["admin"]);
+  const userId = String(formData.get("user_id") ?? "");
+  const fullName = String(formData.get("full_name") ?? "").trim();
+  if (!userId) return { error: "Missing user." };
+  if (!fullName) return { error: "Name cannot be empty." };
+
+  let service;
+  try {
+    service = createServiceClient();
+  } catch (e) {
+    return { error: friendlyAuthError((e as Error).message, "Server misconfigured.") };
+  }
+
+  const { data: target } = await service
+    .from("profiles")
+    .select("role")
+    .eq("id", userId)
+    .maybeSingle<{ role: Role }>();
+  if (target?.role === "agent") {
+    return { error: "Rename agents from the Agents section." };
+  }
+
+  const { error } = await service
+    .from("profiles")
+    .update({ full_name: fullName })
+    .eq("id", userId);
+  if (error) return { error: error.message };
+  await service.auth.admin.updateUserById(userId, {
+    user_metadata: { full_name: fullName },
+  });
+
+  revalidatePath("/admin/users");
+  return { success: "Name updated." };
+}
+
+/**
+ * A user edits their own public display name. For an agent this is the
+ * agent's display name (which also titles their workspace); for everyone
+ * else it is the profile name. Kept in sync with the auth metadata.
+ */
+export async function updateMyName(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { user, profile } = await requireRole([
+    "admin",
+    "manager",
+    "assistant",
+    "agent",
+  ]);
+  const fullName = String(formData.get("full_name") ?? "").trim();
+  if (!fullName) return { error: "Name cannot be empty." };
+
+  let service;
+  try {
+    service = createServiceClient();
+  } catch (e) {
+    return { error: friendlyAuthError((e as Error).message, "Server misconfigured.") };
+  }
+
+  const { error } = await service
+    .from("profiles")
+    .update({ full_name: fullName })
+    .eq("id", user.id);
+  if (error) return { error: error.message };
+  await service.auth.admin.updateUserById(user.id, {
+    user_metadata: { full_name: fullName },
+  });
+
+  if (profile.role === "agent") {
+    // The agent's public name also names their workspace room.
+    const { data: agent } = await service
+      .from("agents")
+      .select("id")
+      .eq("user_id", user.id)
+      .maybeSingle<{ id: string }>();
+    if (agent) {
+      await service.from("agents").update({ display_name: fullName }).eq("id", agent.id);
+      await service
+        .from("rooms")
+        .update({ name: fullName })
+        .eq("agent_id", agent.id)
+        .eq("type", "agent_workspace");
+    }
+  }
+
+  revalidatePath("/account");
+  return { success: "Name updated." };
+}
+
+/**
+ * Admin assigns (or clears) the manager responsible for an agent. (#3)
+ */
+export async function setAgentManager(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireRole(["admin"]);
+  const agentId = String(formData.get("agent_id") ?? "");
+  const managerId = String(formData.get("manager_id") ?? "").trim();
+  if (!agentId) return { error: "Missing agent." };
+
+  let service;
+  try {
+    service = createServiceClient();
+  } catch (e) {
+    return { error: friendlyAuthError((e as Error).message, "Server misconfigured.") };
+  }
+
+  if (managerId) {
+    const { data: mgr } = await service
+      .from("profiles")
+      .select("role, is_active")
+      .eq("id", managerId)
+      .maybeSingle<{ role: Role; is_active: boolean }>();
+    if (!mgr || !mgr.is_active || mgr.role !== "manager") {
+      return { error: "Pick an active manager." };
+    }
+  }
+
+  const { error } = await service
+    .from("agents")
+    .update({ manager_id: managerId || null })
+    .eq("id", agentId);
+  if (error) return { error: error.message };
+
+  revalidatePath(`/agents/${agentId}`);
+  return { success: managerId ? "Manager assigned." : "Manager cleared." };
 }
