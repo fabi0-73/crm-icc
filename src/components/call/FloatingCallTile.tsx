@@ -44,8 +44,6 @@ export function FloatingCallTile() {
   // live/mute events, FIX C) so the tile drops back to the avatar instead
   // of freezing on the last shared frame.
   const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
-  const fitClass =
-    sharing || remoteHasVideo ? "object-contain" : "object-cover";
 
   useEffect(() => {
     const el = remoteVideoRef.current;
@@ -81,7 +79,7 @@ export function FloatingCallTile() {
       <button
         type="button"
         onClick={() => setView("full")}
-        className="relative block h-36 w-full bg-ink-soft text-left"
+        className="relative block h-36 w-full overflow-hidden bg-ink-soft text-left"
         aria-label="Expand call to full screen"
         title="Expand"
       >
@@ -93,7 +91,9 @@ export function FloatingCallTile() {
               autoPlay
               playsInline
               muted
-              className={`h-full w-full bg-ink ${fitClass}`}
+              className={`absolute inset-0 h-full w-full bg-ink ${
+                sharing ? "object-contain" : "object-cover"
+              }`}
             />
             <video
               ref={localVideoRef}

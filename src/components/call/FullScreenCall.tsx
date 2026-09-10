@@ -43,8 +43,6 @@ export function FullScreenCall() {
   // the remote track's live/mute events (FIX C) so the frame doesn't freeze
   // after the peer stops sharing.
   const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
-  const fitClass =
-    sharing || remoteHasVideo ? "object-contain" : "object-cover";
 
   useEffect(() => {
     const el = remoteVideoRef.current;
@@ -103,7 +101,7 @@ export function FullScreenCall() {
         </div>
       </div>
 
-      <div className="relative flex-1 min-h-0 bg-ink-soft">
+      <div className="relative flex-1 min-h-0 overflow-hidden bg-ink">
         {showVideo ? (
           <>
             {/* Muted on purpose: the provider's persistent <audio> element
@@ -114,7 +112,9 @@ export function FullScreenCall() {
               autoPlay
               playsInline
               muted
-              className={`h-full w-full bg-ink ${fitClass}`}
+              className={`absolute inset-0 h-full w-full bg-ink ${
+                sharing ? "object-contain" : "object-cover"
+              }`}
             />
             <video
               ref={localVideoRef}

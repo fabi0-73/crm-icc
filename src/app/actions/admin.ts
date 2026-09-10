@@ -125,6 +125,42 @@ export async function createUserAccount(
   };
 }
 
+export async function updateAssistantName(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  await requireRole(["admin"]);
+  const userId = String(formData.get("user_id") ?? "");
+  const fullName = String(formData.get("full_name") ?? "").trim();
+  if (!userId || !fullName) return { error: "Name is required." };
+
+  let service;
+  try {
+    service = createServiceClient();
+  } catch (e) {
+    return { error: friendlyAuthError((e as Error).message, "Server misconfigured.") };
+  }
+
+  const { data: target } = await service
+    .from("profiles")
+    .select("id, role")
+    .eq("id", userId)
+    .maybeSingle();
+  if (!target || target.role !== "assistant") {
+    return { error: "Only assistant names can be edited here." };
+  }
+
+  const { error } = await service
+    .from("profiles")
+    .update({ full_name: fullName })
+    .eq("id", userId);
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin/users");
+  revalidatePath("/rooms");
+  return { success: "Name updated." };
+}
+
 export async function resetUserPassword(
   _prev: ActionState,
   formData: FormData,

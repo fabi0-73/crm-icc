@@ -30,7 +30,7 @@ export default async function RoomPage({
 
   if (!room) notFound();
 
-  if (profile.role === "agent" && room.type !== "agent_workspace") {
+  if (profile.role === "agent" && room.type !== "agent_workspace" && room.type !== "dm") {
     notFound();
   }
 
@@ -45,11 +45,15 @@ export default async function RoomPage({
     .maybeSingle<{ user_id: string; role: RoomMemberRole }>();
 
   if (!membership) {
-    const canJoin =
-      room.type !== "dm" &&
-      (profile.role === "admin" || profile.role === "manager");
-    if (!canJoin) notFound();
-    return <JoinRoomPrompt roomId={room.id} roomName={room.name} />;
+    if (profile.role === "admin") {
+      // Admins may read any conversation without joining.
+    } else {
+      const canJoin =
+        room.type !== "dm" &&
+        (profile.role === "admin" || profile.role === "manager");
+      if (!canJoin) notFound();
+      return <JoinRoomPrompt roomId={room.id} roomName={room.name} />;
+    }
   }
 
   const { data: memberRows } = await supabase
@@ -109,11 +113,12 @@ export default async function RoomPage({
       dmOtherUserId={dmOther?.id ?? null}
       currentUserId={user.id}
       currentUserRole={profile.role}
-      myRoomRole={membership.role}
+      myRoomRole={membership?.role ?? "member"}
       members={memberList}
       initialMessages={messages}
       hasOlder={messages.length === INITIAL_MESSAGES}
-      leading={profile.role === "agent" ? "account" : "back"}
+      leading={profile.role === "agent" && room.type === "agent_workspace" ? "account" : "back"}
+      readOnly={!membership}
     />
   );
 }

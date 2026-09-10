@@ -1,7 +1,7 @@
 import { requireRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { emailToUsername } from "@/lib/username";
-import { NewUserButton } from "@/components/NewUserButton";
+import { EditAssistantNameButton } from "@/components/EditAssistantNameButton";
 import { ResetPasswordButton } from "@/components/ResetPasswordButton";
 import { DeleteUserButton } from "@/components/DeleteUserButton";
 import { ActionForm } from "@/components/ActionForm";
@@ -113,6 +113,12 @@ export default async function UsersPage() {
                         Reactivate
                       </button>
                     </ActionForm>
+                  )}
+                  {isAdmin && u.role === "assistant" && (
+                    <EditAssistantNameButton
+                      userId={u.id}
+                      name={u.full_name}
+                    />
                   )}
                   {isAdmin && u.id !== self.id && (
                     <DeleteUserButton userId={u.id} name={u.full_name} />

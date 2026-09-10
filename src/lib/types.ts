@@ -16,6 +16,7 @@ export type Agent = {
   display_name: string;
   status: "active" | "archived";
   created_by: string;
+  manager_id?: string | null;
   created_at: string;
 };
 

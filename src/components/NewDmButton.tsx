@@ -71,7 +71,31 @@ export function NewDmButton({
         .in("role", ["admin", "manager", "assistant"])
         .neq("id", user?.id ?? "")
         .order("full_name");
-      setStaff((data ?? []) as StaffRow[]);
+      const staff = (data ?? []) as StaffRow[];
+
+      const { data: links } = await supabase
+        .from("assignments")
+        .select("agent_id")
+        .eq("assistant_id", user?.id ?? "")
+        .is("removed_at", null);
+      const agentIds = (links ?? []).map((l) => l.agent_id as string);
+      let agents: StaffRow[] = [];
+      if (agentIds.length) {
+        const { data: agentRows } = await supabase
+          .from("agents")
+          .select("user_id, status")
+          .in("id", agentIds)
+          .eq("status", "active");
+        const userIds = (agentRows ?? []).map((a) => a.user_id as string);
+        if (userIds.length) {
+          const { data: agentProfiles } = await supabase
+            .from("profiles")
+            .select("id, full_name, role")
+            .in("id", userIds);
+          agents = (agentProfiles ?? []) as StaffRow[];
+        }
+      }
+      setStaff([...staff, ...agents]);
     });
   }, [open]);
 

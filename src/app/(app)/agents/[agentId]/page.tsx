@@ -5,7 +5,7 @@ import { SwapAssistantsButton } from "@/components/SwapAssistantsButton";
 import { ActionForm } from "@/components/ActionForm";
 import { archiveAgent } from "@/app/actions/agents";
 import { buttonClasses } from "@/components/ui/Button";
-import { BackIcon } from "@/components/icons";
+import { AssignManagerForm } from "@/components/AssignManagerForm";
 
 export default async function AgentDetailPage({
   params,
@@ -17,7 +17,7 @@ export default async function AgentDetailPage({
 
   const { data: agent } = await supabase
     .from("agents")
-    .select("id, display_name, status, user_id, created_at")
+    .select("id, display_name, status, user_id, created_at, manager_id")
     .eq("id", agentId)
     .maybeSingle();
 
@@ -53,6 +53,30 @@ export default async function AgentDetailPage({
 
   const assignedSet = new Set(assistantIds);
   const available = (allAssistants ?? []).filter((a) => !assignedSet.has(a.id));
+
+  const { data: managers } =
+    profile.role === "admin"
+      ? await supabase
+          .from("profiles")
+          .select("id, full_name")
+          .eq("role", "manager")
+          .eq("is_active", true)
+          .order("full_name")
+      : { data: [] as { id: string; full_name: string }[] };
+
+  let assignedManagerName: string | null = null;
+  if (agent.manager_id) {
+    assignedManagerName =
+      (managers ?? []).find((m) => m.id === agent.manager_id)?.full_name ?? null;
+    if (!assignedManagerName) {
+      const { data: mgr } = await supabase
+        .from("profiles")
+        .select("full_name")
+        .eq("id", agent.manager_id)
+        .maybeSingle();
+      assignedManagerName = mgr?.full_name ?? null;
+    }
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -97,6 +121,26 @@ export default async function AgentDetailPage({
       </div>
 
       <section className="p-4 space-y-4 max-w-xl">
+        {profile.role === "admin" && (
+          <div className="rounded-lg border border-line bg-paper p-4">
+            <h2 className="text-sm font-semibold text-ink mb-3">
+              Assigned manager
+            </h2>
+            <AssignManagerForm
+              agentId={agent.id}
+              managerId={agent.manager_id ?? null}
+              managers={managers ?? []}
+            />
+          </div>
+        )}
+        {profile.role !== "admin" && assignedManagerName && (
+          <div className="rounded-lg border border-line bg-paper p-4">
+            <h2 className="text-sm font-semibold text-ink mb-1">
+              Assigned manager
+            </h2>
+            <p className="text-sm text-ink">{assignedManagerName}</p>
+          </div>
+        )}
         <div className="rounded-lg border border-line bg-paper p-4">
           <h2 className="text-sm font-semibold text-ink mb-3">
             Assigned assistants

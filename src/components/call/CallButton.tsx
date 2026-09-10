@@ -13,18 +13,26 @@ type CallMember = { id: string; full_name: string };
 export function CallButton({
   roomId,
   roomName,
+  roomType = "dm",
   currentUserId,
+  currentUserRole = "assistant",
   members,
 }: {
   roomId: string;
   roomName: string;
+  roomType?: "agent_workspace" | "group" | "dm";
   currentUserId: string;
+  currentUserRole?: string;
   members: CallMember[];
 }) {
   const { dial, phase, signalReady } = useCall();
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const others = members.filter((m) => m.id !== currentUserId);
+  const canStart =
+    roomType !== "group" ||
+    currentUserRole === "admin" ||
+    currentUserRole === "manager";
   const secure =
     typeof window === "undefined" ||
     window.isSecureContext ||
@@ -40,11 +48,22 @@ export function CallButton({
     <>
       <button
         type="button"
-        onClick={() => setPickerOpen(true)}
-        disabled={busy}
+        onClick={() => {
+          if (!canStart) return;
+          setPickerOpen(true);
+        }}
+        disabled={busy || !canStart}
         className="rounded-full p-2 text-muted hover:bg-mist disabled:opacity-40"
         aria-label="Call"
-        title={busy ? "Already on a call" : signalReady ? "Call" : "Connecting…"}
+        title={
+          !canStart
+            ? "Only admins and managers can start a group call"
+            : busy
+              ? "Already on a call"
+              : signalReady
+                ? "Call"
+                : "Connecting…"
+        }
       >
         <PhoneIcon />
       </button>
@@ -56,7 +75,9 @@ export function CallButton({
           </p>
         )}
         <p className="text-xs text-muted">
-          They&apos;ll ring wherever they are in the app.
+          {roomType === "group"
+            ? "Only members of this group can be included."
+            : "They'll ring wherever they are in the app."}
         </p>
         <ul className="-mx-2 mt-2 max-h-[60vh] overflow-y-auto">
           {others.map((m) => (

@@ -5,6 +5,7 @@ import { CallProvider } from "@/components/call/CallProvider";
 import { PresenceProvider } from "@/components/presence/PresenceProvider";
 import { KeyboardInsets } from "@/components/mobile/KeyboardInsets";
 import { MuteProvider } from "@/components/mute/MuteProvider";
+import { NotificationProvider } from "@/components/notifications/NotificationProvider";
 import { requireProfile } from "@/lib/auth";
 import { sitePath } from "@/lib/site-url";
 import { publicDisplayName } from "@/lib/display-name";
@@ -38,12 +39,14 @@ export default async function AppLayout({
   if (profile.role === "agent") {
     return (
       <MuteProvider userId={profile.id}>
+        <NotificationProvider userId={profile.id}>
         <CallProvider userId={profile.id} userName={displayName}>
           <PresenceProvider userId={profile.id}>
             <KeyboardInsets />
             <div className="h-app">{children}</div>
           </PresenceProvider>
         </CallProvider>
+        </NotificationProvider>
       </MuteProvider>
     );
   }
@@ -51,6 +54,7 @@ export default async function AppLayout({
   const { data } = await supabase.rpc("get_my_rooms");
   return (
     <MuteProvider userId={profile.id}>
+      <NotificationProvider userId={profile.id}>
       <CallProvider userId={profile.id} userName={displayName}>
         <PresenceProvider userId={profile.id}>
           <KeyboardInsets />
@@ -59,6 +63,7 @@ export default async function AppLayout({
           </SidebarShell>
         </PresenceProvider>
       </CallProvider>
+      </NotificationProvider>
     </MuteProvider>
   );
 }

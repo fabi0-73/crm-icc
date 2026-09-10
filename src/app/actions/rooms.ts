@@ -49,10 +49,10 @@ export async function createGroup(formData: FormData): Promise<RoomActionResult>
   }
 }
 
-/** Open (or create) the caller's DM with another staff member. */
+/** Open (or create) a 1:1. Staff↔staff, or assigned agent↔assistant. */
 export async function openDm(otherUserId: string): Promise<RoomActionResult> {
   try {
-    const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+    const { supabase } = await requireProfile();
     const { data: roomId, error } = await supabase.rpc("get_or_create_dm", {
       p_other_user: otherUserId,
     });
@@ -61,6 +61,19 @@ export async function openDm(otherUserId: string): Promise<RoomActionResult> {
   } catch (e) {
     return { error: actionError(e, "Could not open the chat.") };
   }
+}
+
+export async function postCallEvent(
+  roomId: string,
+  event: "call_started" | "call_ended",
+  body: string,
+) {
+  const { supabase } = await requireProfile();
+  await supabase.rpc("post_call_event", {
+    p_room_id: roomId,
+    p_event: event,
+    p_body: body,
+  });
 }
 
 /** Admin/manager joining a room they can see but aren't a member of. */

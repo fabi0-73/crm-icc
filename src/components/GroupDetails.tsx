@@ -6,6 +6,7 @@ import {
   Bell,
   BellOff,
   LogOut,
+  MessageCircle,
   Settings,
   ShieldCheck,
   UserMinus,
@@ -27,6 +28,7 @@ import { uploadGroupAvatar } from "@/lib/avatars";
 import {
   addRoomMember,
   leaveRoom,
+  openDm,
   removeRoomMember,
   renameRoom,
   setRoomAvatar,
@@ -202,6 +204,11 @@ export function GroupDetails({
               onSetRole={(role) => onSetRole(m.id, role)}
               personMuted={m.id !== currentUserId && isUserMuted(m.id)}
               onTogglePersonMute={() => toggleUserMute(m.id)}
+              canPrivateMessage={
+                m.id !== currentUserId &&
+                ((currentUserRole === "agent" && m.role === "assistant") ||
+                  (currentUserRole === "assistant" && m.role === "agent"))
+              }
             />
           ))}
         </ul>
@@ -271,6 +278,7 @@ function MemberItem({
   onSetRole,
   personMuted,
   onTogglePersonMute,
+  canPrivateMessage,
 }: {
   member: RoomMemberView;
   self: boolean;
@@ -281,7 +289,9 @@ function MemberItem({
   onSetRole: (role: RoomMemberRole) => void;
   personMuted: boolean;
   onTogglePersonMute: () => void;
+  canPrivateMessage: boolean;
 }) {
+  const router = useRouter();
   const online = useIsOnline(member.id);
   const isAdmin = member.room_role === "admin";
   const rowBusy =
@@ -312,6 +322,22 @@ function MemberItem({
           {member.is_active === false && " · deactivated"}
         </p>
       </div>
+
+      {canPrivateMessage && (
+        <button
+          type="button"
+          onClick={() => {
+            void openDm(member.id).then((res) => {
+              if (res.roomId) router.push(`/rooms/${res.roomId}`);
+            });
+          }}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted hover:bg-mist"
+          aria-label={`Private message ${shownName}`}
+          title="Private message"
+        >
+          <MessageCircle className="size-4" />
+        </button>
+      )}
 
       {!self && (
         <button

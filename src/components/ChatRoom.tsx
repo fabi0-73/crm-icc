@@ -161,6 +161,7 @@ export function ChatRoom({
   initialMessages,
   hasOlder = false,
   leading = "back",
+  readOnly = false,
 }: {
   roomId: string;
   roomName: string;
@@ -176,6 +177,8 @@ export function ChatRoom({
   hasOlder?: boolean;
   /** Agents have no sidebar or tab bar — their only way out is here. */
   leading?: "back" | "account";
+  /** Admin viewing a room they have not joined. */
+  readOnly?: boolean;
 }) {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
@@ -219,6 +222,7 @@ export function ChatRoom({
       setMembers(roster);
       const me = roster.find((m) => m.id === currentUserId);
       if (!me) {
+        if (readOnly) return;
         if (roomType !== "dm") router.push("/rooms");
         return;
       }
@@ -226,7 +230,7 @@ export function ChatRoom({
     } catch {
       // transient; the next event or a reload reconciles
     }
-  }, [supabase, roomId, currentUserId, roomType, router]);
+  }, [supabase, roomId, currentUserId, roomType, router, readOnly]);
 
   useEffect(() => {
     let channel: ReturnType<typeof subscribeToRoomMembers> | null = null;
@@ -286,11 +290,12 @@ export function ChatRoom({
   // land — otherwise the unread badge for THIS room grows behind your back
   // and reappears the next time the list is refetched.
   const scheduleMarkRead = useCallback(() => {
+    if (readOnly) return;
     if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
     markReadTimerRef.current = setTimeout(() => {
       void markRoomRead(roomId).catch(() => {});
     }, 800);
-  }, [roomId]);
+  }, [roomId, readOnly]);
 
   // The server snapshot can be stale twice over: the client router keeps
   // a visited room's payload for 30s (next.config staleTimes), and even a
@@ -659,15 +664,20 @@ export function ChatRoom({
           )}
         </div>
 
+        {!(roomType === "group" && currentUserRole === "assistant") &&
+          !readOnly && (
         <CallButton
           roomId={roomId}
           roomName={roomName}
+          roomType={roomType}
           currentUserId={currentUserId}
+          currentUserRole={currentUserRole}
           // Deactivated accounts can't answer — never offer them.
           members={members
             .filter((m) => m.is_active !== false)
             .map((m) => ({ id: m.id, full_name: publicDisplayName(m) }))}
         />
+        )}
         <button
           type="button"
           onClick={() => setShowMembers(true)}
@@ -710,10 +720,18 @@ export function ChatRoom({
               </div>
               {day.groups.map((g) => {
                 if (g.kind === "system") {
+                  const callEvent =
+                    g.message.metadata?.event === "call_started" ||
+                    g.message.metadata?.event === "call_ended";
                   return (
                     <div key={g.key} className="flex justify-center py-1.5">
                       <span className="rounded-full bg-line/60 px-3 py-1 text-[11px] text-muted">
                         {g.message.body}
+                        {callEvent && (
+                          <span className="ml-1.5 tabular-nums opacity-80">
+                            · {formatMsgTime(g.message.created_at)}
+                          </span>
+                        )}
                       </span>
                     </div>
                   );
@@ -808,6 +826,7 @@ export function ChatRoom({
       </div>
 
       {/* ── Composer ───────────────────────────────────────────── */}
+      {!readOnly && (
       <div className="shrink-0 border-t border-line/80 bg-paper/95 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur sm:px-3">
         {error && (
           <p className="mx-auto mb-2 w-full max-w-3xl rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700">
@@ -899,6 +918,7 @@ export function ChatRoom({
           </button>
         </form>
       </div>
+      )}
 
       {/* ── Details sheet ──────────────────────────────────────── */}
       <Sheet open={showMembers} onOpenChange={setShowMembers}>

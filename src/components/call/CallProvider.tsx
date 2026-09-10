@@ -34,6 +34,8 @@ import {
 import { IncomingCallOverlay } from "@/components/call/IncomingCallOverlay";
 import { FloatingCallTile } from "@/components/call/FloatingCallTile";
 import { FullScreenCall } from "@/components/call/FullScreenCall";
+import { postCallEvent } from "@/app/actions/rooms";
+import { showDesktopNotification } from "@/lib/notifications";
 
 /** Answered but never connected — give up instead of hanging forever. */
 const CONNECT_TIMEOUT_MS = 25_000;
@@ -617,6 +619,11 @@ export function CallProvider({
         });
         setPhase("ringing");
         startRingtone();
+        showDesktopNotification(
+          p.video ? "Incoming video call" : "Incoming voice call",
+          [p.fromName, p.roomName].filter(Boolean).join(" · ") || "ICC Desk",
+          { tag: `call:${row.call_id}` },
+        );
         if (ringTimerRef.current) clearTimeout(ringTimerRef.current);
         ringTimerRef.current = setTimeout(() => {
           // Caller times out on its own side; just go quiet locally.
@@ -729,6 +736,7 @@ export function CallProvider({
     // peer never sees the hangup and stays stuck in the call.
     cleanup({ purge: false });
     if (id && peer && room) {
+      void postCallEvent(room, "call_ended", "Call ended").catch(() => {});
       void send("hangup", id, peer, room).finally(() => {
         window.setTimeout(() => purgeSignals(id), 2000);
       });
@@ -780,6 +788,11 @@ export function CallProvider({
         };
         await send("invite", callId, peer.id, roomId, invitePayload);
         if (callGenRef.current !== gen) return; // FIX A
+        void postCallEvent(
+          roomId,
+          "call_started",
+          video ? "Video call started" : "Voice call started",
+        ).catch(() => {});
 
         const offer = await pc.createOffer();
         if (callGenRef.current !== gen) return; // FIX A
@@ -886,6 +899,7 @@ export function CallProvider({
   const decline = useCallback(() => {
     const inc = incomingRef.current;
     if (!inc) return;
+    void postCallEvent(inc.roomId, "call_ended", "Call ended").catch(() => {});
     void send("decline", inc.callId, inc.peerId, inc.roomId);
     pendingOfferRef.current = null;
     cleanup();

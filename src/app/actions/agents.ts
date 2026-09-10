@@ -225,3 +225,22 @@ export async function swapAssistants(
   revalidatePath("/rooms");
   return { success: "Assignment updated." };
 }
+
+export async function setAgentManager(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase } = await requireRole(["admin"]);
+  const agentId = String(formData.get("agent_id") ?? "");
+  const managerId = String(formData.get("manager_id") ?? "").trim();
+  if (!agentId) return { error: "Missing agent." };
+
+  const { error } = await supabase.rpc("set_agent_manager", {
+    p_agent_id: agentId,
+    p_manager_id: managerId || null,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/agents/${agentId}`);
+  revalidatePath("/agents");
+  return { success: "Manager assignment saved." };
+}
