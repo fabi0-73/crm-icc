@@ -3,6 +3,8 @@ export type Role = "admin" | "manager" | "assistant" | "agent";
 export type Profile = {
   id: string;
   full_name: string;
+  /** Chat-facing name; null means fall back to full_name. */
+  public_name: string | null;
   role: Role;
   is_active: boolean;
   created_at: string;
@@ -53,11 +55,14 @@ export type RoomMember = {
 export type RoomMemberView = {
   id: string;
   full_name: string;
+  public_name?: string | null;
   /** The person's app-wide role (admin/manager/assistant/agent). */
   role: Role;
   is_active: boolean | null;
   /** Their standing in THIS room. */
   room_role: RoomMemberRole;
+  last_read_at?: string | null;
+  last_delivered_at?: string | null;
 };
 
 export type MessageKind = "text" | "file" | "system";

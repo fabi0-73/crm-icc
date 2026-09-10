@@ -48,7 +48,7 @@ export async function createUserAccount(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { profile: actor } = await requireRole(["admin"]);
+  const { profile: actor } = await requireRole(["admin", "manager"]);
 
   const fullName = String(formData.get("full_name") ?? "").trim();
   const username = String(formData.get("username") ?? "").trim().toLowerCase();
@@ -63,6 +63,10 @@ export async function createUserAccount(
   }
   if (!STAFF_ROLES.includes(role)) {
     return { error: "Invalid role. Agent accounts are created via Agents." };
+  }
+  // Managers may provision regular staff (assistants) only.
+  if (actor.role === "manager" && role !== "assistant") {
+    return { error: "Managers can only add regular users." };
   }
   if (password && password.length < 8) {
     return { error: "Password must be at least 8 characters." };

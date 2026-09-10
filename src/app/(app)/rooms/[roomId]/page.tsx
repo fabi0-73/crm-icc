@@ -4,6 +4,7 @@ import { ChatRoom } from "@/components/ChatRoom";
 import { JoinRoomPrompt } from "@/components/JoinRoomPrompt";
 import { fetchRecentMessages } from "@/lib/supabase/realtime";
 import type { RoomMemberRole, RoomMemberView, RoomType } from "@/lib/types";
+import { publicDisplayName } from "@/lib/display-name";
 
 /** First page of history; older messages load on demand. */
 const INITIAL_MESSAGES = 60;
@@ -53,16 +54,26 @@ export default async function RoomPage({
 
   const { data: memberRows } = await supabase
     .from("room_members")
-    .select("user_id, role")
+    .select("user_id, role, last_read_at, last_delivered_at")
     .eq("room_id", roomId);
 
   const roleById = new Map<string, RoomMemberRole>(
     (memberRows ?? []).map((m) => [m.user_id, m.role as RoomMemberRole]),
   );
+  const readById = new Map(
+    (memberRows ?? []).map((m) => [
+      m.user_id,
+      {
+        last_read_at: (m as { last_read_at?: string }).last_read_at ?? null,
+        last_delivered_at:
+          (m as { last_delivered_at?: string }).last_delivered_at ?? null,
+      },
+    ]),
+  );
   const memberIds = [...roleById.keys()];
   const { data: memberProfiles } = await supabase
     .from("profiles")
-    .select("id, full_name, role, is_active")
+    .select("id, full_name, public_name, role, is_active")
     .in(
       "id",
       memberIds.length ? memberIds : ["00000000-0000-0000-0000-000000000000"],
@@ -77,9 +88,12 @@ export default async function RoomPage({
   const memberList: RoomMemberView[] = (memberProfiles ?? []).map((p) => ({
     id: p.id,
     full_name: p.full_name,
+    public_name: (p as { public_name?: string | null }).public_name ?? null,
     role: p.role,
     is_active: p.is_active,
     room_role: roleById.get(p.id) ?? "member",
+    last_read_at: readById.get(p.id)?.last_read_at ?? null,
+    last_delivered_at: readById.get(p.id)?.last_delivered_at ?? null,
   }));
   const dmOther =
     room.type === "dm"
@@ -89,7 +103,7 @@ export default async function RoomPage({
   return (
     <ChatRoom
       roomId={room.id}
-      roomName={dmOther ? dmOther.full_name : room.name}
+      roomName={dmOther ? publicDisplayName(dmOther) : room.name}
       roomType={room.type}
       roomAvatarUrl={room.avatar_url}
       dmOtherUserId={dmOther?.id ?? null}

@@ -26,7 +26,8 @@ async function loadUsernames(): Promise<Map<string, string>> {
 }
 
 export default async function UsersPage() {
-  const { supabase, profile: self } = await requireRole(["admin"]);
+  const { supabase, profile: self } = await requireRole(["admin", "manager"]);
+  const isAdmin = self.role === "admin";
 
   const [{ data: users, error }, usernames] = await Promise.all([
     supabase
@@ -42,7 +43,12 @@ export default async function UsersPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <PageHeader title="Users" actions={<NewUserButton />} />
+      <PageHeader
+        title="Users"
+        actions={
+          <NewUserButton actorRole={isAdmin ? "admin" : "manager"} />
+        }
+      />
       <Table>
         <THead>
           <Th>Name</Th>
@@ -75,7 +81,9 @@ export default async function UsersPage() {
               </Td>
               <Td>
                 <div className="flex items-center gap-4">
-                  {u.id === self.id ? (
+                  {!isAdmin ? (
+                    <span className="text-muted">—</span>
+                  ) : u.id === self.id ? (
                     <span className="text-muted">You</span>
                   ) : (
                     <ResetPasswordButton userId={u.id} name={u.full_name} />
@@ -83,7 +91,7 @@ export default async function UsersPage() {
                   {/* Agent accounts are archived from the Agents page —
                       flipping them here would leave agents.status and the
                       login state disagreeing. */}
-                  {u.role === "agent" ? (
+                  {!isAdmin ? null : u.role === "agent" ? (
                     <span className="text-muted">Manage on Agents</span>
                   ) : u.id === self.id ? null : u.is_active ? (
                     <ActionForm action={deactivateUser}>
@@ -106,7 +114,7 @@ export default async function UsersPage() {
                       </button>
                     </ActionForm>
                   )}
-                  {u.id !== self.id && (
+                  {isAdmin && u.id !== self.id && (
                     <DeleteUserButton userId={u.id} name={u.full_name} />
                   )}
                 </div>

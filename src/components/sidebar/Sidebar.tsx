@@ -12,10 +12,11 @@ import { NewGroupButton } from "@/components/NewGroupButton";
 import { NewDmButton } from "@/components/NewDmButton";
 import { HashIcon, SignOutIcon } from "@/components/icons";
 import type { MyRoom, Profile } from "@/lib/types";
+import { publicDisplayName } from "@/lib/display-name";
 
 export const NAV: { href: string; label: string; roles: Profile["role"][] }[] = [
   { href: "/agents", label: "Agents", roles: ["admin", "manager"] },
-  { href: "/admin/users", label: "Users", roles: ["admin"] },
+  { href: "/admin/users", label: "Users", roles: ["admin", "manager"] },
   { href: "/admin/audit", label: "Audit", roles: ["admin", "manager"] },
 ];
 
@@ -175,14 +176,14 @@ export function Sidebar({ profile }: { profile: Profile }) {
           title="Account & password"
         >
           <span className="relative shrink-0">
-            <Avatar name={profile.full_name} size="sm" className="!h-7 !w-7 !text-[10px]" />
+            <Avatar name={publicDisplayName(profile)} size="sm" className="!h-7 !w-7 !text-[10px]" />
             <PresenceDot
               online={selfOnline}
               className="absolute -bottom-0.5 -right-0.5 ring-2 ring-ink"
             />
           </span>
           <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-            {profile.full_name}
+            {publicDisplayName(profile)}
           </span>
         </Link>
         <form action={signOut}>

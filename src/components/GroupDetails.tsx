@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Bell,
+  BellOff,
   LogOut,
   Settings,
   ShieldCheck,
@@ -31,6 +33,8 @@ import {
   setRoomMemberRole,
 } from "@/app/actions/rooms";
 import type { Profile, RoomMemberRole, RoomMemberView, RoomType } from "@/lib/types";
+import { publicDisplayName } from "@/lib/display-name";
+import { useMutes } from "@/components/mute/MuteProvider";
 
 type Candidate = Pick<Profile, "id" | "full_name" | "role">;
 
@@ -60,10 +64,12 @@ export function GroupDetails({
   const appManager = currentUserRole === "admin" || currentUserRole === "manager";
   // Group admins run the room; app admins/managers can run any group.
   const canManage = isGroup && (myRoomRole === "admin" || appManager);
-  const canAdd = isGroup; // any member may add staff to a group
+  const canAdd = canManage;
 
   const addModal = useModal();
   const settingsModal = useModal();
+  const { isRoomMuted, toggleRoomMute, isUserMuted, toggleUserMute } = useMutes();
+  const groupMuted = isRoomMuted(roomId);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -156,6 +162,21 @@ export function GroupDetails({
           </p>
         )}
 
+        <div className="px-4 pt-3">
+            <button
+              type="button"
+              onClick={() => toggleRoomMute(roomId)}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-line bg-paper px-3 py-2 text-sm font-medium text-ink hover:bg-mist"
+            >
+              {groupMuted ? (
+                <Bell className="size-4" />
+              ) : (
+                <BellOff className="size-4" />
+              )}
+              {groupMuted ? "Unmute conversation" : "Mute this conversation"}
+            </button>
+          </div>
+
         {canAdd && (
           <div className="px-4 pt-3">
             <button
@@ -179,6 +200,8 @@ export function GroupDetails({
               busy={busy}
               onRemove={() => onRemove(m.id)}
               onSetRole={(role) => onSetRole(m.id, role)}
+              personMuted={m.id !== currentUserId && isUserMuted(m.id)}
+              onTogglePersonMute={() => toggleUserMute(m.id)}
             />
           ))}
         </ul>
@@ -246,6 +269,8 @@ function MemberItem({
   busy,
   onRemove,
   onSetRole,
+  personMuted,
+  onTogglePersonMute,
 }: {
   member: RoomMemberView;
   self: boolean;
@@ -254,16 +279,19 @@ function MemberItem({
   busy: string | null;
   onRemove: () => void;
   onSetRole: (role: RoomMemberRole) => void;
+  personMuted: boolean;
+  onTogglePersonMute: () => void;
 }) {
   const online = useIsOnline(member.id);
   const isAdmin = member.room_role === "admin";
   const rowBusy =
     busy === `remove:${member.id}` || busy === `role:${member.id}`;
+  const shownName = publicDisplayName(member);
 
   return (
     <li className="flex items-center gap-3 rounded-xl px-2.5 py-2.5 hover:bg-mist">
       <span className="relative shrink-0">
-        <Avatar name={member.full_name} size="sm" />
+        <Avatar name={shownName} size="sm" />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
@@ -271,7 +299,7 @@ function MemberItem({
       </span>
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1.5 truncate text-sm font-medium text-ink">
-          {member.full_name}
+          {shownName}
           {self && <span className="text-[12px] text-muted">(you)</span>}
           {isAdmin && (
             <span className="inline-flex items-center gap-0.5 rounded-full bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700">
@@ -284,6 +312,26 @@ function MemberItem({
           {member.is_active === false && " · deactivated"}
         </p>
       </div>
+
+      {!self && (
+        <button
+          type="button"
+          onClick={onTogglePersonMute}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted hover:bg-mist"
+          aria-label={
+            personMuted
+              ? `Unmute ${shownName}`
+              : `Mute notifications from ${shownName}`
+          }
+          title={personMuted ? "Unmute this person" : "Mute this person"}
+        >
+          {personMuted ? (
+            <BellOff className="size-4 text-ink" />
+          ) : (
+            <Bell className="size-4" />
+          )}
+        </button>
+      )}
 
       {canManage && !self && (
         <div className="flex shrink-0 items-center gap-1">
@@ -301,7 +349,7 @@ function MemberItem({
             onClick={onRemove}
             disabled={rowBusy}
             className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
-            aria-label={`Remove ${member.full_name}`}
+            aria-label={`Remove ${shownName}`}
             title="Remove from group"
           >
             <UserMinus className="size-4" />

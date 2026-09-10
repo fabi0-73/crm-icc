@@ -5,7 +5,7 @@ import { Avatar } from "@/components/Avatar";
 import { PageHeader } from "@/components/ui/PageHeader";
 
 export default async function AgentsPage() {
-  const { supabase } = await requireRole(["admin", "manager"]);
+  const { supabase, profile } = await requireRole(["admin", "manager"]);
 
   const { data: agents, error } = await supabase
     .from("agents")
@@ -18,7 +18,10 @@ export default async function AgentsPage() {
 
   return (
     <div className="mx-auto h-full max-w-3xl overflow-y-auto bg-paper sm:border-x sm:border-line">
-      <PageHeader title="Agents" actions={<CreateAgentButton />} />
+      <PageHeader
+        title="Agents"
+        actions={profile.role === "admin" ? <CreateAgentButton /> : undefined}
+      />
       <ul>
         {(agents ?? []).map((a) => (
           <li key={a.id} className="border-b border-line">

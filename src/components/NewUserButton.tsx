@@ -9,7 +9,11 @@ import { USERNAME_HINT } from "@/lib/username";
 import { Button } from "@/components/ui/Button";
 import { Input, Label, Select } from "@/components/ui/Field";
 
-export function NewUserButton() {
+export function NewUserButton({
+  actorRole = "admin",
+}: {
+  actorRole?: "admin" | "manager";
+}) {
   const { open, openModal, closeModal } = useModal();
   // Controlled: React resets uncontrolled fields when a form action
   // returns, so a rejected username used to wipe everything typed.
@@ -18,6 +22,7 @@ export function NewUserButton() {
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("assistant");
   const [result, setResult] = useState<ActionState | null>(null);
+  const managerOnly = actorRole === "manager";
 
   function start() {
     setFullName("");
@@ -94,19 +99,34 @@ export function NewUserButton() {
             </div>
             <div>
               <Label htmlFor="new-user-role">Role</Label>
-              <Select
-                id="new-user-role"
-                name="role"
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-              >
-                <option value="admin">Admin</option>
-                <option value="manager">Manager</option>
-                <option value="assistant">Assistant</option>
-              </Select>
-              <p className="mt-1 text-xs text-muted">
-                Agent accounts are created from the Agents page.
-              </p>
+              {managerOnly ? (
+                <>
+                  <input type="hidden" name="role" value="assistant" />
+                  <p className="rounded-lg border border-line bg-mist px-3.5 py-2.5 text-sm text-ink">
+                    Regular user (assistant)
+                  </p>
+                  <p className="mt-1 text-xs text-muted">
+                    Managers can add regular users only. Agents are created by
+                    admins.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Select
+                    id="new-user-role"
+                    name="role"
+                    value={role}
+                    onChange={(e) => setRole(e.target.value)}
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="manager">Manager</option>
+                    <option value="assistant">Assistant</option>
+                  </Select>
+                  <p className="mt-1 text-xs text-muted">
+                    Agent accounts are created from the Agents page.
+                  </p>
+                </>
+              )}
             </div>
             <Button type="submit" className="w-full">
               Create user

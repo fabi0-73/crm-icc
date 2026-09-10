@@ -5,6 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
+  Bell,
+  BellOff,
+  Check,
+  CheckCheck,
   ChevronLeft,
   CircleUserRound,
   FileText,
@@ -12,6 +16,7 @@ import {
   Info,
   Paperclip,
   SendHorizontal,
+  X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -24,11 +29,12 @@ import {
   subscribeToRoomMessages,
   type TypingEvent,
 } from "@/lib/supabase/realtime";
-import { markRoomRead } from "@/app/actions/rooms";
+import { markRoomDelivered, markRoomRead } from "@/app/actions/rooms";
 import { CallButton } from "@/components/call/CallButton";
 import { Avatar } from "@/components/Avatar";
 import { PresenceDot } from "@/components/PresenceDot";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
+import { useMutes } from "@/components/mute/MuteProvider";
 import {
   Sheet,
   SheetContent,
@@ -38,6 +44,8 @@ import {
 } from "@/components/uikit/sheet";
 import { GroupDetails } from "@/components/GroupDetails";
 import { buildDaySections } from "@/lib/chat/grouping";
+import { publicDisplayName } from "@/lib/display-name";
+import { receiptStatus } from "@/lib/receipts";
 import type {
   Message,
   Role,
@@ -79,8 +87,63 @@ function formatBytes(n: number | null) {
   return `${(n / 1048576).toFixed(1)} MB`;
 }
 
+function isImageFile(mime: string | null, name: string) {
+  return (mime ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
+}
+
 function isImage(msg: Message) {
-  return msg.kind === "file" && (msg.attachment_mime ?? "").startsWith("image/");
+  return (
+    msg.kind === "file" &&
+    isImageFile(msg.attachment_mime, msg.attachment_name ?? msg.body)
+  );
+}
+
+type PackedAttachment = {
+  path: string;
+  name: string;
+  size: number | null;
+  mime: string | null;
+};
+
+function packedAttachments(msg: Message): PackedAttachment[] {
+  const extras = Array.isArray(msg.metadata?.attachments)
+    ? (msg.metadata.attachments as PackedAttachment[]).filter(
+        (a) => a && typeof a.path === "string",
+      )
+    : [];
+  const primary =
+    msg.attachment_path
+      ? [
+          {
+            path: msg.attachment_path,
+            name: msg.attachment_name ?? msg.body,
+            size: msg.attachment_size,
+            mime: msg.attachment_mime,
+          },
+        ]
+      : [];
+  return [...primary, ...extras];
+}
+
+function ReceiptTicks({ status }: { status: "sent" | "delivered" | "read" }) {
+  const label =
+    status === "read"
+      ? "Seen"
+      : status === "delivered"
+        ? "Delivered"
+        : "Sent";
+  if (status === "sent") {
+    return (
+      <Check className="size-3.5" aria-label={label} title={label} />
+    );
+  }
+  return (
+    <CheckCheck
+      className={`size-3.5 ${status === "read" ? "text-sky-500" : ""}`}
+      aria-label={label}
+      title={label}
+    />
+  );
 }
 
 type SignFn = (path: string) => Promise<string | null>;
@@ -116,13 +179,14 @@ export function ChatRoom({
 }) {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
+  const { isUserMuted, toggleUserMute } = useMutes();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [members, setMembers] = useState<RoomMemberView[]>(initialMembers);
   const [myRole, setMyRole] = useState<RoomMemberRole>(myRoomRole);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showMembers, setShowMembers] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [typers, setTypers] = useState<Record<string, number>>({});
   const [older, setOlder] = useState({ has: hasOlder, loading: false });
 
@@ -165,7 +229,6 @@ export function ChatRoom({
   }, [supabase, roomId, currentUserId, roomType, router]);
 
   useEffect(() => {
-    if (roomType === "dm") return; // dm membership is fixed
     let channel: ReturnType<typeof subscribeToRoomMembers> | null = null;
     let cancelled = false;
     (async () => {
@@ -179,11 +242,11 @@ export function ChatRoom({
       cancelled = true;
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [supabase, roomId, roomType, refreshMembers]);
+  }, [supabase, roomId, refreshMembers]);
 
   const memberMap = useMemo(() => {
     const m = new Map<string, string>();
-    members.forEach((p) => m.set(p.id, p.full_name));
+    members.forEach((p) => m.set(p.id, publicDisplayName(p)));
     return m;
   }, [members]);
 
@@ -250,6 +313,7 @@ export function ChatRoom({
         if (newer.length < 100) break;
       }
       await markRoomRead(roomId);
+      await markRoomDelivered(roomId).catch(() => {});
     } catch {
       // ignore transient network errors
     }
@@ -420,7 +484,14 @@ export function ChatRoom({
   async function sendText(e: React.FormEvent) {
     e.preventDefault();
     const text = body.trim();
-    if (!text || sending) return;
+    if (sending) return;
+    if (!text && pendingFiles.length === 0) return;
+
+    if (pendingFiles.length > 0) {
+      await sendAttachments(pendingFiles, text);
+      return;
+    }
+
     setSending(true);
     setError(null);
 
@@ -446,36 +517,63 @@ export function ChatRoom({
     await markRoomRead(roomId).catch(() => {});
   }
 
-  async function sendFile(file: File) {
-    if (file.size > MAX_FILE_BYTES) {
-      setError("File must be under 25 MB.");
-      return;
+  async function sendAttachments(files: File[], caption: string) {
+    for (const file of files) {
+      if (file.size > MAX_FILE_BYTES) {
+        setError("Each file must be under 25 MB.");
+        return;
+      }
     }
     setSending(true);
     setError(null);
 
-    const path = `${roomId}/${crypto.randomUUID()}/${safeKeyName(file.name)}`;
-    const { error: uploadError } = await supabase.storage
-      .from("attachments")
-      .upload(path, file, { contentType: file.type, upsert: false });
+    const uploaded: {
+      path: string;
+      name: string;
+      size: number;
+      mime: string | null;
+    }[] = [];
 
-    if (uploadError) {
-      setSending(false);
-      setError(uploadError.message);
-      return;
+    for (const file of files) {
+      const path = `${roomId}/${crypto.randomUUID()}/${safeKeyName(file.name)}`;
+      const { error: uploadError } = await supabase.storage
+        .from("attachments")
+        .upload(path, file, { contentType: file.type, upsert: false });
+      if (uploadError) {
+        setSending(false);
+        setError(uploadError.message);
+        return;
+      }
+      uploaded.push({
+        path,
+        name: file.name,
+        size: file.size,
+        mime: file.type || null,
+      });
     }
 
+    const first = uploaded[0];
+    if (!first) {
+      setSending(false);
+      return;
+    }
+    const rest = uploaded.slice(1);
     const { data, error: insertError } = await supabase
       .from("messages")
       .insert({
         room_id: roomId,
         sender_id: currentUserId,
         kind: "file",
-        body: file.name,
-        attachment_path: path,
-        attachment_name: file.name,
-        attachment_size: file.size,
-        attachment_mime: file.type || null,
+        body: caption || first.name,
+        attachment_path: first.path,
+        attachment_name: first.name,
+        attachment_size: first.size,
+        attachment_mime: first.mime,
+        metadata: rest.length
+          ? { attachments: rest }
+          : caption
+            ? { caption: true }
+            : null,
       })
       .select("*")
       .single();
@@ -485,6 +583,9 @@ export function ChatRoom({
       setError(insertError.message);
       return;
     }
+    setBody("");
+    setPendingFiles([]);
+    requestAnimationFrame(autoresize);
     if (data) mergeMessage(data as Message);
     await markRoomRead(roomId).catch(() => {});
   }
@@ -563,7 +664,9 @@ export function ChatRoom({
           roomName={roomName}
           currentUserId={currentUserId}
           // Deactivated accounts can't answer — never offer them.
-          members={members.filter((m) => m.is_active !== false)}
+          members={members
+            .filter((m) => m.is_active !== false)
+            .map((m) => ({ id: m.id, full_name: publicDisplayName(m) }))}
         />
         <button
           type="button"
@@ -638,9 +741,16 @@ export function ChatRoom({
                       ))}
                       <p
                         suppressHydrationWarning
-                        className="mt-1 text-[11px] tabular-nums text-muted/80"
+                        className="mt-1 flex items-center gap-1 text-[11px] tabular-nums text-muted/80"
                       >
                         {formatMsgTime(last.created_at)}
+                        <ReceiptTicks
+                          status={receiptStatus(
+                            last.created_at,
+                            members,
+                            currentUserId,
+                          )}
+                        />
                       </p>
                     </div>
                   );
@@ -704,6 +814,29 @@ export function ChatRoom({
             {error}
           </p>
         )}
+        {pendingFiles.length > 0 && (
+          <div className="mx-auto mb-2 flex w-full max-w-3xl flex-wrap gap-2">
+            {pendingFiles.map((file, i) => (
+              <span
+                key={`${file.name}-${i}`}
+                className="flex max-w-full items-center gap-1.5 rounded-full border border-line bg-mist px-2.5 py-1 text-[12px] text-ink"
+              >
+                <FileText className="size-3.5 shrink-0 text-muted" />
+                <span className="truncate">{file.name}</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPendingFiles((prev) => prev.filter((_, j) => j !== i))
+                  }
+                  className="rounded-full p-0.5 text-muted hover:bg-paper hover:text-ink"
+                  aria-label={`Remove ${file.name}`}
+                >
+                  <X className="size-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <form
           onSubmit={sendText}
           className="mx-auto flex w-full max-w-3xl items-end gap-1.5"
@@ -711,10 +844,13 @@ export function ChatRoom({
           <input
             ref={fileRef}
             type="file"
+            multiple
             className="hidden"
             onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void sendFile(f);
+              const list = e.target.files;
+              if (!list?.length) return;
+              const next = Array.from(list);
+              setPendingFiles((prev) => [...prev, ...next]);
               e.target.value = "";
             }}
           />
@@ -755,7 +891,7 @@ export function ChatRoom({
           </div>
           <button
             type="submit"
-            disabled={sending || !body.trim()}
+            disabled={sending || (!body.trim() && pendingFiles.length === 0)}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-grad text-white shadow-brand transition-[opacity,transform] hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:shadow-none"
             aria-label="Send"
           >
@@ -776,6 +912,24 @@ export function ChatRoom({
                 <SheetTitle>Details</SheetTitle>
                 <SheetDescription>Direct message</SheetDescription>
               </SheetHeader>
+              {dmOtherUserId && (
+                <div className="px-4 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => toggleUserMute(dmOtherUserId)}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-line bg-paper px-3 py-2 text-sm font-medium text-ink hover:bg-mist"
+                  >
+                    {isUserMuted(dmOtherUserId) ? (
+                      <Bell className="size-4" />
+                    ) : (
+                      <BellOff className="size-4" />
+                    )}
+                    {isUserMuted(dmOtherUserId)
+                      ? "Unmute this person"
+                      : "Mute notifications from this person"}
+                  </button>
+                </div>
+              )}
               <ul className="flex-1 overflow-y-auto p-2">
                 {members.map((m) => (
                   <li
@@ -851,6 +1005,53 @@ function Bubble({
   sign: SignFn;
   onMediaLoad: () => void;
 }) {
+  const shape = mine
+    ? `rounded-2xl ${tail ? "rounded-br-md" : ""}`
+    : `rounded-2xl ${tail ? "rounded-bl-md" : ""}`;
+  const surface = mine
+    ? "bg-brand-grad text-white shadow-bubble"
+    : "border border-line/70 bg-paper text-ink shadow-xs";
+
+  const files = packedAttachments(msg);
+  if (files.length > 1 || (msg.kind === "file" && files.length === 1 && msg.body && msg.body !== files[0].name)) {
+    return (
+      <div className={`flex flex-col gap-1.5 px-2 py-2 ${shape} ${surface}`}>
+        {msg.kind === "file" && msg.body && msg.body !== files[0]?.name && (
+          <p className="whitespace-pre-wrap break-words px-1.5 text-[15px] leading-relaxed">
+            {msg.body}
+          </p>
+        )}
+        {files.map((file) =>
+          isImageFile(file.mime, file.name) ? (
+            <AttachmentImage
+              key={file.path}
+              path={file.path}
+              name={file.name}
+              sign={sign}
+              onLoaded={onMediaLoad}
+              tailSide={mine ? "right" : "left"}
+              tail={false}
+            />
+          ) : (
+            <AttachmentFile
+              key={file.path}
+              msg={{
+                ...msg,
+                attachment_path: file.path,
+                attachment_name: file.name,
+                attachment_size: file.size,
+                attachment_mime: file.mime,
+              }}
+              mine={mine}
+              sign={sign}
+              className="rounded-xl"
+            />
+          ),
+        )}
+      </div>
+    );
+  }
+
   if (isImage(msg) && msg.attachment_path) {
     return (
       <AttachmentImage
@@ -863,13 +1064,6 @@ function Bubble({
       />
     );
   }
-
-  const shape = mine
-    ? `rounded-2xl ${tail ? "rounded-br-md" : ""}`
-    : `rounded-2xl ${tail ? "rounded-bl-md" : ""}`;
-  const surface = mine
-    ? "bg-brand-grad text-white shadow-bubble"
-    : "border border-line/70 bg-paper text-ink shadow-xs";
 
   if (msg.kind === "file" && msg.attachment_path) {
     return (
@@ -1011,14 +1205,14 @@ function MemberRow({
   member,
   self,
 }: {
-  member: Pick<RoomMemberView, "id" | "full_name" | "role">;
+  member: Pick<RoomMemberView, "id" | "full_name" | "public_name" | "role">;
   self?: boolean;
 }) {
   const online = useIsOnline(member.id);
   return (
     <>
       <span className="relative shrink-0">
-        <Avatar name={member.full_name} size="sm" />
+        <Avatar name={publicDisplayName(member)} size="sm" />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
@@ -1026,7 +1220,7 @@ function MemberRow({
       </span>
       <div className="min-w-0">
         <p className="truncate text-sm font-medium text-ink">
-          {member.full_name}
+          {publicDisplayName(member)}
           {self && <span className="ml-1.5 text-[12px] text-muted">(you)</span>}
         </p>
         <p className="text-xs capitalize text-muted">{member.role}</p>

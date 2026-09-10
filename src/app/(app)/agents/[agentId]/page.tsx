@@ -13,7 +13,7 @@ export default async function AgentDetailPage({
   params: Promise<{ agentId: string }>;
 }) {
   const { agentId } = await params;
-  const { supabase } = await requireRole(["admin", "manager"]);
+  const { supabase, profile } = await requireRole(["admin", "manager"]);
 
   const { data: agent } = await supabase
     .from("agents")
@@ -117,7 +117,7 @@ export default async function AgentDetailPage({
           )}
         </div>
 
-        {agent.status === "active" && (
+        {profile.role === "admin" && agent.status === "active" && (
           <ActionForm action={archiveAgent} className="space-y-2">
             <input type="hidden" name="agent_id" value={agent.id} />
             <button

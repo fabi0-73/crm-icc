@@ -185,15 +185,18 @@ export async function fetchRoomMembers(
 ): Promise<RoomMemberView[]> {
   const { data, error } = await supabase
     .from("room_members")
-    .select("role, profiles!inner(id, full_name, role, is_active)")
+    .select("role, last_read_at, last_delivered_at, profiles!inner(id, full_name, public_name, role, is_active)")
     .eq("room_id", roomId);
   if (error) throw error;
 
   type Row = {
     role: RoomMemberRole;
+    last_read_at: string | null;
+    last_delivered_at: string | null;
     profiles: {
       id: string;
       full_name: string;
+      public_name: string | null;
       role: RoomMemberView["role"];
       is_active: boolean | null;
     } | null;
@@ -206,9 +209,12 @@ export async function fetchRoomMembers(
     .map((r) => ({
       id: r.profiles.id,
       full_name: r.profiles.full_name,
+      public_name: r.profiles.public_name,
       role: r.profiles.role,
       is_active: r.profiles.is_active,
       room_role: r.role,
+      last_read_at: r.last_read_at,
+      last_delivered_at: r.last_delivered_at,
     }));
 }
 

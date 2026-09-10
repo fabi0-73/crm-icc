@@ -185,3 +185,35 @@ body {
     radial-gradient(48rem 30rem at -8% 105%, rgb(30 64 175 / 0.22), transparent 55%),
     linear-gradient(180deg, #0d1528 0%, #0b1120 100%);
 }
+
+.dark {
+  --color-ink: #e2e8f0;
+  --color-ink-soft: #cbd5e1;
+  --color-mist: #0b1220;
+  --color-paper: #1e293b;
+  --color-line: #334155;
+  --color-line-strong: #475569;
+  --color-muted: #94a3b8;
+  --color-bubble-peer: #1e293b;
+  --background: #0b1220;
+  --foreground: #e2e8f0;
+  --card: #1e293b;
+  --card-foreground: #e2e8f0;
+  --popover: #1e293b;
+  --popover-foreground: #e2e8f0;
+  --secondary: #1e293b;
+  --secondary-foreground: #e2e8f0;
+  --accent: #1e293b;
+  --accent-foreground: #e2e8f0;
+  --border: #334155;
+  --input: #475569;
+}
+
+.dark .bg-stream {
+  background-color: #0f172a;
+  background-image: none;
+}
+
+.dark {
+  color-scheme: dark;
+}

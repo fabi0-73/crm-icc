@@ -45,7 +45,7 @@ export function FloatingCallTile() {
   // of freezing on the last shared frame.
   const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
   const fitClass =
-    sharing || (!call?.video && remoteHasVideo) ? "object-contain" : "object-cover";
+    sharing || remoteHasVideo ? "object-contain" : "object-cover";
 
   useEffect(() => {
     const el = remoteVideoRef.current;

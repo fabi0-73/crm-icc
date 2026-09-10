@@ -4,8 +4,10 @@ import { SidebarShell } from "@/components/sidebar/SidebarShell";
 import { CallProvider } from "@/components/call/CallProvider";
 import { PresenceProvider } from "@/components/presence/PresenceProvider";
 import { KeyboardInsets } from "@/components/mobile/KeyboardInsets";
+import { MuteProvider } from "@/components/mute/MuteProvider";
 import { requireProfile } from "@/lib/auth";
 import { sitePath } from "@/lib/site-url";
+import { publicDisplayName } from "@/lib/display-name";
 import type { MyRoom } from "@/lib/types";
 
 export default async function AppLayout({
@@ -29,28 +31,34 @@ export default async function AppLayout({
 
   const { supabase, profile } = ctx;
 
+  const displayName = publicDisplayName(profile);
+
   // CallProvider + PresenceProvider wrap BOTH branches so agents
   // ring and register presence too; agents keep the bare layout.
   if (profile.role === "agent") {
     return (
-      <CallProvider userId={profile.id} userName={profile.full_name}>
-        <PresenceProvider userId={profile.id}>
-          <KeyboardInsets />
-          <div className="h-app">{children}</div>
-        </PresenceProvider>
-      </CallProvider>
+      <MuteProvider userId={profile.id}>
+        <CallProvider userId={profile.id} userName={displayName}>
+          <PresenceProvider userId={profile.id}>
+            <KeyboardInsets />
+            <div className="h-app">{children}</div>
+          </PresenceProvider>
+        </CallProvider>
+      </MuteProvider>
     );
   }
 
   const { data } = await supabase.rpc("get_my_rooms");
   return (
-    <CallProvider userId={profile.id} userName={profile.full_name}>
-      <PresenceProvider userId={profile.id}>
-        <KeyboardInsets />
-        <SidebarShell profile={profile} initialRooms={(data ?? []) as MyRoom[]}>
-          {children}
-        </SidebarShell>
-      </PresenceProvider>
-    </CallProvider>
+    <MuteProvider userId={profile.id}>
+      <CallProvider userId={profile.id} userName={displayName}>
+        <PresenceProvider userId={profile.id}>
+          <KeyboardInsets />
+          <SidebarShell profile={profile} initialRooms={(data ?? []) as MyRoom[]}>
+            {children}
+          </SidebarShell>
+        </PresenceProvider>
+      </CallProvider>
+    </MuteProvider>
   );
 }

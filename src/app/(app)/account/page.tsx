@@ -5,12 +5,17 @@ import { signOut } from "@/app/actions/auth";
 import { emailToUsername } from "@/lib/username";
 import { ChangePasswordForm } from "@/components/PasswordForms";
 import { Avatar } from "@/components/Avatar";
+import { DarkModeToggle } from "@/components/account/DarkModeToggle";
+import { PublicNameForm } from "@/components/account/PublicNameForm";
+import { publicDisplayName } from "@/lib/display-name";
 
 /** Every role reaches this page — it is the only sign-out and
  *  password-change surface an agent has. */
 export default async function AccountPage() {
   const { user, profile } = await requireProfile();
   const username = emailToUsername(user.email ?? "");
+
+  const shown = publicDisplayName(profile);
 
   return (
     <div className="h-full overflow-y-auto bg-mist">
@@ -27,10 +32,10 @@ export default async function AccountPage() {
 
       <div className="mx-auto w-full max-w-md space-y-4 p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
         <div className="flex items-center gap-3 rounded-2xl border border-line bg-paper p-4 shadow-xs">
-          <Avatar name={profile.full_name} />
+          <Avatar name={shown} />
           <div className="min-w-0">
             <p className="truncate text-[15px] font-semibold text-ink">
-              {profile.full_name}
+              {shown}
             </p>
             <p className="truncate font-mono text-[13px] text-muted">
               {username}
@@ -38,6 +43,29 @@ export default async function AccountPage() {
             <p className="text-[12px] capitalize text-muted">{profile.role}</p>
           </div>
         </div>
+
+        <div className="space-y-2">
+          <h2 className="px-1 text-[13px] font-semibold text-muted">
+            Settings
+          </h2>
+          <DarkModeToggle />
+        </div>
+
+        {(profile.role === "assistant" || profile.role === "agent") && (
+          <div className="rounded-2xl border border-line bg-paper p-4 shadow-xs">
+            <h2 className="mb-1 text-[15px] font-semibold text-ink">
+              Public name
+            </h2>
+            <p className="mb-4 text-[13px] text-muted">
+              This is what other people see in chats. It is separate from your
+              login and role.
+            </p>
+            <PublicNameForm
+              fullName={profile.full_name}
+              publicName={profile.public_name}
+            />
+          </div>
+        )}
 
         <div className="rounded-2xl border border-line bg-paper p-4 shadow-xs">
           <h2 className="mb-1 text-[15px] font-semibold text-ink">

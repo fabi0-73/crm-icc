@@ -44,7 +44,7 @@ export function FullScreenCall() {
   // after the peer stops sharing.
   const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
   const fitClass =
-    sharing || (!call?.video && remoteHasVideo) ? "object-contain" : "object-cover";
+    sharing || remoteHasVideo ? "object-contain" : "object-cover";
 
   useEffect(() => {
     const el = remoteVideoRef.current;

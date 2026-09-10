@@ -18,10 +18,7 @@ export async function createAgent(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { profile: actor, supabase } = await requireRole([
-    "admin",
-    "manager",
-  ]);
+  const { profile: actor, supabase } = await requireRole(["admin"]);
 
   const username = String(formData.get("username") ?? "").trim().toLowerCase();
   const displayName = String(formData.get("display_name") ?? "").trim();
@@ -110,7 +107,7 @@ export async function archiveAgent(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { profile: actor } = await requireRole(["admin", "manager"]);
+  const { profile: actor } = await requireRole(["admin"]);
   const agentId = String(formData.get("agent_id") ?? "");
   if (!agentId) return { error: "Missing agent." };
 

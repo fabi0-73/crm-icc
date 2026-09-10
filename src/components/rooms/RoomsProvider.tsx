@@ -24,8 +24,10 @@ import {
   subscribeToAllMessageInserts,
   subscribeToMyMembershipChanges,
 } from "@/lib/supabase/realtime";
+import { markRoomDelivered } from "@/app/actions/rooms";
 import { installAutoResume, playMessageChime } from "@/lib/call/tones";
 import type { MyRoom } from "@/lib/types";
+import { useMutes } from "@/components/mute/MuteProvider";
 
 type RoomsContextValue = {
   rooms: MyRoom[];
@@ -55,6 +57,7 @@ export function RoomsProvider({
   children: React.ReactNode;
 }) {
   const supabase = useMemo(() => createClient(), []);
+  const { isRoomMuted, isUserMuted } = useMutes();
   const [rooms, setRooms] = useState(initialRooms);
   const pathname = usePathname();
   const activeRef = useRef<string | null>(activeRoomId(pathname));
@@ -90,11 +93,18 @@ export function RoomsProvider({
       if (cancelled) return;
       channel = subscribeToAllMessageInserts(supabase, (msg) => {
         if (msg.sender_id === currentUserId) return;
+        void markRoomDelivered(msg.room_id).catch(() => {});
         // Someone else's message that you are not currently reading:
         // another room, or this room while the tab is hidden/unfocused.
         // System notices ("X joined") stay silent.
+        const mutedRoom = isRoomMuted(msg.room_id);
+        const mutedPerson = Boolean(
+          msg.sender_id && isUserMuted(msg.sender_id),
+        );
         if (
           msg.kind !== "system" &&
+          !mutedRoom &&
+          !mutedPerson &&
           (msg.room_id !== activeRef.current ||
             document.visibilityState !== "visible" ||
             !document.hasFocus())
@@ -132,7 +142,7 @@ export function RoomsProvider({
       cancelled = true;
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [supabase, currentUserId, refetch]);
+  }, [supabase, currentUserId, refetch, isRoomMuted, isUserMuted]);
 
   // Being added to or removed from a room produces no message the current
   // list would notice, and room_members is not something the message

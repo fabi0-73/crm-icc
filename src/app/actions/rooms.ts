@@ -91,9 +91,8 @@ export async function addRoomMember(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  // Any active staff member may reach the RPC; the group-vs-workspace
-  // and admin-only rules are enforced there against the caller's
-  // membership, not by app role alone.
+  // Assistants may call this only when they are a room admin; the RPC
+  // enforces that. App admins/managers may add to any group.
   const { supabase } = await requireRole(["admin", "manager", "assistant"]);
   const roomId = String(formData.get("room_id") ?? "");
   const userId = String(formData.get("user_id") ?? "");
@@ -215,4 +214,9 @@ export async function setRoomAvatar(
 export async function markRoomRead(roomId: string) {
   const { supabase } = await requireProfile();
   await supabase.rpc("mark_room_read", { p_room_id: roomId });
+}
+
+export async function markRoomDelivered(roomId: string) {
+  const { supabase } = await requireProfile();
+  await supabase.rpc("mark_room_delivered", { p_room_id: roomId });
 }

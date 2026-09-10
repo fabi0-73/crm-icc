@@ -576,6 +576,14 @@ export function CallProvider({
           // or media this tab spun up for the same call can't leak.
           cleanup();
         }
+        // Another tab of ours ended the call — this tab must drop too.
+        if (
+          row.kind === "hangup" &&
+          callIdRef.current &&
+          callIdRef.current === row.call_id
+        ) {
+          cleanup();
+        }
         return;
       }
 
@@ -632,9 +640,9 @@ export function CallProvider({
           } else if (phaseRef.current === "ringing") {
             showNotice("Missed call");
           }
-          // The other side is done with this call either way; its rows
-          // have already been broadcast, so purging here is safe.
-          cleanup({ purge: true });
+          // Don't purge here — the peer that hung up delays the delete so
+          // this INSERT can land on every device first.
+          cleanup();
         }
         return;
       }
@@ -713,11 +721,19 @@ export function CallProvider({
   handlingRef.current = handleSignal;
 
   const hangup = useCallback(() => {
-    if (callIdRef.current && peerIdRef.current && roomIdRef.current) {
-      void send("hangup", callIdRef.current, peerIdRef.current, roomIdRef.current);
+    const id = callIdRef.current;
+    const peer = peerIdRef.current;
+    const room = roomIdRef.current;
+    // Tear down local media immediately, but do not delete signaling
+    // rows until the hangup insert has been delivered — otherwise the
+    // peer never sees the hangup and stays stuck in the call.
+    cleanup({ purge: false });
+    if (id && peer && room) {
+      void send("hangup", id, peer, room).finally(() => {
+        window.setTimeout(() => purgeSignals(id), 2000);
+      });
     }
-    cleanup({ purge: true });
-  }, [cleanup, send]);
+  }, [cleanup, purgeSignals, send]);
 
   // The ICE handler is created before hangup exists, so it ends calls
   // through this ref.
@@ -1061,9 +1077,18 @@ export function CallProvider({
 
     try {
       const screen = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
+        video: {
+          displaySurface: "monitor",
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { max: 30 },
+        },
         audio: false,
-      });
+        preferCurrentTab: false,
+        selfBrowserSurface: "include",
+        surfaceSwitching: "include",
+        monitorTypeSurfaces: "include",
+      } as DisplayMediaStreamOptions);
       const screenTrack = screen.getVideoTracks()[0];
       if (!screenTrack) {
         screen.getTracks().forEach((t) => t.stop());

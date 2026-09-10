@@ -23,6 +23,7 @@ import {
   DrawerTitle,
 } from "@/components/uikit/drawer";
 import type { Profile } from "@/lib/types";
+import { publicDisplayName } from "@/lib/display-name";
 
 /** Admin destinations that live inside the "You" drawer on mobile. */
 const DRAWER_NAV: {
@@ -43,7 +44,7 @@ const DRAWER_NAV: {
     href: "/admin/users",
     label: "User management",
     sub: "Create staff logins and reset passwords",
-    roles: ["admin"],
+    roles: ["admin", "manager"],
     icon: UserCog,
   },
   {
@@ -140,7 +141,7 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
 
           <TabButton active={youOpen} label="You" onClick={() => setYouOpen(true)}>
             <Avatar
-              name={profile.full_name}
+              name={publicDisplayName(profile)}
               size="sm"
               className="!h-6 !w-6 !text-[9px]"
             />
@@ -161,7 +162,7 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
               className="-mx-2 flex items-center gap-3 rounded-2xl px-2 py-3 active:bg-mist"
             >
               <span className="relative shrink-0">
-                <Avatar name={profile.full_name} />
+                <Avatar name={publicDisplayName(profile)} />
                 <PresenceDot
                   online={selfOnline}
                   className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
@@ -169,7 +170,7 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[15px] font-semibold text-ink">
-                  {profile.full_name}
+                  {publicDisplayName(profile)}
                 </p>
                 <p className="text-[13px] text-muted">
                   Account &amp; password
