@@ -755,10 +755,11 @@ export function CallProvider({
       peersRef.current.delete(peerId);
       bumpGroup();
       if (opts?.endIfEmpty && peersRef.current.size === 0) {
-        // A group call with no peers left is over. Purge is safe — the call
-        // has ended for everyone.
+        // Everyone we were connected to has intentionally left. End locally
+        // but do NOT purge — the call_id's signal rows are shared, and other
+        // participants may still be mid-handshake with each other.
         showNotice("Call ended");
-        cleanup({ purge: true });
+        cleanup();
       }
     },
     [bumpGroup, cleanup, showNotice],
@@ -889,7 +890,11 @@ export function CallProvider({
       pc.onconnectionstatechange = () => {
         const s = pc.connectionState;
         if (s === "failed" || s === "closed") {
-          dropGroupPeer(peerId, { endIfEmpty: true });
+          // A transient failure must NOT end the call — drop just this edge;
+          // the reconciliation heartbeat re-announces and re-pairs. Ending
+          // here (or on the last peer) is what fragmented a mesh into
+          // "separate calls" once a single connection dropped.
+          dropGroupPeer(peerId, { endIfEmpty: false });
         }
       };
       bumpGroup();
@@ -1109,6 +1114,10 @@ export function CallProvider({
       // A hangup applies whether we are still ringing or already joined.
       if (row.kind === "hangup") {
         if (!groupRef.current || callIdRef.current !== row.call_id) return;
+        // They left for good — stop the heartbeat re-announcing to them.
+        groupMembersRef.current = groupMembersRef.current.filter(
+          (id) => id !== row.from_user,
+        );
         if (acceptedRef.current) {
           // A connected peer left. Drop just their tile; if they were the last
           // remaining peer, the call ends for us too.
@@ -1358,7 +1367,8 @@ export function CallProvider({
         void send("hangup", callId, peerId, roomId, { group: true });
       }
     }
-    cleanup({ purge: true });
+    // No purge: the shared call_id rows belong to everyone in the mesh.
+    cleanup();
   }, [cleanup, send, userId]);
 
   const hangup = useCallback(() => {
@@ -1375,6 +1385,36 @@ export function CallProvider({
   // The ICE handler is created before hangup exists, so it ends calls
   // through this ref.
   endCallRef.current = hangup;
+
+  // GROUP CALLS: reconciliation heartbeat. Presence announcements and ICE are
+  // sent once, so a single dropped signal used to leave two participants
+  // permanently unpaired — the mesh split into "separate calls" past a few
+  // people. While in a group call, periodically re-announce presence to every
+  // member we are NOT connected/connecting to, so any missed or failed pairing
+  // re-forms and the mesh converges. Re-announcing is idempotent (the
+  // offerer-by-id rule and stable-state guards prevent glare); connected and
+  // in-progress peers are skipped so there is no churn once converged.
+  useEffect(() => {
+    if (phase !== "in-call") return;
+    const t = setInterval(() => {
+      if (!groupRef.current || !acceptedRef.current) return;
+      const callId = callIdRef.current;
+      const roomId = roomIdRef.current;
+      if (!callId || !roomId) return;
+      for (const id of groupMembersRef.current) {
+        if (!id || id === userId) continue;
+        const st = peersRef.current.get(id)?.pc.connectionState;
+        if (st === "connected" || st === "connecting") continue;
+        void send("invite", callId, id, roomId, {
+          group: true,
+          joining: true,
+          video: groupVideoRef.current,
+          fromName: userName,
+        });
+      }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [phase, send, userId, userName]);
 
   const dial = useCallback(
     async (
