@@ -36,6 +36,7 @@ import { notify } from "@/lib/notify";
 import { IncomingCallOverlay } from "@/components/call/IncomingCallOverlay";
 import { FloatingCallTile } from "@/components/call/FloatingCallTile";
 import { FullScreenCall } from "@/components/call/FullScreenCall";
+import { PeerAudioSinks } from "@/components/call/CallGrid";
 
 /** Answered but never connected — give up instead of hanging forever. */
 const CONNECT_TIMEOUT_MS = 25_000;
@@ -56,6 +57,15 @@ type SignalPayload = {
   reason?: "busy" | "timeout" | "media";
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
+  /** GROUP CALLS: every group signal is tagged so the receiver can route it
+   *  to the mesh handler and never through the 1:1 code (no new DB `kind`). */
+  group?: boolean;
+  /** A group `invite` with joining=true is a presence announcement from a
+   *  participant who just accepted — a pairing trigger, not a fresh ring. */
+  joining?: boolean;
+  /** The full participant set (initiator + all invitees) at call start, so a
+   *  joiner knows everyone to announce itself to. */
+  members?: string[];
 };
 
 type SignalRow = {
@@ -76,9 +86,34 @@ export type ActiveCall = {
   peerId: string;
   peerName: string;
   video: boolean;
+  /** GROUP CALLS: true for a full-mesh group call. A 1:1 DM call omits it. */
+  group?: boolean;
+  /** GROUP CALLS: full participant set (initiator + all invitees). */
+  memberIds?: string[];
 };
 
 export type IncomingCall = ActiveCall & { roomName: string | null };
+
+/** GROUP CALLS: one remote participant, mirrored into state for the grid UI. */
+export type GroupParticipant = {
+  id: string;
+  name: string;
+  stream: MediaStream;
+  hasVideo: boolean;
+};
+
+/** GROUP CALLS: authoritative per-peer state kept in a ref map (one mesh edge). */
+type PeerEntry = {
+  pc: RTCPeerConnection;
+  /** Remote media for this peer (tracks merged in as they arrive). */
+  stream: MediaStream;
+  name: string;
+  hasVideo: boolean;
+  /** True once this peer's remote SDP is applied — gates ICE flushing. */
+  remoteSet: boolean;
+  /** ICE that arrived before the remote description was set. */
+  pendingIce: RTCIceCandidateInit[];
+};
 
 type CallContextValue = {
   phase: CallPhase;
@@ -95,10 +130,19 @@ type CallContextValue = {
   remoteStream: MediaStream | null;
   remoteHasVideo: boolean;
   connectedAt: number | null;
+  /** GROUP CALLS: remote participants for the mesh grid ([] for a 1:1 call). */
+  groupPeers: GroupParticipant[];
   dial: (
     roomId: string,
     roomName: string,
     peer: { id: string; full_name: string },
+    video: boolean,
+  ) => Promise<void>;
+  /** GROUP CALLS: start a full-mesh call with every other room member. */
+  startGroupCall: (
+    roomId: string,
+    roomName: string,
+    memberIds: string[],
     video: boolean,
   ) => Promise<void>;
   accept: () => Promise<void>;
@@ -194,6 +238,8 @@ export function CallProvider({
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // GROUP CALLS: render-facing snapshot of the mesh peers (empty for 1:1).
+  const [groupPeers, setGroupPeers] = useState<GroupParticipant[]>([]);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -228,6 +274,18 @@ export function CallProvider({
   const isCallerRef = useRef(false);
   /** Guards the one-time "Call started" insert per connected call. */
   const startedLoggedRef = useRef(false);
+  // GROUP CALLS: one RTCPeerConnection per OTHER participant (full mesh).
+  // This is the group analogue of the single pcRef used by the 1:1 path;
+  // the two are mutually exclusive — a call is either 1:1 (pcRef) or a
+  // group (peersRef), never both.
+  const peersRef = useRef<Map<string, PeerEntry>>(new Map());
+  /** True while the active/ringing call is a group call. */
+  const groupRef = useRef(false);
+  /** Whether the active group call is a video call (drives offer payloads). */
+  const groupVideoRef = useRef(false);
+  /** Full invited set (initiator + invitees) so leaving can also quiet an
+   *  invitee who is still ringing (not yet a connected peer). */
+  const groupMembersRef = useRef<string[]>([]);
 
   phaseRef.current = phase;
   incomingRef.current = incoming;
@@ -316,6 +374,21 @@ export function CallProvider({
       if (opts?.purge) purgeSignals(callIdRef.current);
       pcRef.current?.close();
       pcRef.current = null;
+      // GROUP CALLS: close every mesh peer connection. Closing a pc ends its
+      // receivers, so the remote tracks stop and no stream leaks. Inert for a
+      // 1:1 call (the map is empty).
+      peersRef.current.forEach((entry) => {
+        try {
+          entry.pc.close();
+        } catch {
+          /* ignore */
+        }
+      });
+      peersRef.current.clear();
+      groupRef.current = false;
+      groupVideoRef.current = false;
+      groupMembersRef.current = [];
+      setGroupPeers([]);
       // Drop the persistent audio sink's stream so a torn-down call leaves
       // nothing playing (the element itself never unmounts).
       if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
@@ -645,11 +718,466 @@ export function CallProvider({
     [ensurePc, flushIce, getMedia, loadMissedIce, send],
   );
 
+  // ══════════════════════════════════════════════════════════════════════
+  // GROUP CALLS — full mesh
+  //
+  // Each participant holds one RTCPeerConnection to every OTHER participant
+  // (peersRef). Local media is acquired ONCE (getMedia) and its tracks are
+  // added to every peer connection. Glare is avoided by a fixed offerer rule:
+  // for any pair, the lexicographically smaller userId creates the offer.
+  // All of this rides the SAME call_signals kinds (invite/offer/answer/ice/
+  // hangup/decline) with payload.group === true so the 1:1 path is untouched.
+  // ══════════════════════════════════════════════════════════════════════
+
+  /** Mirror the ref map into render state so tiles appear/disappear/update. */
+  const bumpGroup = useCallback(() => {
+    setGroupPeers(
+      [...peersRef.current.entries()].map(([id, e]) => ({
+        id,
+        name: e.name,
+        stream: e.stream,
+        hasVideo: e.hasVideo,
+      })),
+    );
+  }, []);
+
+  /** Close and forget one mesh peer. When endIfEmpty and that was the last
+   *  peer, end the whole call (everyone has left). */
+  const dropGroupPeer = useCallback(
+    (peerId: string, opts?: { endIfEmpty?: boolean }) => {
+      const entry = peersRef.current.get(peerId);
+      if (!entry) return;
+      try {
+        entry.pc.close();
+      } catch {
+        /* ignore */
+      }
+      peersRef.current.delete(peerId);
+      bumpGroup();
+      if (opts?.endIfEmpty && peersRef.current.size === 0) {
+        // A group call with no peers left is over. Purge is safe — the call
+        // has ended for everyone.
+        showNotice("Call ended");
+        cleanup({ purge: true });
+      }
+    },
+    [bumpGroup, cleanup, showNotice],
+  );
+
+  /** First time ANY mesh peer connects: flip to in-call, start the timer, and
+   *  (initiator only) log the one "Call started" system message. */
+  const onGroupPeerConnected = useCallback(() => {
+    clearTimers();
+    stopTones();
+    setPhase("in-call");
+    setStatusText("Connected");
+    setConnectedAt((prev) => {
+      const at = prev ?? Date.now();
+      connectedAtRef.current = at;
+      return at;
+    });
+    if (isCallerRef.current && !startedLoggedRef.current && roomIdRef.current) {
+      startedLoggedRef.current = true;
+      void supabase.from("messages").insert({
+        room_id: roomIdRef.current,
+        sender_id: userId,
+        kind: "text",
+        body: "📞 Call started",
+        metadata: { event: "call_started" },
+      });
+    }
+  }, [clearTimers, supabase, userId]);
+
+  /** Lazily create the peer connection for one participant, wiring signaling
+   *  and adding the local tracks. Idempotent. */
+  const ensureGroupPeer = useCallback(
+    (peerId: string, name?: string) => {
+      const existing = peersRef.current.get(peerId);
+      if (existing) {
+        if (name && existing.name !== name) {
+          existing.name = name;
+          bumpGroup();
+        }
+        return existing;
+      }
+      const pc = new RTCPeerConnection({ iceServers: iceServers() });
+      const entry: PeerEntry = {
+        pc,
+        stream: new MediaStream(),
+        name: name ?? "Participant",
+        hasVideo: false,
+        remoteSet: false,
+        pendingIce: [],
+      };
+      peersRef.current.set(peerId, entry);
+
+      // Local media is acquired before any peer is created, so add every local
+      // track to this connection. If we are already sharing our screen, swap
+      // the outgoing video for the screen track so a late joiner sees it too.
+      const ls = localStreamRef.current;
+      if (ls) {
+        for (const track of ls.getTracks()) {
+          try {
+            pc.addTrack(track, ls);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      const activeScreen = screenStreamRef.current?.getVideoTracks()[0] ?? null;
+      if (activeScreen) {
+        const vs = pc.getSenders().find((s) => s.track?.kind === "video");
+        if (vs) {
+          void vs.replaceTrack(activeScreen).catch(() => undefined);
+        } else {
+          try {
+            pc.addTrack(activeScreen, screenStreamRef.current!);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+
+      pc.onicecandidate = (e) => {
+        if (!e.candidate || !callIdRef.current || !roomIdRef.current) return;
+        void send("ice", callIdRef.current, peerId, roomIdRef.current, {
+          group: true,
+          candidate: e.candidate.toJSON(),
+        });
+      };
+      pc.ontrack = (e) => {
+        const cur = peersRef.current.get(peerId);
+        if (!cur) return;
+        const incomingStream = e.streams[0] ?? new MediaStream([e.track]);
+        for (const t of incomingStream.getTracks()) {
+          if (!cur.stream.getTracks().some((x) => x.id === t.id)) cur.stream.addTrack(t);
+        }
+        if (!cur.stream.getTracks().some((x) => x.id === e.track.id)) {
+          cur.stream.addTrack(e.track);
+        }
+        if (e.track.kind === "video") {
+          const recompute = () => {
+            const active = peersRef.current.get(peerId);
+            if (!active) return;
+            const has = active.pc
+              .getReceivers()
+              .some(
+                (r) =>
+                  r.track?.kind === "video" &&
+                  r.track.readyState === "live" &&
+                  !r.track.muted,
+              );
+            if (active.hasVideo !== has) {
+              active.hasVideo = has;
+              bumpGroup();
+            }
+          };
+          e.track.addEventListener("ended", recompute);
+          e.track.addEventListener("mute", recompute);
+          e.track.addEventListener("unmute", recompute);
+          incomingStream.addEventListener("removetrack", recompute);
+          recompute();
+        }
+        bumpGroup();
+      };
+      pc.oniceconnectionstatechange = () => {
+        const s = pc.iceConnectionState;
+        if (s === "connected" || s === "completed") onGroupPeerConnected();
+      };
+      // Like the 1:1 path, connectionState changes are not throttled in a
+      // background tab, so a peer that closes its side tears down promptly.
+      pc.onconnectionstatechange = () => {
+        const s = pc.connectionState;
+        if (s === "failed" || s === "closed") {
+          dropGroupPeer(peerId, { endIfEmpty: true });
+        }
+      };
+      bumpGroup();
+      return entry;
+    },
+    [bumpGroup, dropGroupPeer, onGroupPeerConnected, send],
+  );
+
+  /** Apply any ICE that arrived before this peer's remote description. */
+  const flushGroupIce = useCallback(async (entry: PeerEntry) => {
+    if (!entry.pc.remoteDescription) return;
+    const queued = entry.pendingIce.splice(0);
+    for (const c of queued) {
+      try {
+        await entry.pc.addIceCandidate(c);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  /** Create + send an offer to one peer. Used by the offerer-by-id rule and by
+   *  screen-share renegotiation. Guards on generation and stable state. */
+  const negotiateGroupOffer = useCallback(
+    async (peerId: string) => {
+      const gen = callGenRef.current;
+      const entry = ensureGroupPeer(peerId);
+      const pc = entry.pc;
+      if (pc.signalingState !== "stable") return;
+      try {
+        const offer = await pc.createOffer();
+        if (callGenRef.current !== gen) return;
+        await pc.setLocalDescription(offer);
+        if (callGenRef.current !== gen) return;
+        await waitForIceGathering(pc);
+        if (callGenRef.current !== gen) return;
+        if (!callIdRef.current || !roomIdRef.current) return;
+        const finalOffer = pc.localDescription ?? offer;
+        await send("offer", callIdRef.current, peerId, roomIdRef.current, {
+          group: true,
+          video: groupVideoRef.current,
+          fromName: userName,
+          sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
+        });
+      } catch (err) {
+        console.warn("group offer failed", err);
+      }
+    },
+    [ensureGroupPeer, send, userName],
+  );
+
+  /** Answer an offer from one peer (initial connection or a renegotiation). */
+  const onGroupOffer = useCallback(
+    async (fromId: string, sdp: RTCSessionDescriptionInit, name?: string) => {
+      const gen = callGenRef.current;
+      const entry = ensureGroupPeer(fromId, name);
+      const pc = entry.pc;
+      // Only answer from a stable state — with the offerer-by-id rule the
+      // answerer is never mid-offer, and renegotiation offers arrive on a
+      // settled connection.
+      if (pc.signalingState !== "stable") return;
+      try {
+        await pc.setRemoteDescription(sdp);
+        if (callGenRef.current !== gen) return;
+        entry.remoteSet = true;
+        await flushGroupIce(entry);
+        if (callGenRef.current !== gen) return;
+        const answer = await pc.createAnswer();
+        if (callGenRef.current !== gen) return;
+        await pc.setLocalDescription(answer);
+        if (callGenRef.current !== gen) return;
+        await waitForIceGathering(pc);
+        if (callGenRef.current !== gen) return;
+        if (!callIdRef.current || !roomIdRef.current) return;
+        const finalAnswer = pc.localDescription ?? answer;
+        await send("answer", callIdRef.current, fromId, roomIdRef.current, {
+          group: true,
+          fromName: userName,
+          sdp: { type: finalAnswer.type, sdp: finalAnswer.sdp },
+        });
+      } catch (err) {
+        console.warn("group answer failed", err);
+      }
+    },
+    [ensureGroupPeer, flushGroupIce, send, userName],
+  );
+
+  /** Apply an answer from one peer to our outstanding offer. */
+  const onGroupAnswer = useCallback(
+    async (fromId: string, sdp: RTCSessionDescriptionInit, name?: string) => {
+      const entry = peersRef.current.get(fromId);
+      if (!entry) return;
+      if (name && entry.name !== name) {
+        entry.name = name;
+        bumpGroup();
+      }
+      const pc = entry.pc;
+      if (pc.signalingState !== "have-local-offer") return;
+      try {
+        await pc.setRemoteDescription(sdp);
+        entry.remoteSet = true;
+        await flushGroupIce(entry);
+      } catch (err) {
+        console.warn("group setRemote(answer) failed", err);
+      }
+    },
+    [bumpGroup, flushGroupIce],
+  );
+
+  /** Add (or buffer) one remote ICE candidate for a peer. */
+  const onGroupIce = useCallback(
+    async (fromId: string, candidate: RTCIceCandidateInit) => {
+      const entry = ensureGroupPeer(fromId);
+      if (entry.pc.remoteDescription) {
+        try {
+          await entry.pc.addIceCandidate(candidate);
+        } catch {
+          /* ignore */
+        }
+      } else {
+        entry.pendingIce.push(candidate);
+      }
+    },
+    [ensureGroupPeer],
+  );
+
+  /**
+   * A participant announced its presence (accepted + joining, or replied to
+   * our announcement). Two-hop, idempotent discovery:
+   *   - if this participant is new to us, announce ourselves back so they
+   *     learn we are here too;
+   *   - create the peer either way, and if WE are the offerer for the pair
+   *     (our id is the smaller one), create and send the offer.
+   */
+  const onGroupPresence = useCallback(
+    (fromId: string, name: string | undefined) => {
+      if (!callIdRef.current || !roomIdRef.current) return;
+      const isNew = !peersRef.current.has(fromId);
+      ensureGroupPeer(fromId, name);
+      if (isNew) {
+        void send("invite", callIdRef.current, fromId, roomIdRef.current, {
+          group: true,
+          joining: true,
+          video: groupVideoRef.current,
+          fromName: userName,
+        });
+      }
+      if (userId < fromId) {
+        void negotiateGroupOffer(fromId);
+      }
+    },
+    [ensureGroupPeer, negotiateGroupOffer, send, userId, userName],
+  );
+
+  /** Route one group-tagged signal. Returns nothing; never touches 1:1 state
+   *  except the shared call refs it owns while a group call is active. */
+  const handleGroupSignal = useCallback(
+    async (row: SignalRow, p: SignalPayload) => {
+      if (row.kind === "invite") {
+        // Presence announcement (a peer accepted) — pair with them, but only
+        // while we are actually inside this group call.
+        if (p.joining) {
+          if (
+            groupRef.current &&
+            callIdRef.current === row.call_id &&
+            phaseRef.current !== "ringing"
+          ) {
+            onGroupPresence(row.from_user, p.fromName);
+          }
+          return;
+        }
+        // Initial ring invite (mirror of the 1:1 invite guards).
+        if (Date.now() - Date.parse(row.created_at) > STALE_INVITE_MS) return;
+        if (phaseRef.current !== "idle" && callIdRef.current !== row.call_id) {
+          if (incomingRef.current?.callId !== row.call_id) {
+            void send("decline", row.call_id, row.from_user, row.room_id, {
+              group: true,
+              reason: "busy",
+            });
+          }
+          return;
+        }
+        if (acceptedRef.current || incomingRef.current?.callId === row.call_id) {
+          return; // duplicate re-sent invite
+        }
+        callIdRef.current = row.call_id;
+        roomIdRef.current = row.room_id;
+        peerIdRef.current = row.from_user;
+        groupRef.current = true;
+        groupVideoRef.current = Boolean(p.video);
+        setIncoming({
+          callId: row.call_id,
+          roomId: row.room_id,
+          peerId: row.from_user,
+          peerName: p.fromName ?? "Unknown caller",
+          roomName: p.roomName ?? null,
+          video: Boolean(p.video),
+          group: true,
+          memberIds: Array.isArray(p.members) ? p.members : [],
+        });
+        setPhase("ringing");
+        if (readNotifyPrefs().calls) startRingtone();
+        notify({
+          title: "Incoming group call",
+          body: `${p.fromName ?? "Someone"} started a call${p.roomName ? ` in ${p.roomName}` : ""}`,
+          tag: "call",
+          url: "/rooms/" + row.room_id,
+          force: true,
+        });
+        if (ringTimerRef.current) clearTimeout(ringTimerRef.current);
+        ringTimerRef.current = setTimeout(() => {
+          if (phaseRef.current === "ringing" && !acceptedRef.current) cleanup();
+        }, RING_TIMEOUT_CALLEE_MS);
+        return;
+      }
+
+      // A hangup applies whether we are still ringing or already joined.
+      if (row.kind === "hangup") {
+        if (!groupRef.current || callIdRef.current !== row.call_id) return;
+        if (acceptedRef.current) {
+          // A connected peer left. Drop just their tile; if they were the last
+          // remaining peer, the call ends for us too.
+          dropGroupPeer(row.from_user, { endIfEmpty: true });
+        } else {
+          // We were only ringing and the call ended before we joined.
+          if (phaseRef.current === "ringing") showNotice("Missed call");
+          cleanup();
+        }
+        return;
+      }
+
+      // Offer/answer/ice only matter once we have actually JOINED (accepted or
+      // started) — never while merely ringing.
+      if (
+        !groupRef.current ||
+        !acceptedRef.current ||
+        callIdRef.current !== row.call_id
+      ) {
+        return;
+      }
+
+      if (row.kind === "offer" && p.sdp) {
+        await onGroupOffer(row.from_user, p.sdp, p.fromName);
+        return;
+      }
+      if (row.kind === "answer" && p.sdp) {
+        await onGroupAnswer(row.from_user, p.sdp, p.fromName);
+        return;
+      }
+      if (row.kind === "ice" && p.candidate) {
+        await onGroupIce(row.from_user, p.candidate);
+        return;
+      }
+      // decline: an invitee declined or was busy. A group call continues with
+      // whoever joined, so this is intentionally ignored.
+    },
+    [
+      cleanup,
+      dropGroupPeer,
+      onGroupAnswer,
+      onGroupIce,
+      onGroupOffer,
+      onGroupPresence,
+      send,
+      showNotice,
+    ],
+  );
+
   const handleSignal = useCallback(
     async (row: SignalRow) => {
       // Own rows (from_user = me): only used to stop ringing when
       // another tab of mine answered or declined.
       if (row.from_user === userId) {
+        const sp = row.payload ?? {};
+        // GROUP CALLS: another of my tabs accepted (announced joining) or hung
+        // up/declined this group call — this still-ringing tab should go quiet.
+        if (
+          sp.group &&
+          phaseRef.current === "ringing" &&
+          incomingRef.current?.callId === row.call_id &&
+          !acceptedRef.current &&
+          ((row.kind === "invite" && sp.joining) ||
+            row.kind === "hangup" ||
+            row.kind === "decline")
+        ) {
+          cleanup();
+          return;
+        }
         if (
           (row.kind === "answer" || row.kind === "decline") &&
           phaseRef.current === "ringing" &&
@@ -665,6 +1193,13 @@ export function CallProvider({
 
       if (row.to_user !== userId) return;
       const p = row.payload ?? {};
+
+      // GROUP CALLS: any group-tagged signal is handled by the mesh path and
+      // never falls through to the 1:1 logic below.
+      if (p.group) {
+        await handleGroupSignal(row, p);
+        return;
+      }
 
       if (row.kind === "invite") {
         if (Date.now() - Date.parse(row.created_at) > STALE_INVITE_MS) return;
@@ -804,17 +1339,38 @@ export function CallProvider({
         }
       }
     },
-    [answerOffer, answerRenegotiation, armConnectTimeout, cleanup, clearTimers, flushIce, loadMissedIce, send, showNotice, userId],
+    [answerOffer, answerRenegotiation, armConnectTimeout, cleanup, clearTimers, flushIce, handleGroupSignal, loadMissedIce, send, showNotice, userId],
   );
 
   handlingRef.current = handleSignal;
 
+  /** GROUP CALLS: leave — tell every connected peer AND any still-invited
+   *  member (so an invitee who is still ringing stops), then tear down. */
+  const hangupGroup = useCallback(() => {
+    const callId = callIdRef.current;
+    const roomId = roomIdRef.current;
+    if (callId && roomId) {
+      const targets = new Set<string>(peersRef.current.keys());
+      for (const id of groupMembersRef.current) {
+        if (id && id !== userId) targets.add(id);
+      }
+      for (const peerId of targets) {
+        void send("hangup", callId, peerId, roomId, { group: true });
+      }
+    }
+    cleanup({ purge: true });
+  }, [cleanup, send, userId]);
+
   const hangup = useCallback(() => {
+    if (groupRef.current) {
+      hangupGroup();
+      return;
+    }
     if (callIdRef.current && peerIdRef.current && roomIdRef.current) {
       void send("hangup", callIdRef.current, peerIdRef.current, roomIdRef.current);
     }
     cleanup({ purge: true });
-  }, [cleanup, send]);
+  }, [cleanup, hangupGroup, send]);
 
   // The ICE handler is created before hangup exists, so it ends calls
   // through this ref.
@@ -917,9 +1473,162 @@ export function CallProvider({
     [cleanup, ensurePc, getMedia, send, showNotice, signalReady, supabase, userId, userName],
   );
 
+  /**
+   * GROUP CALLS: start a full-mesh call inviting every other room member.
+   * The initiator enters the call immediately (in-call, "Waiting for others…")
+   * and rings each invitee; participants pair up via the presence handshake as
+   * they accept. No-answer/decline from an invitee never ends the call.
+   */
+  const startGroupCall = useCallback(
+    async (roomId: string, roomName: string, memberIds: string[], video: boolean) => {
+      if (!signalReady) {
+        showNotice("Still connecting — try again in a moment");
+        return;
+      }
+      if (phaseRef.current !== "idle") return;
+      const others = Array.from(
+        new Set(memberIds.filter((id) => id && id !== userId)),
+      );
+      if (others.length === 0) {
+        showNotice("No one else in this room to call");
+        return;
+      }
+
+      callGenRef.current += 1;
+      const gen = callGenRef.current;
+
+      const callId = crypto.randomUUID();
+      const allMembers = [userId, ...others];
+      callIdRef.current = callId;
+      roomIdRef.current = roomId;
+      peerIdRef.current = null;
+      acceptedRef.current = true;
+      isCallerRef.current = true; // logs call-history
+      startedLoggedRef.current = false;
+      groupRef.current = true;
+      groupVideoRef.current = video;
+      groupMembersRef.current = allMembers;
+      setCall({
+        callId,
+        roomId,
+        peerId: "",
+        peerName: roomName,
+        video,
+        group: true,
+        memberIds: allMembers,
+      });
+      // A group call is a room you are in from the moment you start it.
+      setPhase("in-call");
+      setView("full");
+      setStatusText("Waiting for others…");
+
+      try {
+        await getMedia(video);
+        if (callGenRef.current !== gen) return; // FIX A
+        const invitePayload: SignalPayload = {
+          group: true,
+          video,
+          roomName,
+          fromName: userName,
+          members: allMembers,
+        };
+        for (const id of others) {
+          await send("invite", callId, id, roomId, invitePayload);
+        }
+        if (callGenRef.current !== gen) return; // FIX A
+
+        // Re-ring until the window closes so a still-loading invitee still
+        // hears it. Re-invites to someone already joined are harmless (they
+        // return early). No hangup-on-timeout: the initiator waits.
+        resendTimerRef.current = setInterval(() => {
+          for (const id of others) void send("invite", callId, id, roomId, invitePayload);
+        }, RESEND_MS);
+        ringTimerRef.current = setTimeout(() => {
+          if (resendTimerRef.current) {
+            clearInterval(resendTimerRef.current);
+            resendTimerRef.current = null;
+          }
+        }, RING_TIMEOUT_MS);
+      } catch (err) {
+        if (callGenRef.current !== gen) return; // FIX A: cleanup already ran
+        showNotice(mediaErrorMessage(err));
+        cleanup({ purge: true });
+      }
+    },
+    [cleanup, getMedia, send, showNotice, signalReady, userId, userName],
+  );
+
+  /** GROUP CALLS: accept a ringing group invite and announce our presence. */
+  const groupAccept = useCallback(
+    async (inc: IncomingCall) => {
+      callGenRef.current += 1;
+      const gen = callGenRef.current;
+      acceptedRef.current = true;
+      isCallerRef.current = false; // the callee never logs call-history
+      startedLoggedRef.current = false;
+      groupRef.current = true;
+      groupVideoRef.current = inc.video;
+      groupMembersRef.current = inc.memberIds ?? [];
+      stopTones();
+      clearTimers();
+      armConnectTimeout();
+      callIdRef.current = inc.callId;
+      roomIdRef.current = inc.roomId;
+      peerIdRef.current = null;
+      setCall({
+        callId: inc.callId,
+        roomId: inc.roomId,
+        peerId: "",
+        peerName: inc.roomName ?? "Group call",
+        video: inc.video,
+        group: true,
+        memberIds: inc.memberIds,
+      });
+      setPhase("in-call");
+      setView("full");
+      setStatusText("Connecting…");
+      setIncoming(null);
+      try {
+        await getMedia(inc.video);
+        if (callGenRef.current !== gen) return; // FIX A
+        // Announce our presence to every OTHER member; the presence handshake
+        // + offerer-by-id rule then forms exactly one connection per pair.
+        const others = (inc.memberIds ?? []).filter((id) => id && id !== userId);
+        for (const id of others) {
+          void send("invite", inc.callId, id, inc.roomId, {
+            group: true,
+            joining: true,
+            video: inc.video,
+            fromName: userName,
+          });
+        }
+      } catch (err) {
+        if (callGenRef.current !== gen) return; // FIX A: cleanup already ran
+        const media = isMediaError(err);
+        showNotice(mediaErrorMessage(err));
+        // Tell the initiator (group-tagged so it's ignored, not treated as a
+        // 1:1 hangup); the call continues for everyone else.
+        void send(
+          "decline",
+          inc.callId,
+          inc.peerId,
+          inc.roomId,
+          media ? { group: true, reason: "media" } : { group: true },
+        );
+        cleanup();
+      }
+    },
+    [armConnectTimeout, cleanup, clearTimers, getMedia, send, showNotice, userId, userName],
+  );
+
   const accept = useCallback(async () => {
     const inc = incomingRef.current;
     if (!inc) return;
+    // GROUP CALLS: a group invite takes the mesh accept path.
+    if (inc.group) {
+      await groupAccept(inc);
+      return;
+    }
     // FIX A: a new call begins here — bump the generation.
     callGenRef.current += 1;
     const gen = callGenRef.current;
@@ -966,12 +1675,15 @@ export function CallProvider({
       );
       cleanup();
     }
-  }, [answerOffer, armConnectTimeout, cleanup, clearTimers, getMedia, send, showNotice]);
+  }, [answerOffer, armConnectTimeout, cleanup, clearTimers, getMedia, groupAccept, send, showNotice]);
 
   const decline = useCallback(() => {
     const inc = incomingRef.current;
     if (!inc) return;
-    void send("decline", inc.callId, inc.peerId, inc.roomId);
+    // GROUP CALLS: tag the decline so the initiator routes it to the mesh
+    // handler (which ignores it) instead of the 1:1 path (which would end the
+    // whole call). Declining a group call never ends it for the others.
+    void send("decline", inc.callId, inc.peerId, inc.roomId, inc.group ? { group: true } : {});
     pendingOfferRef.current = null;
     cleanup();
   }, [cleanup, send]);
@@ -1033,12 +1745,27 @@ export function CallProvider({
         }
         // Preserve the current mute state on the replacement track.
         newTrack.enabled = oldTrack ? oldTrack.enabled : true;
-        const sender = pc?.getSenders().find((s) => s.track?.kind === "audio");
-        if (sender) {
-          try {
-            await sender.replaceTrack(newTrack);
-          } catch {
-            /* ignore */
+        // Swap the fresh audio onto the outgoing sender(s): a 1:1 call has the
+        // single pcRef; a group call has one audio sender per mesh peer.
+        if (groupRef.current) {
+          for (const entry of peersRef.current.values()) {
+            const sender = entry.pc.getSenders().find((s) => s.track?.kind === "audio");
+            if (sender) {
+              try {
+                await sender.replaceTrack(newTrack);
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+        } else {
+          const sender = pc?.getSenders().find((s) => s.track?.kind === "audio");
+          if (sender) {
+            try {
+              await sender.replaceTrack(newTrack);
+            } catch {
+              /* ignore */
+            }
           }
         }
         // Keep localStreamRef owning the live audio track so cleanup stops it.
@@ -1217,13 +1944,118 @@ export function CallProvider({
     }
   }, [refreshLocalPreview, send, showNotice, stopScreenShare]);
 
+  // GROUP CALLS: screen share is applied to EVERY mesh peer. Every participant
+  // may share; only one shared screen at a time is expected.
+  const stopScreenShareGroup = useCallback(async () => {
+    const screen = screenStreamRef.current;
+    const screenTrack = screen?.getVideoTracks()[0] ?? null;
+    const camera = cameraTrackRef.current;
+    for (const [peerId, entry] of peersRef.current) {
+      const pc = entry.pc;
+      const videoSender = pc
+        .getSenders()
+        .find((s) => s.track?.id === screenTrack?.id || s.track?.kind === "video");
+      if (!videoSender) continue;
+      if (camera) {
+        // Video call: restore the camera track — no renegotiation needed.
+        try {
+          await videoSender.replaceTrack(camera);
+        } catch {
+          /* ignore */
+        }
+      } else {
+        // Voice call: drop the sender and renegotiate so the peer cleanly sees
+        // the video go away (no frozen last frame), mirroring the 1:1 path.
+        try {
+          pc.removeTrack(videoSender);
+        } catch {
+          /* ignore */
+        }
+        if (pc.signalingState === "stable") await negotiateGroupOffer(peerId);
+      }
+    }
+    screen?.getTracks().forEach((t) => t.stop());
+    screenStreamRef.current = null;
+    screenAddedSenderRef.current = false;
+    setSharing(false);
+    refreshLocalPreview(null);
+  }, [negotiateGroupOffer, refreshLocalPreview]);
+
+  const startScreenShareGroup = useCallback(async () => {
+    if (phaseRef.current !== "in-call") return;
+    if (!window.isSecureContext && location.hostname !== "localhost") {
+      showNotice("Screen share needs HTTPS.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      showNotice("This browser cannot share the screen.");
+      return;
+    }
+    try {
+      const screen = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: "monitor" },
+        audio: false,
+      });
+      const screenTrack = screen.getVideoTracks()[0];
+      if (!screenTrack) {
+        screen.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      try {
+        screenTrack.contentHint = "detail";
+      } catch {
+        /* ignore */
+      }
+      screenStreamRef.current = screen;
+      screenTrack.onended = () => {
+        void stopScreenShareGroup();
+      };
+
+      // Video call → each peer already has a camera video sender, so swap it
+      // (cheap, no renegotiation). Voice call → no video sender exists, so add
+      // the track and renegotiate that peer (we are the offerer for the change).
+      for (const [peerId, entry] of peersRef.current) {
+        const pc = entry.pc;
+        const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
+        if (videoSender) {
+          try {
+            await videoSender.replaceTrack(screenTrack);
+          } catch {
+            /* ignore */
+          }
+        } else {
+          try {
+            pc.addTrack(screenTrack, screen);
+          } catch {
+            /* ignore */
+          }
+          if (pc.signalingState === "stable") await negotiateGroupOffer(peerId);
+        }
+      }
+      screenAddedSenderRef.current = !cameraTrackRef.current;
+      setSharing(true);
+      refreshLocalPreview(screenTrack);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "NotAllowedError") return;
+      showNotice(err instanceof Error ? err.message : "Could not share screen");
+    }
+  }, [negotiateGroupOffer, refreshLocalPreview, showNotice, stopScreenShareGroup]);
+
   const toggleScreenShare = useCallback(async () => {
+    if (groupRef.current) {
+      if (screenStreamRef.current) {
+        await stopScreenShareGroup();
+      } else {
+        await startScreenShareGroup();
+      }
+      return;
+    }
     if (screenStreamRef.current) {
       await stopScreenShare();
     } else {
       await startScreenShare();
     }
-  }, [startScreenShare, stopScreenShare]);
+  }, [startScreenShare, startScreenShareGroup, stopScreenShare, stopScreenShareGroup]);
 
   // One global signaling channel for the whole session.
   useEffect(() => {
@@ -1306,7 +2138,9 @@ export function CallProvider({
       remoteStream,
       remoteHasVideo,
       connectedAt,
+      groupPeers,
       dial,
+      startGroupCall,
       accept,
       decline,
       hangup,
@@ -1331,7 +2165,9 @@ export function CallProvider({
       remoteStream,
       remoteHasVideo,
       connectedAt,
+      groupPeers,
       dial,
+      startGroupCall,
       accept,
       decline,
       hangup,
@@ -1348,8 +2184,10 @@ export function CallProvider({
     <CallContext.Provider value={value}>
       {children}
       {/* Persistent audio sink — never unmounts, so call audio survives
-          navigation and minimize/expand. */}
+          navigation and minimize/expand. (1:1 path.) */}
       <audio ref={remoteAudioRef} autoPlay className="hidden" />
+      {/* GROUP CALLS: persistent per-peer audio sinks, same rationale. */}
+      <PeerAudioSinks />
       {incoming && phase === "ringing" && <IncomingCallOverlay />}
       {onCall && (view === "full" ? <FullScreenCall /> : <FloatingCallTile />)}
       {notice && (

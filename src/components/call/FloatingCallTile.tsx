@@ -30,6 +30,7 @@ export function FloatingCallTile() {
     remoteStream,
     remoteHasVideo,
     connectedAt,
+    groupPeers,
     hangup,
     toggleMic,
     toggleCam,
@@ -38,7 +39,22 @@ export function FloatingCallTile() {
   } = useCall();
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const groupVideoRef = useRef<HTMLVideoElement>(null);
   const duration = useDuration(connectedAt);
+  const isGroup = Boolean(call?.group);
+  // Group mini tile shows the first remote participant + a total-count badge.
+  const groupFirst = groupPeers[0] ?? null;
+
+  useEffect(() => {
+    const el = groupVideoRef.current;
+    if (el && groupFirst?.stream) {
+      el.srcObject = groupFirst.stream;
+      void el.play().catch(() => undefined);
+    }
+    return () => {
+      if (el) el.srcObject = null;
+    };
+  }, [groupFirst?.stream]);
 
   // remoteHasVideo comes from the provider (recomputed from remote track
   // live/mute events, FIX C) so the tile drops back to the avatar instead
@@ -88,7 +104,28 @@ export function FloatingCallTile() {
         aria-label="Expand call to full screen"
         title="Expand"
       >
-        {showVideo ? (
+        {isGroup ? (
+          <>
+            {/* Muted: audio plays through the provider's per-peer sinks. */}
+            <video
+              ref={groupVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className={`h-full w-full bg-ink object-cover ${
+                groupFirst?.hasVideo ? "" : "opacity-0"
+              }`}
+            />
+            {(!groupFirst || !groupFirst.hasVideo) && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Avatar name={groupFirst?.name ?? call.peerName} size="md" className="relative" />
+              </div>
+            )}
+            <span className="absolute bottom-2 left-2 rounded-full bg-black/50 px-2 py-0.5 text-[10px] font-semibold text-white">
+              {groupPeers.length + 1} in call
+            </span>
+          </>
+        ) : showVideo ? (
           <>
             {/* Muted: audio comes from the provider's <audio> sink only. */}
             <video

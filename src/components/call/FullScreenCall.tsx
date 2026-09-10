@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { Avatar } from "@/components/Avatar";
 import { useCall } from "@/components/call/CallProvider";
+import { CallGrid } from "@/components/call/CallGrid";
 import { useDuration } from "@/components/call/useDuration";
 import {
   CamIcon,
@@ -28,6 +29,7 @@ export function FullScreenCall() {
     remoteStream,
     remoteHasVideo,
     connectedAt,
+    groupPeers,
     hangup,
     toggleMic,
     toggleCam,
@@ -35,6 +37,7 @@ export function FullScreenCall() {
     toggleScreenShare,
     setView,
   } = useCall();
+  const isGroup = Boolean(call?.group);
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const duration = useDuration(connectedAt);
@@ -77,13 +80,15 @@ export function FullScreenCall() {
   if (!call) return null;
   const subtitle =
     phase === "in-call" && duration ? duration : statusText || "Ringing…";
-  const modeLabel = sharing
-    ? "Screen"
-    : call.video
-      ? "Video"
-      : remoteHasVideo
-        ? "Screen"
-        : "Voice";
+  const modeLabel = isGroup
+    ? `Group · ${groupPeers.length + 1}`
+    : sharing
+      ? "Screen"
+      : call.video
+        ? "Video"
+        : remoteHasVideo
+          ? "Screen"
+          : "Voice";
 
   return (
     <div className="fixed inset-0 z-[115] flex flex-col bg-ink text-white">
@@ -108,7 +113,9 @@ export function FullScreenCall() {
       </div>
 
       <div className="relative flex-1 min-h-0 bg-ink-soft">
-        {showVideo ? (
+        {isGroup ? (
+          <CallGrid />
+        ) : showVideo ? (
           <>
             {/* Muted on purpose: the provider's persistent <audio> element
                 is the single audio sink. Without this the same remote

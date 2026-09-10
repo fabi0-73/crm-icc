@@ -23,7 +23,8 @@ export function IncomingCallOverlay() {
         </div>
         <p className="mt-5 text-2xl font-semibold tracking-tight">{incoming.peerName}</p>
         <p className="mt-1 text-[13px] text-white/60">
-          Incoming {incoming.video ? "video" : "voice"} call
+          Incoming {incoming.video ? "video" : "voice"}
+          {incoming.group ? " group" : ""} call
           {incoming.roomName ? ` · ${incoming.roomName}` : ""}
         </p>
 

@@ -30,10 +30,12 @@ export function CallButton({
    *  When omitted, no restriction is applied. */
   currentUserRole?: Role;
 }) {
-  const { dial, phase, signalReady } = useCall();
+  const { dial, startGroupCall, phase, signalReady } = useCall();
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const others = members.filter((m) => m.id !== currentUserId);
+  // A non-DM room (group / agent workspace) can start a full-mesh group call.
+  const isGroupRoom = roomType !== undefined && roomType !== "dm";
   const secure =
     typeof window === "undefined" ||
     window.isSecureContext ||
@@ -54,6 +56,17 @@ export function CallButton({
     if (restricted) return;
     setPickerOpen(false);
     await dial(roomId, roomName, peer, video);
+  }
+
+  async function startGroup(video: boolean) {
+    if (restricted) return;
+    setPickerOpen(false);
+    await startGroupCall(
+      roomId,
+      roomName,
+      others.map((m) => m.id),
+      video,
+    );
   }
 
   return (
@@ -83,8 +96,36 @@ export function CallButton({
             Calls need HTTPS — mic and camera are blocked on this address.
           </p>
         )}
+        {isGroupRoom && others.length > 0 && (
+          <div className="mb-3 rounded-lg bg-mist/60 p-3">
+            <p className="text-sm font-semibold text-ink">Start group call</p>
+            <p className="mt-0.5 text-xs text-muted">
+              Rings everyone in {roomName}. People join as they answer.
+            </p>
+            <div className="mt-2.5 flex gap-2">
+              <button
+                type="button"
+                disabled={!signalReady || !secure}
+                onClick={() => void startGroup(false)}
+                className="flex flex-1 items-center justify-center gap-2 rounded-full bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-40"
+              >
+                <PhoneIcon size={16} /> Voice
+              </button>
+              <button
+                type="button"
+                disabled={!signalReady || !secure}
+                onClick={() => void startGroup(true)}
+                className="flex flex-1 items-center justify-center gap-2 rounded-full bg-ink-soft px-3 py-2 text-sm font-medium text-white hover:bg-ink disabled:opacity-40"
+              >
+                <VideoIcon size={16} /> Video
+              </button>
+            </div>
+          </div>
+        )}
         <p className="text-xs text-muted">
-          They&apos;ll ring wherever they are in the app.
+          {isGroupRoom
+            ? "Or call one person — they'll ring wherever they are."
+            : "They'll ring wherever they are in the app."}
         </p>
         <ul className="-mx-2 mt-2 max-h-[60vh] overflow-y-auto">
           {others.map((m) => (
