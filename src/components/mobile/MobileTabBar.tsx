@@ -37,7 +37,7 @@ const DRAWER_NAV: {
     href: "/agents",
     label: "Agents",
     sub: "Directory and assignments",
-    roles: ["admin", "manager"],
+    roles: ["admin"],
     icon: ContactRound,
   },
   {

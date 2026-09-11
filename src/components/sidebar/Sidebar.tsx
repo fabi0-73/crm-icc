@@ -1,8 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Search } from "lucide-react";
+import { GlobalSearch } from "@/components/search/GlobalSearch";
 import { signOut } from "@/app/actions/auth";
 import { useRooms } from "@/components/rooms/RoomsProvider";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
@@ -15,7 +18,7 @@ import type { MyRoom, Profile } from "@/lib/types";
 import { publicDisplayName } from "@/lib/display-name";
 
 export const NAV: { href: string; label: string; roles: Profile["role"][] }[] = [
-  { href: "/agents", label: "Agents", roles: ["admin", "manager"] },
+  { href: "/agents", label: "Agents", roles: ["admin"] },
   { href: "/admin/users", label: "Users", roles: ["admin", "manager"] },
   { href: "/admin/audit", label: "Audit", roles: ["admin", "manager"] },
 ];
@@ -92,6 +95,7 @@ export function Sidebar({ profile }: { profile: Profile }) {
   const { rooms } = useRooms();
   const pathname = usePathname();
   const selfOnline = useIsOnline(profile.id);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const channels = rooms.filter((r) => r.type !== "dm");
   const dms = rooms.filter((r) => r.type === "dm");
@@ -113,6 +117,15 @@ export function Sidebar({ profile }: { profile: Profile }) {
       </Link>
 
       <div className="flex-1 overflow-y-auto px-2 pb-3">
+        <button
+          type="button"
+          onClick={() => setSearchOpen(true)}
+          className="mt-3 flex w-full items-center gap-2 rounded-lg bg-white/8 px-2 py-1.5 text-[13px] text-white/60 hover:bg-white/12 hover:text-white"
+        >
+          <Search className="size-4" />
+          Search
+        </button>
+
         {nav.length > 0 && (
           <nav className="mt-3 space-y-0.5">
             {nav.map((l) => {
@@ -197,6 +210,8 @@ export function Sidebar({ profile }: { profile: Profile }) {
           </button>
         </form>
       </div>
+
+      {searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} />}
     </aside>
   );
 }

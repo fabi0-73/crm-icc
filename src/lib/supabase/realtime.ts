@@ -16,6 +16,7 @@ export function subscribeToRoomMessages(
   onInsert: MessageHandler,
   onTyping?: (event: TypingEvent) => void,
   onSubscribed?: () => void,
+  onUpdate?: MessageHandler,
 ): RealtimeChannel {
   const channel = supabase.channel(`room:${roomId}`).on(
     "postgres_changes",
@@ -29,6 +30,22 @@ export function subscribeToRoomMessages(
       onInsert(payload.new as Message);
     },
   );
+  // Pinning is an UPDATE on an existing row, so it needs its own binding
+  // for the banner to move without a refresh.
+  if (onUpdate) {
+    channel.on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "messages",
+        filter: `room_id=eq.${roomId}`,
+      },
+      (payload) => {
+        onUpdate(payload.new as Message);
+      },
+    );
+  }
   if (onTyping) {
     channel.on("broadcast", { event: "typing" }, ({ payload }) => {
       onTyping(payload as TypingEvent);
@@ -235,6 +252,18 @@ export async function fetchMessagesBefore(
 
   if (error) throw error;
   return ((data ?? []) as Message[]).reverse();
+}
+
+/** Pinned messages for a room, newest pin first. */
+export async function fetchPinnedMessages(
+  supabase: SupabaseClient,
+  roomId: string,
+): Promise<Message[]> {
+  const { data, error } = await supabase.rpc("get_pinned_messages", {
+    p_room_id: roomId,
+  });
+  if (error) throw error;
+  return (data ?? []) as Message[];
 }
 
 export async function fetchRecentMessages(

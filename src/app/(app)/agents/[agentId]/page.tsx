@@ -5,6 +5,7 @@ import { SwapAssistantsButton } from "@/components/SwapAssistantsButton";
 import { ActionForm } from "@/components/ActionForm";
 import { archiveAgent } from "@/app/actions/agents";
 import { buttonClasses } from "@/components/ui/Button";
+import { BackIcon } from "@/components/icons";
 import { AssignManagerForm } from "@/components/AssignManagerForm";
 
 export default async function AgentDetailPage({
@@ -13,7 +14,7 @@ export default async function AgentDetailPage({
   params: Promise<{ agentId: string }>;
 }) {
   const { agentId } = await params;
-  const { supabase, profile } = await requireRole(["admin", "manager"]);
+  const { supabase, profile } = await requireRole(["admin"]);
 
   const { data: agent } = await supabase
     .from("agents")

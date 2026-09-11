@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Search } from "lucide-react";
 import { Modal, useModal } from "@/components/Modal";
 import { openDm } from "@/app/actions/rooms";
+import { lookupUsernames } from "@/app/actions/profile";
+import { publicDisplayName } from "@/lib/display-name";
 import { createClient } from "@/lib/supabase/client";
 import { Avatar } from "@/components/Avatar";
 import { PresenceDot } from "@/components/PresenceDot";
@@ -11,18 +14,23 @@ import { useIsOnline } from "@/components/presence/PresenceProvider";
 import { ComposeIcon } from "@/components/icons";
 import type { Profile } from "@/lib/types";
 
-type StaffRow = Pick<Profile, "id" | "full_name" | "role">;
+type StaffRow = Pick<Profile, "id" | "full_name" | "role"> & {
+  public_name?: string | null;
+};
 
 function PersonRow({
   person,
+  username,
   pending,
   onPick,
 }: {
   person: StaffRow;
+  username?: string;
   pending: boolean;
   onPick: () => void;
 }) {
   const online = useIsOnline(person.id);
+  const shown = publicDisplayName(person);
   return (
     <button
       type="button"
@@ -31,14 +39,21 @@ function PersonRow({
       className="flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left hover:bg-mist disabled:opacity-50"
     >
       <span className="relative shrink-0">
-        <Avatar name={person.full_name} size="sm" />
+        <Avatar name={shown} size="sm" />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
         />
       </span>
-      <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
-        {person.full_name}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-ink">
+          {shown}
+        </span>
+        {username && (
+          <span className="block truncate font-mono text-[11px] text-muted">
+            {username}
+          </span>
+        )}
       </span>
       <span className="text-xs capitalize text-muted">{person.role}</span>
     </button>
@@ -57,16 +72,19 @@ export function NewDmButton({
   const { open, openModal, closeModal } = useModal();
   const router = useRouter();
   const [staff, setStaff] = useState<StaffRow[]>([]);
+  const [usernames, setUsernames] = useState<Record<string, string>>({});
+  const [query, setQuery] = useState("");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const supabase = createClient();
+    void lookupUsernames().then(setUsernames).catch(() => {});
     void supabase.auth.getUser().then(async ({ data: { user } }) => {
       const { data } = await supabase
         .from("profiles")
-        .select("id, full_name, role")
+        .select("id, full_name, public_name, role")
         .eq("is_active", true)
         .in("role", ["admin", "manager", "assistant"])
         .neq("id", user?.id ?? "")
@@ -90,7 +108,7 @@ export function NewDmButton({
         if (userIds.length) {
           const { data: agentProfiles } = await supabase
             .from("profiles")
-            .select("id, full_name, role")
+            .select("id, full_name, public_name, role")
             .in("id", userIds);
           agents = (agentProfiles ?? []) as StaffRow[];
         }
@@ -98,6 +116,19 @@ export function NewDmButton({
       setStaff([...staff, ...agents]);
     });
   }, [open]);
+
+  // Only names the caller is already allowed to see are searched — the
+  // candidate list itself is what enforces who can be messaged.
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return staff;
+    return staff.filter(
+      (p) =>
+        p.full_name.toLowerCase().includes(q) ||
+        (p.public_name ?? "").toLowerCase().includes(q) ||
+        (usernames[p.id] ?? "").toLowerCase().includes(q),
+    );
+  }, [staff, query, usernames]);
 
   async function pick(id: string) {
     setPendingId(id);
@@ -137,19 +168,33 @@ export function NewDmButton({
             {error}
           </p>
         )}
+        <div className="relative mb-2">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search people"
+            autoComplete="off"
+            className="h-10 w-full rounded-lg border border-line bg-paper pl-9 pr-3 text-[15px] text-ink outline-none placeholder:text-muted focus:border-brand-500"
+            aria-label="Search people"
+          />
+        </div>
         <ul className="-mx-2 max-h-[60vh] overflow-y-auto">
-          {staff.map((p) => (
+          {visible.map((p) => (
             <li key={p.id}>
               <PersonRow
                 person={p}
+                username={usernames[p.id]}
                 pending={pendingId !== null}
                 onPick={() => void pick(p.id)}
               />
             </li>
           ))}
-          {staff.length === 0 && (
+          {visible.length === 0 && (
             <li className="px-2 py-8 text-center text-sm text-muted">
-              No other staff members
+              {staff.length === 0
+                ? "No other staff members"
+                : "Nobody matches that search"}
             </li>
           )}
         </ul>

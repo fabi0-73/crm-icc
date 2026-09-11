@@ -1,12 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
+  ArrowDown,
   Bell,
   BellOff,
+  Bold,
   Check,
   CheckCheck,
   ChevronLeft,
@@ -14,8 +23,14 @@ import {
   FileText,
   Hash,
   Info,
+  Italic,
+  List,
+  ListOrdered,
   Paperclip,
+  Pin,
+  PinOff,
   SendHorizontal,
+  Underline,
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -23,13 +38,18 @@ import {
   ensureRealtimeAuth,
   fetchMessagesBefore,
   fetchMessagesSince,
+  fetchPinnedMessages,
   fetchRoomMembers,
   sendTyping,
   subscribeToRoomMembers,
   subscribeToRoomMessages,
   type TypingEvent,
 } from "@/lib/supabase/realtime";
-import { markRoomDelivered, markRoomRead } from "@/app/actions/rooms";
+import {
+  markRoomDelivered,
+  markRoomRead,
+  setMessagePinned,
+} from "@/app/actions/rooms";
 import { CallButton } from "@/components/call/CallButton";
 import { Avatar } from "@/components/Avatar";
 import { PresenceDot } from "@/components/PresenceDot";
@@ -44,6 +64,8 @@ import {
 } from "@/components/uikit/sheet";
 import { GroupDetails } from "@/components/GroupDetails";
 import { buildDaySections } from "@/lib/chat/grouping";
+import { MAX_MESSAGE_CHARS, RichText, stripFormatting } from "@/lib/chat/rich-text";
+import { attachmentError, ATTACHMENT_ACCEPT } from "@/lib/attachments";
 import { publicDisplayName } from "@/lib/display-name";
 import { receiptStatus } from "@/lib/receipts";
 import type {
@@ -58,6 +80,10 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const TYPING_THROTTLE_MS = 2000;
 const TYPING_EXPIRE_MS = 4000;
 const PAGE_SIZE = 50;
+
+/** Layout effects run on the client only; SSR falls back to useEffect. */
+const useIsomorphicLayoutEffect =
+  typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 /**
  * Supabase Storage keys accept only an S3-safe ASCII subset, so a file
@@ -132,17 +158,61 @@ function ReceiptTicks({ status }: { status: "sent" | "delivered" | "read" }) {
       : status === "delivered"
         ? "Delivered"
         : "Sent";
-  if (status === "sent") {
-    return (
-      <Check className="size-3.5" aria-label={label} title={label} />
-    );
-  }
   return (
-    <CheckCheck
-      className={`size-3.5 ${status === "read" ? "text-sky-500" : ""}`}
+    <span title={label} aria-label={label} className="inline-flex">
+      {status === "sent" ? (
+        <Check className="size-3.5" />
+      ) : (
+        <CheckCheck
+          className={`size-3.5 ${status === "read" ? "text-sky-500" : ""}`}
+        />
+      )}
+    </span>
+  );
+}
+
+function PinButton({
+  pinned,
+  onClick,
+}: {
+  pinned: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted transition-opacity hover:bg-mist hover:text-ink ${
+        pinned ? "text-amber-600 opacity-100" : "opacity-0 group-hover/msg:opacity-100"
+      }`}
+      aria-label={pinned ? "Unpin message" : "Pin message"}
+      title={pinned ? "Unpin message" : "Pin message"}
+    >
+      {pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+    </button>
+  );
+}
+
+function FormatButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-paper hover:text-ink"
       aria-label={label}
       title={label}
-    />
+    >
+      {children}
+    </button>
   );
 }
 
@@ -192,6 +262,15 @@ export function ChatRoom({
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [typers, setTypers] = useState<Record<string, number>>({});
   const [older, setOlder] = useState({ has: hasOlder, loading: false });
+  const [showMembers, setShowMembers] = useState(false);
+  const [pinned, setPinned] = useState<Message[]>([]);
+  const [unseen, setUnseen] = useState(0);
+
+  // Pinning exists for group chats and private messages, and only
+  // admins/managers may do it (set_message_pinned enforces the same).
+  const canPin =
+    (roomType === "group" || roomType === "dm") &&
+    (currentUserRole === "admin" || currentUserRole === "manager");
 
   const streamRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -205,6 +284,8 @@ export function ChatRoom({
   const lastCreatedAtRef = useRef<string | null>(
     initialMessages[initialMessages.length - 1]?.created_at ?? null,
   );
+  /** Scroll geometry captured before a history page is prepended. */
+  const restoreRef = useRef<{ top: number; height: number } | null>(null);
 
   useEffect(() => {
     setMembers(initialMembers);
@@ -267,6 +348,11 @@ export function ChatRoom({
       lastCreatedAtRef.current = next[next.length - 1]?.created_at ?? null;
       return next;
     });
+    // Someone else's message that lands while the reader is scrolled up
+    // feeds the "new messages" jump button instead of moving the view.
+    if (msg.sender_id !== currentUserId && !nearBottomRef.current) {
+      setUnseen((n) => n + 1);
+    }
     // A message from someone means they stopped typing.
     if (msg.sender_id) {
       setTypers((prev) => {
@@ -276,7 +362,55 @@ export function ChatRoom({
         return next;
       });
     }
+  }, [currentUserId]);
+
+  /** An existing row changed (today: pinned/unpinned). */
+  const applyMessageUpdate = useCallback((msg: Message) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msg.id ? { ...m, ...msg } : m)),
+    );
+    setPinned((prev) => {
+      const without = prev.filter((m) => m.id !== msg.id);
+      if (!msg.pinned_at) return without;
+      return [msg, ...without].sort(
+        (a, b) =>
+          new Date(b.pinned_at ?? 0).getTime() -
+          new Date(a.pinned_at ?? 0).getTime(),
+      );
+    });
   }, []);
+
+  const refreshPinned = useCallback(async () => {
+    try {
+      setPinned(await fetchPinnedMessages(supabase, roomId));
+    } catch {
+      // pinned banner is decorative; a failure just leaves it empty
+    }
+  }, [supabase, roomId]);
+
+  useEffect(() => {
+    void refreshPinned();
+  }, [refreshPinned]);
+
+  const onTogglePin = useCallback(
+    async (msg: Message) => {
+      const next = !msg.pinned_at;
+      const res = await setMessagePinned(msg.id, next);
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      await refreshPinned();
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msg.id
+            ? { ...m, pinned_at: next ? new Date().toISOString() : null }
+            : m,
+        ),
+      );
+    },
+    [refreshPinned],
+  );
 
   const onTyping = useCallback(
     (event: TypingEvent) => {
@@ -353,6 +487,7 @@ export function ChatRoom({
         () => {
           if (!cancelled) void reconcile();
         },
+        applyMessageUpdate,
       );
       channelRef.current = channel;
     })();
@@ -378,6 +513,7 @@ export function ChatRoom({
     supabase,
     roomId,
     mergeMessage,
+    applyMessageUpdate,
     onTyping,
     currentUserId,
     scheduleMarkRead,
@@ -411,9 +547,21 @@ export function ChatRoom({
   // First paint lands at the bottom instantly; afterwards only follow
   // new messages when the reader is already near the bottom (or the
   // message is their own) so scrollback is never yanked away.
-  useEffect(() => {
+  //
+  // A prepended history page is handled here too, before the browser
+  // paints: restoring the offset in a passive effect (or a rAF) let the
+  // taller content render first, which is what made the view jump.
+  useIsomorphicLayoutEffect(() => {
     const el = streamRef.current;
     if (!el) return;
+
+    const restore = restoreRef.current;
+    if (restore) {
+      restoreRef.current = null;
+      el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+      return;
+    }
+
     if (!didInitScrollRef.current) {
       didInitScrollRef.current = true;
       el.scrollTop = el.scrollHeight;
@@ -428,9 +576,51 @@ export function ChatRoom({
   const onStreamScroll = useCallback(() => {
     const el = streamRef.current;
     if (!el) return;
-    nearBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+    nearBottomRef.current = atBottom;
+    if (atBottom) setUnseen(0);
   }, []);
+
+  /** Jump to a message that is already loaded (pinned banner). */
+  const scrollToMessage = useCallback((messageId: string) => {
+    const el = streamRef.current?.querySelector<HTMLElement>(
+      `[data-message-id="${messageId}"]`,
+    );
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("ring-2", "ring-amber-400", "rounded-2xl");
+    setTimeout(
+      () => el.classList.remove("ring-2", "ring-amber-400", "rounded-2xl"),
+      1600,
+    );
+  }, []);
+
+  const jumpToLatest = useCallback(() => {
+    nearBottomRef.current = true;
+    setUnseen(0);
+    scrollToBottom(true);
+  }, [scrollToBottom]);
+
+  // Arriving from a search result (/rooms/:id?m=:messageId): wait for the
+  // first page to render, then reveal that message.
+  useEffect(() => {
+    const target = new URLSearchParams(window.location.search).get("m");
+    if (!target) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries += 1;
+      const found = streamRef.current?.querySelector(
+        `[data-message-id="${target}"]`,
+      );
+      if (found) {
+        clearInterval(timer);
+        scrollToMessage(target);
+      } else if (tries > 12) {
+        clearInterval(timer);
+      }
+    }, 200);
+    return () => clearInterval(timer);
+  }, [roomId, scrollToMessage]);
 
   const sign = useCallback<SignFn>(
     async (path) => {
@@ -448,7 +638,6 @@ export function ChatRoom({
     const first = messages[0];
     if (!el || !first || older.loading) return;
     setOlder((o) => ({ ...o, loading: true }));
-    const prevHeight = el.scrollHeight;
     try {
       const page = await fetchMessagesBefore(
         supabase,
@@ -456,15 +645,21 @@ export function ChatRoom({
         first.created_at,
         PAGE_SIZE,
       );
+      // Captured immediately before the state commit so the layout
+      // effect can put the reader back on the exact same message.
+      restoreRef.current = { top: el.scrollTop, height: el.scrollHeight };
       setMessages((prev) => {
         const seen = new Set(prev.map((m) => m.id));
-        return [...page.filter((m) => !seen.has(m.id)), ...prev];
+        const fresh = page.filter((m) => !seen.has(m.id));
+        if (fresh.length === 0) {
+          restoreRef.current = null;
+          return prev;
+        }
+        return [...fresh, ...prev];
       });
       setOlder({ has: page.length === PAGE_SIZE, loading: false });
-      requestAnimationFrame(() => {
-        el.scrollTop += el.scrollHeight - prevHeight;
-      });
     } catch {
+      restoreRef.current = null;
       setOlder((o) => ({ ...o, loading: false }));
     }
   }, [messages, older.loading, supabase, roomId]);
@@ -474,6 +669,53 @@ export function ChatRoom({
     if (!ta) return;
     ta.style.height = "0px";
     ta.style.height = `${Math.min(ta.scrollHeight, 128)}px`;
+  }
+
+  /** Wrap the selection (or the caret) in a formatting marker. */
+  function wrapSelection(marker: string) {
+    const ta = taRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart ?? body.length;
+    const end = ta.selectionEnd ?? start;
+    const selected = body.slice(start, end);
+    const next =
+      body.slice(0, start) + marker + selected + marker + body.slice(end);
+    if (next.length > MAX_MESSAGE_CHARS) return;
+    setBody(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      const caret = start + marker.length + selected.length;
+      ta.setSelectionRange(
+        selected ? start + marker.length : caret,
+        caret,
+      );
+      autoresize();
+    });
+  }
+
+  /** Turn the selected lines (or the current line) into a list. */
+  function prefixLines(prefix: string) {
+    const ta = taRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart ?? body.length;
+    const end = ta.selectionEnd ?? start;
+    const lineStart = body.lastIndexOf("\n", start - 1) + 1;
+    const lineEndIdx = body.indexOf("\n", end);
+    const lineEnd = lineEndIdx === -1 ? body.length : lineEndIdx;
+    const block = body.slice(lineStart, lineEnd) || "";
+    const numbered = prefix === "1. ";
+    const rebuilt = block
+      .split("\n")
+      .map((line, i) => `${numbered ? `${i + 1}. ` : prefix}${line}`)
+      .join("\n");
+    const next = body.slice(0, lineStart) + rebuilt + body.slice(lineEnd);
+    if (next.length > MAX_MESSAGE_CHARS) return;
+    setBody(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(lineStart + rebuilt.length, lineStart + rebuilt.length);
+      autoresize();
+    });
   }
 
   function noteTyping() {
@@ -491,6 +733,12 @@ export function ChatRoom({
     const text = body.trim();
     if (sending) return;
     if (!text && pendingFiles.length === 0) return;
+    if (text.length > MAX_MESSAGE_CHARS) {
+      setError(
+        `Messages are limited to ${MAX_MESSAGE_CHARS} characters (yours is ${text.length}).`,
+      );
+      return;
+    }
 
     if (pendingFiles.length > 0) {
       await sendAttachments(pendingFiles, text);
@@ -524,6 +772,11 @@ export function ChatRoom({
 
   async function sendAttachments(files: File[], caption: string) {
     for (const file of files) {
+      const blocked = attachmentError(file);
+      if (blocked) {
+        setError(blocked);
+        return;
+      }
       if (file.size > MAX_FILE_BYTES) {
         setError("Each file must be under 25 MB.");
         return;
@@ -688,6 +941,44 @@ export function ChatRoom({
         </button>
       </div>
 
+      {/* ── Pinned ─────────────────────────────────────────────── */}
+      {pinned.length > 0 && (
+        <div className="shrink-0 border-b border-line/80 bg-amber-50/80 px-3 py-1.5 sm:px-6 dark:bg-amber-950/30">
+          <div className="mx-auto w-full max-w-3xl space-y-1">
+            {pinned.map((msg) => (
+              <div key={msg.id} className="flex items-center gap-2">
+                <Pin className="size-3.5 shrink-0 text-amber-600" />
+                <button
+                  type="button"
+                  onClick={() => scrollToMessage(msg.id)}
+                  className="min-w-0 flex-1 truncate text-left text-[12.5px] text-ink"
+                  title="Jump to pinned message"
+                >
+                  <span className="font-medium">
+                    {msg.sender_id
+                      ? (memberMap.get(msg.sender_id) ?? "Pinned")
+                      : "Pinned"}
+                    :{" "}
+                  </span>
+                  {stripFormatting(msg.body) || msg.attachment_name || "Attachment"}
+                </button>
+                {canPin && (
+                  <button
+                    type="button"
+                    onClick={() => void onTogglePin(msg)}
+                    className="shrink-0 rounded-md p-1 text-muted hover:bg-amber-100 hover:text-ink"
+                    aria-label="Unpin message"
+                    title="Unpin"
+                  >
+                    <PinOff className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* ── Message stream ─────────────────────────────────────── */}
       <div className="relative min-h-0 flex-1">
         <div
@@ -744,17 +1035,26 @@ export function ChatRoom({
                       {g.messages.map((msg, i) => (
                         <div
                           key={msg.id}
-                          className="mt-[3px] max-w-[85%] sm:max-w-[70%]"
+                          data-message-id={msg.id}
+                          className="group/msg mt-[3px] flex max-w-[85%] items-center gap-1 sm:max-w-[70%]"
                         >
-                          <Bubble
-                            msg={msg}
-                            mine
-                            tail={i === g.messages.length - 1}
-                            sign={sign}
-                            onMediaLoad={() => {
-                              if (nearBottomRef.current) scrollToBottom(false);
-                            }}
-                          />
+                          {canPin && (
+                            <PinButton
+                              pinned={Boolean(msg.pinned_at)}
+                              onClick={() => void onTogglePin(msg)}
+                            />
+                          )}
+                          <div className="min-w-0">
+                            <Bubble
+                              msg={msg}
+                              mine
+                              tail={i === g.messages.length - 1}
+                              sign={sign}
+                              onMediaLoad={() => {
+                                if (nearBottomRef.current) scrollToBottom(false);
+                              }}
+                            />
+                          </div>
                         </div>
                       ))}
                       <p
@@ -799,8 +1099,12 @@ export function ChatRoom({
                         </span>
                       </p>
                       {g.messages.map((msg, i) => (
-                        <div key={msg.id} className="mt-[3px] flex">
-                          <div className="max-w-[85%] sm:max-w-[70%]">
+                        <div
+                          key={msg.id}
+                          data-message-id={msg.id}
+                          className="group/msg mt-[3px] flex items-center gap-1"
+                        >
+                          <div className="min-w-0 max-w-[85%] sm:max-w-[70%]">
                             <Bubble
                               msg={msg}
                               mine={false}
@@ -812,6 +1116,12 @@ export function ChatRoom({
                               }}
                             />
                           </div>
+                          {canPin && (
+                            <PinButton
+                              pinned={Boolean(msg.pinned_at)}
+                              onClick={() => void onTogglePin(msg)}
+                            />
+                          )}
                         </div>
                       ))}
                     </div>
@@ -823,6 +1133,17 @@ export function ChatRoom({
           <div ref={bottomRef} className="h-px" />
           </div>
         </div>
+
+        {unseen > 0 && (
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-brand-grad px-3.5 py-1.5 text-[12.5px] font-semibold text-white shadow-brand"
+          >
+            <ArrowDown className="size-3.5" />
+            {unseen} new {unseen === 1 ? "message" : "messages"}
+          </button>
+        )}
       </div>
 
       {/* ── Composer ───────────────────────────────────────────── */}
@@ -864,13 +1185,24 @@ export function ChatRoom({
             ref={fileRef}
             type="file"
             multiple
+            accept={ATTACHMENT_ACCEPT}
             className="hidden"
             onChange={(e) => {
               const list = e.target.files;
-              if (!list?.length) return;
-              const next = Array.from(list);
-              setPendingFiles((prev) => [...prev, ...next]);
               e.target.value = "";
+              if (!list?.length) return;
+              const next: File[] = [];
+              for (const file of Array.from(list)) {
+                const blocked = attachmentError(file);
+                if (blocked) {
+                  setError(blocked);
+                  continue;
+                }
+                next.push(file);
+              }
+              if (next.length === 0) return;
+              setError(null);
+              setPendingFiles((prev) => [...prev, ...next]);
             }}
           />
           <button
@@ -882,12 +1214,47 @@ export function ChatRoom({
           >
             <Paperclip className="size-[21px]" />
           </button>
-          <div className="flex min-h-10 flex-1 items-end rounded-3xl bg-secondary px-4 py-2">
+          <div className="flex min-h-10 flex-1 flex-col rounded-3xl bg-secondary px-4 py-2">
+            <div className="flex items-center gap-0.5 pb-1">
+              <FormatButton label="Bold" onClick={() => wrapSelection("**")}>
+                <Bold className="size-3.5" />
+              </FormatButton>
+              <FormatButton label="Italic" onClick={() => wrapSelection("*")}>
+                <Italic className="size-3.5" />
+              </FormatButton>
+              <FormatButton label="Underline" onClick={() => wrapSelection("__")}>
+                <Underline className="size-3.5" />
+              </FormatButton>
+              <FormatButton
+                label="Bulleted list"
+                onClick={() => prefixLines("- ")}
+              >
+                <List className="size-3.5" />
+              </FormatButton>
+              <FormatButton
+                label="Numbered list"
+                onClick={() => prefixLines("1. ")}
+              >
+                <ListOrdered className="size-3.5" />
+              </FormatButton>
+              <span
+                className={`ml-auto text-[11px] tabular-nums ${
+                  body.length > MAX_MESSAGE_CHARS
+                    ? "font-semibold text-red-600"
+                    : body.length > MAX_MESSAGE_CHARS * 0.9
+                      ? "text-amber-600"
+                      : "text-muted"
+                }`}
+              >
+                {body.length}/{MAX_MESSAGE_CHARS}
+              </span>
+            </div>
             <textarea
               ref={taRef}
               value={body}
+              maxLength={MAX_MESSAGE_CHARS}
               onChange={(e) => {
-                setBody(e.target.value);
+                setBody(e.target.value.slice(0, MAX_MESSAGE_CHARS));
                 autoresize();
                 if (e.target.value.trim()) noteTyping();
               }}
@@ -910,7 +1277,11 @@ export function ChatRoom({
           </div>
           <button
             type="submit"
-            disabled={sending || (!body.trim() && pendingFiles.length === 0)}
+            disabled={
+              sending ||
+              body.length > MAX_MESSAGE_CHARS ||
+              (!body.trim() && pendingFiles.length === 0)
+            }
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-grad text-white shadow-brand transition-[opacity,transform] hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:shadow-none"
             aria-label="Send"
           >
@@ -1037,9 +1408,9 @@ function Bubble({
     return (
       <div className={`flex flex-col gap-1.5 px-2 py-2 ${shape} ${surface}`}>
         {msg.kind === "file" && msg.body && msg.body !== files[0]?.name && (
-          <p className="whitespace-pre-wrap break-words px-1.5 text-[15px] leading-relaxed">
-            {msg.body}
-          </p>
+          <div className="px-1.5 text-[15px] leading-relaxed">
+            <RichText text={msg.body} />
+          </div>
         )}
         {files.map((file) =>
           isImageFile(file.mime, file.name) ? (
@@ -1098,9 +1469,18 @@ function Bubble({
 
   return (
     <div className={`px-3.5 py-2 ${shape} ${surface}`}>
-      <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
-        {msg.body}
-      </p>
+      {msg.pinned_at && (
+        <p
+          className={`mb-0.5 flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wide ${
+            mine ? "text-white/80" : "text-amber-600"
+          }`}
+        >
+          <Pin className="size-3" /> Pinned
+        </p>
+      )}
+      <div className="break-words text-[15px] leading-relaxed">
+        <RichText text={msg.body} />
+      </div>
     </div>
   );
 }

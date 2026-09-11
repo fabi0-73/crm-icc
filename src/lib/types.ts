@@ -80,6 +80,8 @@ export type Message = {
   attachment_mime: string | null;
   metadata: Record<string, unknown> | null;
   created_at: string;
+  pinned_at?: string | null;
+  pinned_by?: string | null;
 };
 
 export type AuditLog = {

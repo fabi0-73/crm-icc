@@ -48,9 +48,7 @@ export default async function RoomPage({
     if (profile.role === "admin") {
       // Admins may read any conversation without joining.
     } else {
-      const canJoin =
-        room.type !== "dm" &&
-        (profile.role === "admin" || profile.role === "manager");
+      const canJoin = room.type !== "dm" && profile.role === "manager";
       if (!canJoin) notFound();
       return <JoinRoomPrompt roomId={room.id} roomName={room.name} />;
     }
@@ -106,6 +104,9 @@ export default async function RoomPage({
 
   return (
     <ChatRoom
+      // Remount per room: without this the previous conversation's
+      // messages stay in state while the new ones stream in.
+      key={room.id}
       roomId={room.id}
       roomName={dmOther ? publicDisplayName(dmOther) : room.name}
       roomType={room.type}

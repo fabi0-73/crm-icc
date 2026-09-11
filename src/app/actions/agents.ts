@@ -183,7 +183,7 @@ export async function swapAssistants(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { supabase } = await requireRole(["admin", "manager"]);
+  const { supabase } = await requireRole(["admin"]);
 
   const agentId = String(formData.get("agent_id") ?? "");
   const reason = String(formData.get("reason") ?? "").trim() || null;

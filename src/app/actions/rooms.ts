@@ -224,6 +224,44 @@ export async function setRoomAvatar(
   return { success: "Group image updated." };
 }
 
+/** Admins delete any channel; managers only ones they manage. */
+export async function deleteRoom(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const roomId = String(formData.get("room_id") ?? "");
+  if (!roomId) return { error: "Missing room." };
+
+  try {
+    const { supabase } = await requireRole(["admin", "manager"]);
+    const { error } = await supabase.rpc("delete_room", { p_room_id: roomId });
+    if (error) return { error: error.message };
+  } catch (e) {
+    return { error: actionError(e, "Could not delete the channel.") };
+  }
+
+  revalidatePath("/rooms", "layout");
+  return { success: "Channel deleted." };
+}
+
+/** Pin/unpin a message. Admins and managers only (enforced again in SQL). */
+export async function setMessagePinned(
+  messageId: string,
+  pinned: boolean,
+): Promise<{ error?: string }> {
+  try {
+    const { supabase } = await requireRole(["admin", "manager"]);
+    const { error } = await supabase.rpc("set_message_pinned", {
+      p_message_id: messageId,
+      p_pinned: pinned,
+    });
+    if (error) return { error: error.message };
+    return {};
+  } catch (e) {
+    return { error: actionError(e, "Could not update the pin.") };
+  }
+}
+
 export async function markRoomRead(roomId: string) {
   const { supabase } = await requireProfile();
   await supabase.rpc("mark_room_read", { p_room_id: roomId });

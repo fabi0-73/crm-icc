@@ -9,6 +9,7 @@ import {
   MessageCircle,
   Settings,
   ShieldCheck,
+  Trash2,
   UserMinus,
   UserPlus,
 } from "lucide-react";
@@ -27,6 +28,7 @@ import { createClient } from "@/lib/supabase/client";
 import { uploadGroupAvatar } from "@/lib/avatars";
 import {
   addRoomMember,
+  deleteRoom,
   leaveRoom,
   openDm,
   removeRoomMember,
@@ -67,6 +69,12 @@ export function GroupDetails({
   // Group admins run the room; app admins/managers can run any group.
   const canManage = isGroup && (myRoomRole === "admin" || appManager);
   const canAdd = canManage;
+  // Admins delete any channel; managers only the ones they run. Everyone
+  // else never sees the control (delete_room re-checks server-side).
+  const canDelete =
+    isGroup &&
+    (currentUserRole === "admin" ||
+      (currentUserRole === "manager" && myRoomRole === "admin"));
 
   const addModal = useModal();
   const settingsModal = useModal();
@@ -261,6 +269,7 @@ export function GroupDetails({
           roomId={roomId}
           initialName={roomName}
           initialAvatar={roomAvatarUrl}
+          canDelete={canDelete}
           onClose={settingsModal.closeModal}
         />
       )}
@@ -493,13 +502,18 @@ function GroupSettingsModal({
   roomId,
   initialName,
   initialAvatar,
+  canDelete,
   onClose,
 }: {
   roomId: string;
   initialName: string;
   initialAvatar: string | null;
+  canDelete: boolean;
   onClose: () => void;
 }) {
+  const router = useRouter();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [name, setName] = useState(initialName);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(initialAvatar);
   const [uploading, setUploading] = useState(false);
@@ -613,6 +627,58 @@ function GroupSettingsModal({
         >
           {pending ? "Saving…" : "Save changes"}
         </Button>
+
+        {canDelete && (
+          <div className="border-t border-line pt-4">
+            {confirmDelete ? (
+              <div className="space-y-2">
+                <p className="text-sm text-ink">
+                  Delete <span className="font-semibold">{initialName}</span>?
+                  Every message and attachment reference in this channel is
+                  removed for everyone. This cannot be undone.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                    className="flex-1 rounded-md border border-line px-3 py-2 text-sm text-muted hover:bg-mist"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deleting}
+                    onClick={async () => {
+                      setDeleting(true);
+                      setError(null);
+                      const f = new FormData();
+                      f.set("room_id", roomId);
+                      const res = await deleteRoom({}, f);
+                      if (res.error) {
+                        setError(res.error);
+                        setDeleting(false);
+                        return;
+                      }
+                      router.push("/rooms");
+                      router.refresh();
+                    }}
+                    className="flex-1 rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:brightness-110 disabled:opacity-50"
+                  >
+                    {deleting ? "Deleting…" : "Delete channel"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+              >
+                <Trash2 className="size-4" /> Delete channel
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </Modal>
   );

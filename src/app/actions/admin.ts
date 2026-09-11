@@ -447,11 +447,19 @@ async function buildFootprint(
   };
 }
 
+/** Managers may only delete regular users (assistants); admins, anyone. */
+function deletionScopeError(actorRole: Role, targetRole: Role) {
+  if (actorRole === "manager" && targetRole !== "assistant") {
+    return "Managers can only delete regular users.";
+  }
+  return null;
+}
+
 /** Read-only preview for the delete dialog. */
 export async function describeUserDeletion(
   userId: string,
 ): Promise<{ footprint?: DeletionFootprint; error?: string }> {
-  const { profile: actor } = await requireRole(["admin"]);
+  const { profile: actor } = await requireRole(["admin", "manager"]);
   if (!userId) return { error: "Missing user." };
 
   let service;
@@ -465,6 +473,8 @@ export async function describeUserDeletion(
 
   const footprint = await buildFootprint(service, userId, actor.id);
   if (!footprint) return { error: "That account no longer exists." };
+  const scope = deletionScopeError(actor.role, footprint.role);
+  if (scope) return { error: scope };
   return { footprint };
 }
 
@@ -472,7 +482,7 @@ export async function deleteUserAccount(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { profile: actor } = await requireRole(["admin"]);
+  const { profile: actor } = await requireRole(["admin", "manager"]);
   const userId = String(formData.get("user_id") ?? "");
   const typed = String(formData.get("confirm") ?? "").trim();
   if (!userId) return { error: "Missing user." };
@@ -489,6 +499,8 @@ export async function deleteUserAccount(
   // Recomputed here: the dialog's numbers are a preview, not permission.
   const footprint = await buildFootprint(service, userId, actor.id);
   if (!footprint) return { error: "That account no longer exists." };
+  const scope = deletionScopeError(actor.role, footprint.role);
+  if (scope) return { error: scope };
   if (footprint.blockedReason) return { error: footprint.blockedReason };
   if (
     footprint.needsTypedConfirmation &&

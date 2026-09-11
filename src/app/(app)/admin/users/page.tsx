@@ -2,6 +2,7 @@ import { requireRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { emailToUsername } from "@/lib/username";
 import { EditAssistantNameButton } from "@/components/EditAssistantNameButton";
+import { NewUserButton } from "@/components/NewUserButton";
 import { ResetPasswordButton } from "@/components/ResetPasswordButton";
 import { DeleteUserButton } from "@/components/DeleteUserButton";
 import { ActionForm } from "@/components/ActionForm";
@@ -120,9 +121,12 @@ export default async function UsersPage() {
                       name={u.full_name}
                     />
                   )}
-                  {isAdmin && u.id !== self.id && (
-                    <DeleteUserButton userId={u.id} name={u.full_name} />
-                  )}
+                  {/* Managers may delete regular users only; the server
+                      action re-checks the same rule. */}
+                  {u.id !== self.id &&
+                    (isAdmin || u.role === "assistant") && (
+                      <DeleteUserButton userId={u.id} name={u.full_name} />
+                    )}
                 </div>
               </Td>
             </tr>

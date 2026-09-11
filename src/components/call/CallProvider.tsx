@@ -10,6 +10,12 @@
  *   to_user   = me — signals addressed to me
  *   from_user = me — my own answer/decline from ANOTHER tab, so this
  *                    tab stops ringing when a second tab handles a call
+ *
+ * Topology: a full mesh. Every participant holds one RTCPeerConnection
+ * per other participant, all sharing the same call_id. The invite
+ * carries the roster; to avoid glare exactly one side of each pair
+ * offers (the caller always offers to the people it invited, and
+ * between two invitees the lower user id offers).
  */
 
 import {
@@ -47,7 +53,12 @@ const RING_TIMEOUT_CALLEE_MS = 35_000;
 const STALE_INVITE_MS = 45_000;
 const RESEND_MS = 3_000;
 
+/** Hard ceiling on a single group call. */
+export const MAX_CALL_PARTICIPANTS = 100;
+
 type SignalKind = "invite" | "offer" | "answer" | "ice" | "hangup" | "decline";
+
+type RosterEntry = { id: string; name: string };
 
 type SignalPayload = {
   fromName?: string;
@@ -56,6 +67,10 @@ type SignalPayload = {
   reason?: "busy" | "timeout" | "media";
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
+  /** Everyone in this call, caller included (mesh discovery). */
+  roster?: RosterEntry[];
+  /** Who started the call — invitees never offer to them. */
+  callerId?: string;
 };
 
 type SignalRow = {
@@ -73,12 +88,23 @@ export type CallPhase = "idle" | "dialing" | "ringing" | "connecting" | "in-call
 export type ActiveCall = {
   callId: string;
   roomId: string;
+  /** Primary peer (the other person in a 1:1, the caller in a group). */
   peerId: string;
   peerName: string;
   video: boolean;
+  /** Everyone invited, caller included. One entry in a 1:1. */
+  roster: RosterEntry[];
 };
 
 export type IncomingCall = ActiveCall & { roomName: string | null };
+
+export type Participant = {
+  id: string;
+  name: string;
+  stream: MediaStream | null;
+  hasVideo: boolean;
+  connected: boolean;
+};
 
 type CallContextValue = {
   phase: CallPhase;
@@ -92,13 +118,15 @@ type CallContextValue = {
   statusText: string;
   signalReady: boolean;
   localStream: MediaStream | null;
+  /** Primary remote stream — the mini tile and 1:1 view use this. */
   remoteStream: MediaStream | null;
   remoteHasVideo: boolean;
+  participants: Participant[];
   connectedAt: number | null;
   dial: (
     roomId: string,
     roomName: string,
-    peer: { id: string; full_name: string },
+    peers: RosterEntry[],
     video: boolean,
   ) => Promise<void>;
   accept: () => Promise<void>;
@@ -157,6 +185,19 @@ function isMediaError(err: unknown): boolean {
   return false;
 }
 
+/** One leg of the mesh. */
+type PeerEntry = {
+  pc: RTCPeerConnection;
+  name: string;
+  stream: MediaStream | null;
+  hasVideo: boolean;
+  connected: boolean;
+  pendingIce: RTCIceCandidateInit[];
+  remoteSet: boolean;
+  /** True once we added a screen track as an extra sender (voice call). */
+  screenAddedSender: boolean;
+};
+
 export function CallProvider({
   userId,
   userName,
@@ -179,34 +220,32 @@ export function CallProvider({
   const [statusText, setStatusText] = useState("");
   const [signalReady, setSignalReady] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const [remoteHasVideo, setRemoteHasVideo] = useState(false);
+  const [participants, setParticipants] = useState<Participant[]>([]);
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const peersRef = useRef<Map<string, PeerEntry>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
-  /** True when screen was added as a new sender (voice call); false when replaceTrack. */
-  const screenAddedSenderRef = useRef(false);
-  const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const callIdRef = useRef<string | null>(null);
   const roomIdRef = useRef<string | null>(null);
-  const peerIdRef = useRef<string | null>(null);
+  const callerIdRef = useRef<string | null>(null);
+  const rosterRef = useRef<RosterEntry[]>([]);
   const phaseRef = useRef<CallPhase>("idle");
   const incomingRef = useRef<IncomingCall | null>(null);
-  const pendingOfferRef = useRef<{ callId: string; from: string; payload: SignalPayload } | null>(null);
-  const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+  const videoCallRef = useRef(false);
+  /** Offers that arrived before this user accepted, keyed by sender. */
+  const pendingOffersRef = useRef<Map<string, SignalPayload>>(new Map());
   const acceptedRef = useRef(false);
-  const remoteSetRef = useRef(false);
-  const answeredCallIdRef = useRef<string | null>(null);
   const resendTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ringTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handlingRef = useRef<((row: SignalRow) => Promise<void>) | null>(null);
   const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dropTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dropTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
   const connectedAtRef = useRef<number | null>(null);
   /** Set once hangup exists; lets the ICE handler end a dead call. */
   const endCallRef = useRef<(() => void) | null>(null);
@@ -237,11 +276,23 @@ export function CallProvider({
     }
   }, []);
 
+  /** Publish the peer map to React. */
+  const syncParticipants = useCallback(() => {
+    setParticipants(
+      [...peersRef.current.entries()].map(([id, p]) => ({
+        id,
+        name: p.name,
+        stream: p.stream,
+        hasVideo: p.hasVideo,
+        connected: p.connected,
+      })),
+    );
+  }, []);
+
   /**
    * Once the call is answered nothing else was watching the connection:
-   * if ICE never completed (blocked relay, dead network) both sides sat on
-   * "Connecting…" forever, and a peer that vanished mid-call left the
-   * other on a running timer. These end the call instead.
+   * if ICE never completed (blocked relay, dead network) everyone sat on
+   * "Connecting…" forever. This ends the call instead.
    */
   const armConnectTimeout = useCallback(() => {
     if (connectTimerRef.current) clearTimeout(connectTimerRef.current);
@@ -266,36 +317,61 @@ export function CallProvider({
     [supabase],
   );
 
+  /** Drop one leg of the mesh (peer hung up, or its connection died). */
+  const closePeer = useCallback(
+    (peerId: string) => {
+      const entry = peersRef.current.get(peerId);
+      if (!entry) return;
+      try {
+        entry.pc.close();
+      } catch {
+        /* ignore */
+      }
+      peersRef.current.delete(peerId);
+      const timer = dropTimersRef.current.get(peerId);
+      if (timer) {
+        clearTimeout(timer);
+        dropTimersRef.current.delete(peerId);
+      }
+      syncParticipants();
+    },
+    [syncParticipants],
+  );
+
   const cleanup = useCallback(
     (opts?: { purge?: boolean }) => {
-      // FIX A: bump the generation so any in-flight async (getMedia/dial/
-      // accept/answerOffer/toggleNoise) sees the change and aborts its
+      // Bump the generation so any in-flight async (getMedia/dial/accept/
+      // answerOffer/toggleNoise) sees the change and aborts its
       // continuation instead of resurrecting a torn-down call.
       callGenRef.current += 1;
       clearTimers();
-      if (dropTimerRef.current) {
-        clearTimeout(dropTimerRef.current);
-        dropTimerRef.current = null;
-      }
+      dropTimersRef.current.forEach((t) => clearTimeout(t));
+      dropTimersRef.current.clear();
       connectedAtRef.current = null;
       stopTones();
       if (opts?.purge) purgeSignals(callIdRef.current);
-      pcRef.current?.close();
-      pcRef.current = null;
+      peersRef.current.forEach((entry) => {
+        try {
+          entry.pc.close();
+        } catch {
+          /* ignore */
+        }
+      });
+      peersRef.current.clear();
+      // Screen capture is stopped here too: ending a call while sharing
+      // must release the display surface, not just the camera and mic.
       screenStreamRef.current?.getTracks().forEach((t) => t.stop());
       screenStreamRef.current = null;
       cameraTrackRef.current = null;
-      screenAddedSenderRef.current = false;
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
       callIdRef.current = null;
       roomIdRef.current = null;
-      peerIdRef.current = null;
-      pendingOfferRef.current = null;
-      pendingIceRef.current = [];
+      callerIdRef.current = null;
+      rosterRef.current = [];
+      videoCallRef.current = false;
+      pendingOffersRef.current.clear();
       acceptedRef.current = false;
-      remoteSetRef.current = false;
-      answeredCallIdRef.current = null;
       setPhase("idle");
       setCall(null);
       setIncoming(null);
@@ -306,8 +382,7 @@ export function CallProvider({
       setSharing(false);
       setStatusText("");
       setLocalStream(null);
-      setRemoteStream(null);
-      setRemoteHasVideo(false);
+      setParticipants([]);
       setConnectedAt(null);
     },
     [clearTimers, purgeSignals],
@@ -334,101 +409,127 @@ export function CallProvider({
     [supabase, userId],
   );
 
-  const flushIce = useCallback(async () => {
-    const pc = pcRef.current;
-    if (!pc?.remoteDescription) return;
-    const queued = pendingIceRef.current.splice(0);
+  const flushIce = useCallback(async (peerId: string) => {
+    const entry = peersRef.current.get(peerId);
+    if (!entry?.pc.remoteDescription) return;
+    const queued = entry.pendingIce.splice(0);
     for (const c of queued) {
       try {
-        await pc.addIceCandidate(c);
+        await entry.pc.addIceCandidate(c);
       } catch {
         /* ignore */
       }
     }
   }, []);
 
-  /** Replay ICE rows that arrived before this client was ready. */
+  /** Replay ICE rows from one peer that arrived before we were ready. */
   const loadMissedIce = useCallback(
-    async (callId: string) => {
+    async (callId: string, peerId: string) => {
       const { data, error } = await supabase
         .from("call_signals")
         .select("payload")
         .eq("call_id", callId)
         .eq("to_user", userId)
+        .eq("from_user", peerId)
         .eq("kind", "ice")
         .order("created_at", { ascending: true });
       if (error || !data) return;
+      const entry = peersRef.current.get(peerId);
+      if (!entry) return;
       for (const row of data) {
         const candidate = (row.payload as SignalPayload)?.candidate;
-        if (candidate) pendingIceRef.current.push(candidate);
+        if (candidate) entry.pendingIce.push(candidate);
       }
-      await flushIce();
+      await flushIce(peerId);
     },
     [flushIce, supabase, userId],
   );
 
-  const ensurePc = useCallback(
-    (peerId: string) => {
-      if (pcRef.current) return pcRef.current;
+  const ensurePeer = useCallback(
+    (peerId: string, name?: string) => {
+      const existing = peersRef.current.get(peerId);
+      if (existing) {
+        if (name && existing.name !== name) {
+          existing.name = name;
+          syncParticipants();
+        }
+        return existing;
+      }
+
       const pc = new RTCPeerConnection({ iceServers: iceServers() });
+      const entry: PeerEntry = {
+        pc,
+        name: name ?? "Participant",
+        stream: null,
+        hasVideo: false,
+        connected: false,
+        pendingIce: [],
+        remoteSet: false,
+        screenAddedSender: false,
+      };
+      peersRef.current.set(peerId, entry);
+
       pc.onicecandidate = (e) => {
         if (!e.candidate || !callIdRef.current || !roomIdRef.current) return;
         void send("ice", callIdRef.current, peerId, roomIdRef.current, {
           candidate: e.candidate.toJSON(),
         });
       };
+
       pc.ontrack = (e) => {
-        const incoming = e.streams[0] ?? new MediaStream([e.track]);
-        // Merge newly arrived tracks into one remote stream so voice→screen
-        // renegotiation (extra video track) still reaches the UI/audio sink.
-        setRemoteStream((prev) => {
-          const next = new MediaStream(prev?.getTracks() ?? []);
-          for (const t of incoming.getTracks()) {
-            if (!next.getTracks().some((x) => x.id === t.id)) next.addTrack(t);
-          }
-          if (!next.getTracks().some((x) => x.id === e.track.id)) {
-            next.addTrack(e.track);
-          }
-          if (remoteAudioRef.current) {
-            remoteAudioRef.current.srcObject = next;
-            void remoteAudioRef.current.play().catch(() => undefined);
-          }
-          return next;
-        });
-        // FIX C: keep remoteHasVideo honest as the peer's video comes and
-        // goes (screen share stop/start, camera off) so the receiver drops
-        // back to audio/avatar instead of freezing on the last frame.
-        if (e.track.kind === "video") {
-          const recompute = () => {
-            const active = pcRef.current;
-            setRemoteHasVideo(
-              Boolean(
-                active &&
-                  active
-                    .getReceivers()
-                    .some(
-                      (r) =>
-                        r.track?.kind === "video" &&
-                        r.track.readyState === "live" &&
-                        !r.track.muted,
-                    ),
-              ),
+        const incomingStream = e.streams[0] ?? new MediaStream([e.track]);
+        const current = peersRef.current.get(peerId);
+        if (!current) return;
+        // Merge newly arrived tracks into one stream per peer so a
+        // voice→screen renegotiation reaches the UI and the audio sink.
+        const next = new MediaStream(current.stream?.getTracks() ?? []);
+        for (const t of incomingStream.getTracks()) {
+          if (!next.getTracks().some((x) => x.id === t.id)) next.addTrack(t);
+        }
+        if (!next.getTracks().some((x) => x.id === e.track.id)) {
+          next.addTrack(e.track);
+        }
+        current.stream = next;
+
+        // Keep hasVideo honest as the peer's video comes and goes (screen
+        // share stop/start, camera off) so the tile drops back to the
+        // avatar instead of freezing on the last frame.
+        const recompute = () => {
+          const live = peersRef.current.get(peerId);
+          if (!live) return;
+          live.hasVideo = live.pc
+            .getReceivers()
+            .some(
+              (r) =>
+                r.track?.kind === "video" &&
+                r.track.readyState === "live" &&
+                !r.track.muted,
             );
-          };
+          syncParticipants();
+        };
+        if (e.track.kind === "video") {
           e.track.addEventListener("ended", recompute);
           e.track.addEventListener("mute", recompute);
           e.track.addEventListener("unmute", recompute);
-          incoming.addEventListener("removetrack", recompute);
-          recompute();
+          incomingStream.addEventListener("removetrack", recompute);
         }
+        recompute();
+        syncParticipants();
       };
+
       pc.oniceconnectionstatechange = () => {
         const s = pc.iceConnectionState;
-        if (dropTimerRef.current) {
-          clearTimeout(dropTimerRef.current);
-          dropTimerRef.current = null;
+        const live = peersRef.current.get(peerId);
+        if (!live) return;
+        const existingTimer = dropTimersRef.current.get(peerId);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+          dropTimersRef.current.delete(peerId);
         }
+
         if (s === "connected" || s === "completed") {
+          live.connected = true;
+          syncParticipants();
           clearTimers();
           stopTones();
           setPhase("in-call");
@@ -439,36 +540,50 @@ export function CallProvider({
             return at;
           });
         } else if (s === "checking") {
-          setStatusText("Connecting…");
+          if (!connectedAtRef.current) setStatusText("Connecting…");
         } else if (s === "disconnected") {
           // Often transient (network switch) — give it a moment to recover.
-          setStatusText("Reconnecting…");
-          dropTimerRef.current = setTimeout(() => {
-            dropTimerRef.current = null;
-            if (pcRef.current?.iceConnectionState === "disconnected") {
-              showNotice("Call dropped — the connection was lost");
-              endCallRef.current?.();
-            }
-          }, DROP_GRACE_MS);
-        } else if (s === "failed" || s === "closed") {
-          setStatusText("Connection failed");
-          showNotice(
-            connectedAtRef.current
-              ? "Call dropped — the connection was lost"
-              : "Couldn't connect — check your network and try again",
+          live.connected = false;
+          syncParticipants();
+          if (peersRef.current.size === 1) setStatusText("Reconnecting…");
+          dropTimersRef.current.set(
+            peerId,
+            setTimeout(() => {
+              dropTimersRef.current.delete(peerId);
+              const stillBad =
+                peersRef.current.get(peerId)?.pc.iceConnectionState ===
+                "disconnected";
+              if (!stillBad) return;
+              closePeer(peerId);
+              if (peersRef.current.size === 0) {
+                showNotice("Call dropped — the connection was lost");
+                endCallRef.current?.();
+              }
+            }, DROP_GRACE_MS),
           );
-          endCallRef.current?.();
+        } else if (s === "failed" || s === "closed") {
+          closePeer(peerId);
+          if (peersRef.current.size === 0) {
+            setStatusText("Connection failed");
+            showNotice(
+              connectedAtRef.current
+                ? "Call dropped — the connection was lost"
+                : "Couldn't connect — check your network and try again",
+            );
+            endCallRef.current?.();
+          }
         }
       };
-      pcRef.current = pc;
-      return pc;
+
+      syncParticipants();
+      return entry;
     },
-    [clearTimers, send],
+    [clearTimers, closePeer, send, showNotice, syncParticipants],
   );
 
   const getMedia = useCallback(async (video: boolean) => {
-    // FIX A: capture the generation so a stream that arrives after the call
-    // ended is stopped, never stored (this is what kept the webcam light on).
+    // Capture the generation so a stream that arrives after the call
+    // ended is stopped, never stored (this is what kept the webcam on).
     const gen = callGenRef.current;
     if (!window.isSecureContext && location.hostname !== "localhost") {
       throw new Error("Calls need HTTPS.");
@@ -476,13 +591,25 @@ export function CallProvider({
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error("This browser cannot access mic/camera.");
     }
+    // 720p 16:9 with no crop-scaling: the default 4:3 capture was being
+    // cropped to fill the stage, which is what made the camera look
+    // zoomed in. A wider native frame keeps the same detail.
+    const videoConstraints = {
+      facingMode: "user",
+      width: { ideal: 1280, max: 1920 },
+      height: { ideal: 720, max: 1080 },
+      aspectRatio: { ideal: 16 / 9 },
+      frameRate: { ideal: 30, max: 30 },
+      resizeMode: "none",
+    } as unknown as MediaTrackConstraints;
+
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
       },
-      video: video ? { facingMode: "user" } : false,
+      video: video ? videoConstraints : false,
     });
     if (callGenRef.current !== gen) {
       stream.getTracks().forEach((t) => t.stop());
@@ -494,17 +621,66 @@ export function CallProvider({
     return stream;
   }, []);
 
-  /** Answer a mid-call renegotiation offer (e.g. peer started screenshare on a voice call). */
+  /** Put our local tracks on a peer connection exactly once. */
+  const attachLocalTracks = useCallback((pc: RTCPeerConnection) => {
+    const stream = localStreamRef.current;
+    if (!stream) return;
+    for (const track of stream.getTracks()) {
+      if (!pc.getSenders().some((s) => s.track?.id === track.id)) {
+        pc.addTrack(track, stream);
+      }
+    }
+    // If we are already screen sharing, the newcomer gets the screen too.
+    const screenTrack = screenStreamRef.current?.getVideoTracks()[0];
+    if (screenTrack && !pc.getSenders().some((s) => s.track?.id === screenTrack.id)) {
+      pc.addTrack(screenTrack, stream);
+    }
+  }, []);
+
+  /** Offer to a peer we are responsible for initiating with. */
+  const offerTo = useCallback(
+    async (peerId: string, name: string, video: boolean) => {
+      const callId = callIdRef.current;
+      const roomId = roomIdRef.current;
+      if (!callId || !roomId) return;
+      const gen = callGenRef.current;
+      const entry = ensurePeer(peerId, name);
+      attachLocalTracks(entry.pc);
+      if (entry.pc.signalingState !== "stable") return;
+
+      const offer = await entry.pc.createOffer();
+      if (callGenRef.current !== gen) return;
+      await entry.pc.setLocalDescription(offer);
+      await waitForIceGathering(entry.pc);
+      if (callGenRef.current !== gen) return;
+      const finalOffer = entry.pc.localDescription ?? offer;
+      await send("offer", callId, peerId, roomId, {
+        fromName: userName,
+        video,
+        callerId: callerIdRef.current ?? undefined,
+        roster: rosterRef.current,
+        sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
+      });
+    },
+    [attachLocalTracks, ensurePeer, send, userName],
+  );
+
+  /** Answer a mid-call renegotiation offer (peer started screenshare). */
   const answerRenegotiation = useCallback(
-    async (sdp: RTCSessionDescriptionInit, from: string, callId: string, roomId: string) => {
-      const pc = pcRef.current;
-      if (!pc || pc.signalingState !== "stable") return;
-      await pc.setRemoteDescription(sdp);
-      await flushIce();
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await waitForIceGathering(pc);
-      const finalAnswer = pc.localDescription ?? answer;
+    async (
+      sdp: RTCSessionDescriptionInit,
+      from: string,
+      callId: string,
+      roomId: string,
+    ) => {
+      const entry = peersRef.current.get(from);
+      if (!entry || entry.pc.signalingState !== "stable") return;
+      await entry.pc.setRemoteDescription(sdp);
+      await flushIce(from);
+      const answer = await entry.pc.createAnswer();
+      await entry.pc.setLocalDescription(answer);
+      await waitForIceGathering(entry.pc);
+      const finalAnswer = entry.pc.localDescription ?? answer;
       await send("answer", callId, from, roomId, {
         sdp: { type: finalAnswer.type, sdp: finalAnswer.sdp },
       });
@@ -512,55 +688,73 @@ export function CallProvider({
     [flushIce, send],
   );
 
+  /** Answer the initial offer from one peer. */
   const answerOffer = useCallback(
     async (offer: { callId: string; from: string; payload: SignalPayload }) => {
-      // FIX A: capture the generation; abort after any await if cleanup ran,
-      // so a stale continuation never sends an answer or flips phase after
-      // the call already ended.
+      // Capture the generation; abort after any await if cleanup ran, so a
+      // stale continuation never sends an answer or flips phase.
       const gen = callGenRef.current;
       if (!offer.payload.sdp) return;
-      if (answeredCallIdRef.current === offer.callId || remoteSetRef.current) return;
-      const pc = ensurePc(offer.from);
-      if (pc.currentRemoteDescription || pc.signalingState !== "stable") return;
+      const entry = ensurePeer(offer.from, offer.payload.fromName);
+      if (entry.remoteSet || entry.pc.currentRemoteDescription) return;
+      if (entry.pc.signalingState !== "stable") return;
 
-      const video = Boolean(offer.payload.video);
+      const video = Boolean(offer.payload.video || videoCallRef.current);
       if (!localStreamRef.current) await getMedia(video);
-      if (callGenRef.current !== gen) return; // FIX A
-      const stream = localStreamRef.current!;
-      for (const track of stream.getTracks()) {
-        if (!pc.getSenders().some((s) => s.track?.id === track.id)) {
-          pc.addTrack(track, stream);
-        }
-      }
-      await pc.setRemoteDescription(offer.payload.sdp);
-      if (callGenRef.current !== gen) return; // FIX A — do not assign refs
-      remoteSetRef.current = true;
-      answeredCallIdRef.current = offer.callId;
-      await loadMissedIce(offer.callId);
-      if (callGenRef.current !== gen) return; // FIX A
-      await flushIce();
-      if (callGenRef.current !== gen) return; // FIX A
-      const answer = await pc.createAnswer();
-      if (callGenRef.current !== gen) return; // FIX A
-      await pc.setLocalDescription(answer);
-      if (callGenRef.current !== gen) return; // FIX A
-      await waitForIceGathering(pc);
-      if (callGenRef.current !== gen) return; // FIX A
-      const finalAnswer = pc.localDescription ?? answer;
+      if (callGenRef.current !== gen) return;
+      attachLocalTracks(entry.pc);
+
+      await entry.pc.setRemoteDescription(offer.payload.sdp);
+      if (callGenRef.current !== gen) return;
+      entry.remoteSet = true;
+      await loadMissedIce(offer.callId, offer.from);
+      if (callGenRef.current !== gen) return;
+      await flushIce(offer.from);
+      const answer = await entry.pc.createAnswer();
+      if (callGenRef.current !== gen) return;
+      await entry.pc.setLocalDescription(answer);
+      await waitForIceGathering(entry.pc);
+      if (callGenRef.current !== gen) return;
+      const finalAnswer = entry.pc.localDescription ?? answer;
       await send("answer", offer.callId, offer.from, roomIdRef.current!, {
         sdp: { type: finalAnswer.type, sdp: finalAnswer.sdp },
       });
-      if (callGenRef.current !== gen) return; // FIX A — do not flip phase
-      // On a fast network ICE can reach "connected" before this resolves.
-      // Without this guard the callee is knocked back to "Connecting…"
-      // for the rest of the call — audio flowing, timer never starting.
+      if (callGenRef.current !== gen) return;
+      // On a fast network ICE can reach "connected" before this resolves;
+      // without the guard the callee is knocked back to "Connecting…".
       if (!connectedAtRef.current) {
         setStatusText("Connecting…");
         setPhase("connecting");
       }
       setIncoming(null);
     },
-    [ensurePc, flushIce, getMedia, loadMissedIce, send],
+    [
+      attachLocalTracks,
+      ensurePeer,
+      flushIce,
+      getMedia,
+      loadMissedIce,
+      send,
+    ],
+  );
+
+  /** Connect to everyone else in the roster (mesh), avoiding glare. */
+  const connectRoster = useCallback(
+    (video: boolean) => {
+      const callerId = callerIdRef.current;
+      for (const person of rosterRef.current) {
+        if (person.id === userId) continue;
+        if (person.id === callerId) continue; // they offer to us
+        if (peersRef.current.has(person.id)) continue;
+        // Deterministic offerer between two invitees.
+        if (userId < person.id) {
+          void offerTo(person.id, person.name, video).catch(() => {});
+        } else {
+          ensurePeer(person.id, person.name);
+        }
+      }
+    },
+    [ensurePeer, offerTo, userId],
   );
 
   const handleSignal = useCallback(
@@ -574,8 +768,8 @@ export function CallProvider({
           incomingRef.current?.callId === row.call_id &&
           !acceptedRef.current
         ) {
-          // FIX E: full cleanup (not a partial reset) so any peer connection
-          // or media this tab spun up for the same call can't leak.
+          // Full cleanup (not a partial reset) so any peer connection or
+          // media this tab spun up for the same call can't leak.
           cleanup();
         }
         // Another tab of ours ended the call — this tab must drop too.
@@ -608,7 +802,15 @@ export function CallProvider({
         }
         callIdRef.current = row.call_id;
         roomIdRef.current = row.room_id;
-        peerIdRef.current = row.from_user;
+        callerIdRef.current = row.from_user;
+        videoCallRef.current = Boolean(p.video);
+        rosterRef.current =
+          p.roster && p.roster.length > 0
+            ? p.roster
+            : [
+                { id: row.from_user, name: p.fromName ?? "Unknown caller" },
+                { id: userId, name: userName },
+              ];
         setIncoming({
           callId: row.call_id,
           roomId: row.room_id,
@@ -616,6 +818,7 @@ export function CallProvider({
           peerName: p.fromName ?? "Unknown caller",
           roomName: p.roomName ?? null,
           video: Boolean(p.video),
+          roster: rosterRef.current,
         });
         setPhase("ringing");
         startRingtone();
@@ -633,34 +836,38 @@ export function CallProvider({
       }
 
       if (row.kind === "decline" || row.kind === "hangup") {
-        if (!callIdRef.current || callIdRef.current === row.call_id) {
-          if (phaseRef.current === "dialing") {
-            showNotice(
-              row.kind === "decline"
-                ? p.reason === "busy"
-                  ? "Busy on another call"
-                  : p.reason === "media"
-                    ? "They couldn't access their mic/camera."
-                    : "Call declined"
-                : "Call ended",
-            );
-          } else if (phaseRef.current === "ringing") {
-            showNotice("Missed call");
-          }
-          // Don't purge here — the peer that hung up delays the delete so
-          // this INSERT can land on every device first.
-          cleanup();
+        if (callIdRef.current && callIdRef.current !== row.call_id) return;
+
+        if (row.kind === "decline" && peersRef.current.size > 0) {
+          // One invitee said no to a group call — the call goes on.
+          pendingOffersRef.current.delete(row.from_user);
+          closePeer(row.from_user);
+          if (peersRef.current.size > 0) return;
         }
+
+        if (phaseRef.current === "dialing") {
+          showNotice(
+            row.kind === "decline"
+              ? p.reason === "busy"
+                ? "Busy on another call"
+                : p.reason === "media"
+                  ? "They couldn't access their mic/camera."
+                  : "Call declined"
+              : "Call ended",
+          );
+        } else if (phaseRef.current === "ringing") {
+          showNotice("Missed call");
+        }
+        // Don't purge here — whoever hung up delays the delete so this
+        // INSERT can land on every device first.
+        cleanup();
         return;
       }
 
       if (row.kind === "offer" && p.sdp) {
-        // Mid-call renegotiation (screenshare on a voice call).
-        if (
-          phaseRef.current === "in-call" &&
-          callIdRef.current === row.call_id &&
-          remoteSetRef.current
-        ) {
+        const known = peersRef.current.get(row.from_user);
+        // Mid-call renegotiation (screenshare started/stopped).
+        if (known?.remoteSet && callIdRef.current === row.call_id) {
           try {
             await answerRenegotiation(p.sdp, row.from_user, row.call_id, row.room_id);
           } catch (err) {
@@ -669,36 +876,39 @@ export function CallProvider({
           return;
         }
 
-        if (answeredCallIdRef.current !== row.call_id) {
-          pendingOfferRef.current = {
+        // A participant we have not met yet (mesh join) — only trust it
+        // for the call we are already in, or one we are being invited to.
+        if (callIdRef.current && callIdRef.current !== row.call_id) return;
+        if (!acceptedRef.current) {
+          pendingOffersRef.current.set(row.from_user, p);
+          return; // wait for the user to accept
+        }
+        try {
+          await answerOffer({
             callId: row.call_id,
             from: row.from_user,
             payload: p,
-          };
-        }
-        if (!acceptedRef.current) return; // wait for the user to accept
-        if (answeredCallIdRef.current === row.call_id || remoteSetRef.current) return;
-        try {
-          await answerOffer({ callId: row.call_id, from: row.from_user, payload: p });
+          });
         } catch (err) {
           setStatusText(err instanceof Error ? err.message : "Call failed");
         }
         return;
       }
 
-      if (row.kind === "answer" && p.sdp && pcRef.current) {
+      if (row.kind === "answer" && p.sdp) {
+        const entry = peersRef.current.get(row.from_user);
+        if (!entry) return;
         try {
           stopTones();
           clearTimers();
           // The ring timeout just went away — from here on the connection
           // itself is what we wait for.
           armConnectTimeout();
-          const pc = pcRef.current;
-          if (pc.signalingState === "have-local-offer") {
-            remoteSetRef.current = true;
-            await pc.setRemoteDescription(p.sdp);
-            await loadMissedIce(row.call_id);
-            await flushIce();
+          if (entry.pc.signalingState === "have-local-offer") {
+            entry.remoteSet = true;
+            await entry.pc.setRemoteDescription(p.sdp);
+            await loadMissedIce(row.call_id, row.from_user);
+            await flushIce(row.from_user);
           }
           if (phaseRef.current !== "in-call") {
             setPhase("connecting");
@@ -711,37 +921,62 @@ export function CallProvider({
       }
 
       if (row.kind === "ice" && p.candidate) {
-        if (pcRef.current?.remoteDescription) {
+        const entry = peersRef.current.get(row.from_user);
+        if (!entry) return;
+        if (entry.pc.remoteDescription) {
           try {
-            await pcRef.current.addIceCandidate(p.candidate);
+            await entry.pc.addIceCandidate(p.candidate);
           } catch {
             /* ignore */
           }
         } else {
-          pendingIceRef.current.push(p.candidate);
+          entry.pendingIce.push(p.candidate);
         }
       }
     },
-    [answerOffer, answerRenegotiation, armConnectTimeout, cleanup, clearTimers, flushIce, loadMissedIce, send, showNotice, userId],
+    [
+      answerOffer,
+      answerRenegotiation,
+      armConnectTimeout,
+      cleanup,
+      clearTimers,
+      closePeer,
+      flushIce,
+      loadMissedIce,
+      send,
+      showNotice,
+      userId,
+      userName,
+    ],
   );
 
   handlingRef.current = handleSignal;
 
   const hangup = useCallback(() => {
     const id = callIdRef.current;
-    const peer = peerIdRef.current;
     const room = roomIdRef.current;
-    // Tear down local media immediately, but do not delete signaling
-    // rows until the hangup insert has been delivered — otherwise the
-    // peer never sees the hangup and stays stuck in the call.
+    // Everyone in the call, not just the people we have a connection to:
+    // an invitee that never answered must stop ringing as well.
+    const targets = new Set<string>([
+      ...peersRef.current.keys(),
+      ...rosterRef.current.map((r) => r.id),
+    ]);
+    targets.delete(userId);
+
+    // Tear down local media (camera, mic AND any screen capture)
+    // immediately, but do not delete signaling rows until the hangup
+    // inserts have been delivered — otherwise peers never see the hangup
+    // and stay stuck in the call.
     cleanup({ purge: false });
-    if (id && peer && room) {
+    if (id && room && targets.size > 0) {
       void postCallEvent(room, "call_ended", "Call ended").catch(() => {});
-      void send("hangup", id, peer, room).finally(() => {
+      void Promise.all(
+        [...targets].map((to) => send("hangup", id, to, room)),
+      ).finally(() => {
         window.setTimeout(() => purgeSignals(id), 2000);
       });
     }
-  }, [cleanup, purgeSignals, send]);
+  }, [cleanup, purgeSignals, send, userId]);
 
   // The ICE handler is created before hangup exists, so it ends calls
   // through this ref.
@@ -751,7 +986,7 @@ export function CallProvider({
     async (
       roomId: string,
       roomName: string,
-      peer: { id: string; full_name: string },
+      peers: RosterEntry[],
       video: boolean,
     ) => {
       if (!signalReady) {
@@ -759,74 +994,119 @@ export function CallProvider({
         return;
       }
       if (phaseRef.current !== "idle") return;
+      const invitees = peers.filter((p) => p.id !== userId);
+      if (invitees.length === 0) return;
+      if (invitees.length + 1 > MAX_CALL_PARTICIPANTS) {
+        showNotice(`A call can hold ${MAX_CALL_PARTICIPANTS} people.`);
+        return;
+      }
 
-      // FIX A: a new call begins here — bump the generation so any async
+      // A new call begins here — bump the generation so any async
       // continuation from a previous (torn-down) call aborts itself.
       callGenRef.current += 1;
       const gen = callGenRef.current;
 
       const callId = crypto.randomUUID();
+      const roster: RosterEntry[] = [
+        { id: userId, name: userName },
+        ...invitees,
+      ];
       callIdRef.current = callId;
       roomIdRef.current = roomId;
-      peerIdRef.current = peer.id;
+      callerIdRef.current = userId;
+      rosterRef.current = roster;
+      videoCallRef.current = video;
       acceptedRef.current = true;
-      setCall({ callId, roomId, peerId: peer.id, peerName: peer.full_name, video });
+      setCall({
+        callId,
+        roomId,
+        peerId: invitees[0].id,
+        peerName:
+          invitees.length === 1
+            ? invitees[0].name
+            : `${roomName} · ${invitees.length + 1} people`,
+        video,
+        roster,
+      });
       setPhase("dialing");
       setView("full");
       setStatusText("Ringing…");
 
       try {
-        const stream = await getMedia(video);
-        if (callGenRef.current !== gen) return; // FIX A
-        const pc = ensurePc(peer.id);
-        stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+        await getMedia(video);
+        if (callGenRef.current !== gen) return;
 
         const invitePayload: SignalPayload = {
           fromName: userName,
           roomName,
           video,
+          roster,
+          callerId: userId,
         };
-        await send("invite", callId, peer.id, roomId, invitePayload);
-        if (callGenRef.current !== gen) return; // FIX A
+
+        for (const peer of invitees) {
+          const entry = ensurePeer(peer.id, peer.name);
+          attachLocalTracks(entry.pc);
+          await send("invite", callId, peer.id, roomId, invitePayload);
+        }
+        if (callGenRef.current !== gen) return;
+
         void postCallEvent(
           roomId,
           "call_started",
           video ? "Video call started" : "Voice call started",
         ).catch(() => {});
 
-        const offer = await pc.createOffer();
-        if (callGenRef.current !== gen) return; // FIX A
-        await pc.setLocalDescription(offer);
-        // Embed candidates in the SDP so a late accept still has a full offer.
-        await waitForIceGathering(pc);
-        if (callGenRef.current !== gen) return; // FIX A
-        const finalOffer = pc.localDescription ?? offer;
-        const offerPayload: SignalPayload = {
-          fromName: userName,
-          roomName,
-          video,
-          sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
-        };
-        await send("offer", callId, peer.id, roomId, offerPayload);
-        if (callGenRef.current !== gen) return; // FIX A
+        // Offer to each invitee. Candidates are embedded in the SDP so a
+        // late accept still has a complete offer.
+        const offers = new Map<string, SignalPayload>();
+        for (const peer of invitees) {
+          const entry = peersRef.current.get(peer.id);
+          if (!entry) continue;
+          const offer = await entry.pc.createOffer();
+          if (callGenRef.current !== gen) return;
+          await entry.pc.setLocalDescription(offer);
+          await waitForIceGathering(entry.pc);
+          if (callGenRef.current !== gen) return;
+          const finalOffer = entry.pc.localDescription ?? offer;
+          const payload: SignalPayload = {
+            fromName: userName,
+            roomName,
+            video,
+            roster,
+            callerId: userId,
+            sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
+          };
+          offers.set(peer.id, payload);
+          await send("offer", callId, peer.id, roomId, payload);
+        }
+        if (callGenRef.current !== gen) return;
 
         startRingback();
 
         // Re-send invite + offer until answered (covers a callee whose
         // page is still loading), bounded by the ring timeout below.
         resendTimerRef.current = setInterval(() => {
-          if (remoteSetRef.current || pcRef.current?.connectionState === "connected") {
+          const outstanding = [...peersRef.current.entries()].filter(
+            ([, e]) => !e.remoteSet && e.pc.connectionState !== "connected",
+          );
+          if (outstanding.length === 0) {
             if (resendTimerRef.current) clearInterval(resendTimerRef.current);
             resendTimerRef.current = null;
             return;
           }
-          void send("invite", callId, peer.id, roomId, invitePayload);
-          void send("offer", callId, peer.id, roomId, offerPayload);
+          for (const [peerId] of outstanding) {
+            void send("invite", callId, peerId, roomId, invitePayload);
+            const payload = offers.get(peerId);
+            if (payload) void send("offer", callId, peerId, roomId, payload);
+          }
         }, RESEND_MS);
 
         ringTimerRef.current = setTimeout(() => {
           if (phaseRef.current !== "dialing") return;
-          void send("hangup", callId, peer.id, roomId, { reason: "timeout" });
+          for (const peer of invitees) {
+            void send("hangup", callId, peer.id, roomId, { reason: "timeout" });
+          }
           // Persistent trace + unread badge for the callee. Clients can
           // only insert text/file kinds, so this rides a normal message.
           void supabase.from("messages").insert({
@@ -839,18 +1119,29 @@ export function CallProvider({
           cleanup({ purge: true });
         }, RING_TIMEOUT_MS);
       } catch (err) {
-        if (callGenRef.current !== gen) return; // FIX A: cleanup already ran
-        showNotice(mediaErrorMessage(err)); // FIX B: truthful media failure
+        if (callGenRef.current !== gen) return; // cleanup already ran
+        showNotice(mediaErrorMessage(err));
         cleanup({ purge: true });
       }
     },
-    [cleanup, ensurePc, getMedia, send, showNotice, signalReady, supabase, userId, userName],
+    [
+      attachLocalTracks,
+      cleanup,
+      ensurePeer,
+      getMedia,
+      send,
+      showNotice,
+      signalReady,
+      supabase,
+      userId,
+      userName,
+    ],
   );
 
   const accept = useCallback(async () => {
     const inc = incomingRef.current;
     if (!inc) return;
-    // FIX A: a new call begins here — bump the generation.
+    // A new call begins here — bump the generation.
     callGenRef.current += 1;
     const gen = callGenRef.current;
     acceptedRef.current = true;
@@ -861,27 +1152,34 @@ export function CallProvider({
       callId: inc.callId,
       roomId: inc.roomId,
       peerId: inc.peerId,
-      peerName: inc.peerName,
+      peerName:
+        inc.roster.length > 2
+          ? `${inc.roomName ?? "Group"} · ${inc.roster.length} people`
+          : inc.peerName,
       video: inc.video,
+      roster: inc.roster,
     });
     setPhase("connecting");
     setView("full");
     setStatusText("Connecting…");
     try {
       await getMedia(inc.video);
-      if (callGenRef.current !== gen) return; // FIX A
-      const pending = pendingOfferRef.current;
-      if (pending && pending.callId === inc.callId) {
-        await answerOffer(pending);
-        if (callGenRef.current !== gen) return; // FIX A
-        pendingOfferRef.current = null;
-      } else {
-        setStatusText("Waiting for call data…");
+      if (callGenRef.current !== gen) return;
+
+      const pending = [...pendingOffersRef.current.entries()];
+      pendingOffersRef.current.clear();
+      for (const [from, payload] of pending) {
+        await answerOffer({ callId: inc.callId, from, payload });
+        if (callGenRef.current !== gen) return;
       }
+      if (pending.length === 0) setStatusText("Waiting for call data…");
+
+      // Group call: reach the other invitees directly (mesh).
+      connectRoster(inc.video);
       setIncoming(null);
     } catch (err) {
-      if (callGenRef.current !== gen) return; // FIX A: cleanup already ran
-      // FIX B: when OUR media fails, tell the caller the truth (not a bare
+      if (callGenRef.current !== gen) return; // cleanup already ran
+      // When OUR media fails, tell the caller the truth (not a bare
       // "declined") and show ourselves a friendly reason.
       const media = isMediaError(err);
       showNotice(mediaErrorMessage(err));
@@ -894,14 +1192,23 @@ export function CallProvider({
       );
       cleanup();
     }
-  }, [answerOffer, armConnectTimeout, cleanup, clearTimers, getMedia, send, showNotice]);
+  }, [
+    answerOffer,
+    armConnectTimeout,
+    cleanup,
+    clearTimers,
+    connectRoster,
+    getMedia,
+    send,
+    showNotice,
+  ]);
 
   const decline = useCallback(() => {
     const inc = incomingRef.current;
     if (!inc) return;
     void postCallEvent(inc.roomId, "call_ended", "Call ended").catch(() => {});
     void send("decline", inc.callId, inc.peerId, inc.roomId);
-    pendingOfferRef.current = null;
+    pendingOffersRef.current.clear();
     cleanup();
   }, [cleanup, send]);
 
@@ -937,11 +1244,10 @@ export function CallProvider({
   const toggleNoise = useCallback(() => {
     const next = !noiseOff;
     setNoiseOff(next);
-    // FIX D: applyConstraints is silently ignored for noiseSuppression by
-    // several browsers, so re-acquire the audio track with the desired
-    // setting and hot-swap it onto the sender.
+    // applyConstraints is silently ignored for noiseSuppression by several
+    // browsers, so re-acquire the audio track with the desired setting and
+    // hot-swap it onto every sender.
     const gen = callGenRef.current;
-    const pc = pcRef.current;
     const ls = localStreamRef.current;
     const oldTrack = ls?.getAudioTracks()[0] ?? null;
     void (async () => {
@@ -955,15 +1261,18 @@ export function CallProvider({
           video: false,
         });
         const newTrack = fresh.getAudioTracks()[0] ?? null;
-        // FIX A: call ended mid-acquire — stop the fresh track, keep nothing.
+        // Call ended mid-acquire — stop the fresh track, keep nothing.
         if (callGenRef.current !== gen || !newTrack) {
           fresh.getTracks().forEach((t) => t.stop());
           return;
         }
         // Preserve the current mute state on the replacement track.
         newTrack.enabled = oldTrack ? oldTrack.enabled : true;
-        const sender = pc?.getSenders().find((s) => s.track?.kind === "audio");
-        if (sender) {
+        for (const entry of peersRef.current.values()) {
+          const sender = entry.pc
+            .getSenders()
+            .find((s) => s.track?.kind === "audio");
+          if (!sender) continue;
           try {
             await sender.replaceTrack(newTrack);
           } catch {
@@ -990,91 +1299,78 @@ export function CallProvider({
     }
     const cam = cameraTrackRef.current;
     const tracks = cam ? [...mic, cam] : [...mic];
-    const stream = new MediaStream(tracks);
     // Keep localStreamRef as the camera/mic ownership stream for cleanup.
-    setLocalStream(stream);
+    setLocalStream(new MediaStream(tracks));
   }, []);
 
+  /** Re-offer to one peer after adding/removing a screen track. */
+  const renegotiate = useCallback(
+    async (peerId: string, entry: PeerEntry) => {
+      const callId = callIdRef.current;
+      const roomId = roomIdRef.current;
+      if (!callId || !roomId || entry.pc.signalingState !== "stable") return;
+      try {
+        const offer = await entry.pc.createOffer();
+        await entry.pc.setLocalDescription(offer);
+        await waitForIceGathering(entry.pc);
+        const finalOffer = entry.pc.localDescription ?? offer;
+        await send("offer", callId, peerId, roomId, {
+          video: true,
+          sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
+        });
+      } catch (err) {
+        console.warn("renegotiation failed", err);
+      }
+    },
+    [send],
+  );
+
   const stopScreenShare = useCallback(async () => {
-    const pc = pcRef.current;
     const screen = screenStreamRef.current;
     const screenTrack = screen?.getVideoTracks()[0] ?? null;
 
-    if (pc && screenTrack) {
-      const videoSender = pc
-        .getSenders()
-        .find((s) => s.track?.id === screenTrack.id || s.track?.kind === "video");
-      if (screenAddedSenderRef.current && videoSender) {
-        try {
-          pc.removeTrack(videoSender);
-        } catch {
-          /* ignore */
-        }
-        if (
-          peerIdRef.current &&
-          callIdRef.current &&
-          roomIdRef.current &&
-          pc.signalingState === "stable"
-        ) {
+    if (screenTrack) {
+      for (const [peerId, entry] of peersRef.current.entries()) {
+        const videoSender = entry.pc
+          .getSenders()
+          .find(
+            (s) => s.track?.id === screenTrack.id || s.track?.kind === "video",
+          );
+        if (!videoSender) continue;
+
+        if (entry.screenAddedSender) {
           try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            await waitForIceGathering(pc);
-            const finalOffer = pc.localDescription ?? offer;
-            await send("offer", callIdRef.current, peerIdRef.current, roomIdRef.current, {
-              video: true,
-              sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
-            });
-          } catch (err) {
-            console.warn("screenshare stop renegotiation failed", err);
+            entry.pc.removeTrack(videoSender);
+          } catch {
+            /* ignore */
           }
-        }
-      } else if (videoSender) {
-        if (cameraTrackRef.current) {
+          entry.screenAddedSender = false;
+          await renegotiate(peerId, entry);
+        } else if (cameraTrackRef.current) {
           try {
             await videoSender.replaceTrack(cameraTrackRef.current);
           } catch {
             /* ignore */
           }
         } else {
-          // FIX C: camera was off, so there's no track to restore. Leaving
-          // the sender pointed at the stopped screen track freezes the last
-          // frame on the peer — drop the sender and renegotiate so the peer
-          // cleanly sees the video go away (same as the voice-call path).
+          // Camera was off, so there's no track to restore. Leaving the
+          // sender pointed at the stopped screen track freezes the last
+          // frame on the peer — drop it and renegotiate instead.
           try {
-            pc.removeTrack(videoSender);
+            entry.pc.removeTrack(videoSender);
           } catch {
             /* ignore */
           }
-          if (
-            peerIdRef.current &&
-            callIdRef.current &&
-            roomIdRef.current &&
-            pc.signalingState === "stable"
-          ) {
-            try {
-              const offer = await pc.createOffer();
-              await pc.setLocalDescription(offer);
-              await waitForIceGathering(pc);
-              const finalOffer = pc.localDescription ?? offer;
-              await send("offer", callIdRef.current, peerIdRef.current, roomIdRef.current, {
-                video: true,
-                sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
-              });
-            } catch (err) {
-              console.warn("screenshare stop renegotiation failed", err);
-            }
-          }
+          await renegotiate(peerId, entry);
         }
       }
     }
 
     screen?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current = null;
-    screenAddedSenderRef.current = false;
     setSharing(false);
     refreshLocalPreview(null);
-  }, [refreshLocalPreview, send]);
+  }, [refreshLocalPreview, renegotiate]);
 
   const startScreenShare = useCallback(async () => {
     if (phaseRef.current !== "in-call") return;
@@ -1086,8 +1382,9 @@ export function CallProvider({
       showNotice("This browser cannot share the screen.");
       return;
     }
-    const pc = pcRef.current;
-    if (!pc || !peerIdRef.current || !callIdRef.current || !roomIdRef.current) return;
+    if (peersRef.current.size === 0 || !callIdRef.current || !roomIdRef.current) {
+      return;
+    }
 
     try {
       const screen = await navigator.mediaDevices.getDisplayMedia({
@@ -1119,27 +1416,24 @@ export function CallProvider({
         void stopScreenShare();
       };
 
-      const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
-      if (videoSender) {
-        if (videoSender.track && videoSender.track !== cameraTrackRef.current) {
-          // Keep the original camera for restore if we somehow replaced already.
-        } else if (videoSender.track) {
-          cameraTrackRef.current = videoSender.track;
+      for (const [peerId, entry] of peersRef.current.entries()) {
+        const videoSender = entry.pc
+          .getSenders()
+          .find((s) => s.track?.kind === "video");
+        if (videoSender) {
+          if (videoSender.track && videoSender.track !== cameraTrackRef.current) {
+            // Already replaced somehow — keep the original for restore.
+          } else if (videoSender.track) {
+            cameraTrackRef.current = videoSender.track;
+          }
+          await videoSender.replaceTrack(screenTrack);
+          entry.screenAddedSender = false;
+        } else {
+          const camStream = localStreamRef.current ?? new MediaStream();
+          entry.pc.addTrack(screenTrack, camStream);
+          entry.screenAddedSender = true;
+          await renegotiate(peerId, entry);
         }
-        await videoSender.replaceTrack(screenTrack);
-        screenAddedSenderRef.current = false;
-      } else {
-        const camStream = localStreamRef.current ?? new MediaStream();
-        pc.addTrack(screenTrack, camStream);
-        screenAddedSenderRef.current = true;
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await waitForIceGathering(pc);
-        const finalOffer = pc.localDescription ?? offer;
-        await send("offer", callIdRef.current, peerIdRef.current, roomIdRef.current, {
-          video: true,
-          sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
-        });
       }
 
       setSharing(true);
@@ -1149,7 +1443,7 @@ export function CallProvider({
       if (err instanceof DOMException && err.name === "NotAllowedError") return;
       showNotice(err instanceof Error ? err.message : "Could not share screen");
     }
-  }, [refreshLocalPreview, send, showNotice, stopScreenShare]);
+  }, [refreshLocalPreview, renegotiate, showNotice, stopScreenShare]);
 
   const toggleScreenShare = useCallback(async () => {
     if (screenStreamRef.current) {
@@ -1213,6 +1507,9 @@ export function CallProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, userId]);
 
+  const primary = participants[0] ?? null;
+  const remoteHasVideo = participants.some((p) => p.hasVideo);
+
   const value = useMemo<CallContextValue>(
     () => ({
       phase,
@@ -1226,8 +1523,9 @@ export function CallProvider({
       statusText,
       signalReady,
       localStream,
-      remoteStream,
+      remoteStream: primary?.stream ?? null,
       remoteHasVideo,
+      participants,
       connectedAt,
       dial,
       accept,
@@ -1251,8 +1549,9 @@ export function CallProvider({
       statusText,
       signalReady,
       localStream,
-      remoteStream,
+      primary,
       remoteHasVideo,
+      participants,
       connectedAt,
       dial,
       accept,
@@ -1270,9 +1569,12 @@ export function CallProvider({
   return (
     <CallContext.Provider value={value}>
       {children}
-      {/* Persistent audio sink — never unmounts, so call audio survives
-          navigation and minimize/expand. */}
-      <audio ref={remoteAudioRef} autoPlay className="hidden" />
+      {/* Persistent audio sinks — one per participant, never inside the
+          call UI, so audio survives navigation and minimize/expand. The
+          video elements stay muted so nothing plays twice. */}
+      {participants.map((p) => (
+        <PeerAudio key={p.id} stream={p.stream} />
+      ))}
       {incoming && phase === "ringing" && <IncomingCallOverlay />}
       {onCall && (view === "full" ? <FullScreenCall /> : <FloatingCallTile />)}
       {notice && (
@@ -1285,4 +1587,18 @@ export function CallProvider({
       )}
     </CallContext.Provider>
   );
+}
+
+function PeerAudio({ stream }: { stream: MediaStream | null }) {
+  const ref = useRef<HTMLAudioElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.srcObject = stream;
+    if (stream) void el.play().catch(() => undefined);
+    return () => {
+      el.srcObject = null;
+    };
+  }, [stream]);
+  return <audio ref={ref} autoPlay className="hidden" />;
 }

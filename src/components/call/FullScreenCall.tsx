@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { Avatar } from "@/components/Avatar";
-import { useCall } from "@/components/call/CallProvider";
+import { useCall, type Participant } from "@/components/call/CallProvider";
 import { useDuration } from "@/components/call/useDuration";
 import {
   CamIcon,
@@ -27,6 +27,7 @@ export function FullScreenCall() {
     localStream,
     remoteStream,
     remoteHasVideo,
+    participants,
     connectedAt,
     hangup,
     toggleMic,
@@ -43,6 +44,12 @@ export function FullScreenCall() {
   // the remote track's live/mute events (FIX C) so the frame doesn't freeze
   // after the peer stops sharing.
   const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
+  // More than one remote peer means a grid; a 1:1 keeps the big stage.
+  const group = participants.length > 1;
+  const columns = Math.min(
+    5,
+    Math.max(1, Math.ceil(Math.sqrt(participants.length + 1))),
+  );
 
   useEffect(() => {
     const el = remoteVideoRef.current;
@@ -102,10 +109,33 @@ export function FullScreenCall() {
       </div>
 
       <div className="relative flex-1 min-h-0 overflow-hidden bg-ink">
-        {showVideo ? (
+        {group ? (
+          <div
+            className="grid h-full w-full auto-rows-fr gap-1 p-1"
+            style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+          >
+            {participants.map((p) => (
+              <ParticipantTile key={p.id} participant={p} />
+            ))}
+            <div className="relative overflow-hidden rounded-lg bg-ink-soft">
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className={`h-full w-full object-cover ${
+                  sharing ? "object-contain bg-ink" : "-scale-x-100"
+                } ${camOff && !sharing ? "opacity-30" : ""}`}
+              />
+              <span className="absolute bottom-1 left-1 rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white">
+                You
+              </span>
+            </div>
+          </div>
+        ) : showVideo ? (
           <>
-            {/* Muted on purpose: the provider's persistent <audio> element
-                is the single audio sink. Without this the same remote
+            {/* Muted on purpose: the provider's per-participant <audio>
+                elements are the audio sink. Without this the same remote
                 track plays twice on video calls. */}
             <video
               ref={remoteVideoRef}
@@ -124,8 +154,9 @@ export function FullScreenCall() {
               // Mirror your own camera preview, the way every video app
               // does, so it reads like a mirror instead of "reversed". A
               // shared screen must never be flipped (its text would go
-              // backwards), so only the camera is mirrored.
-              className={`absolute bottom-4 right-4 h-36 w-28 rounded-xl border border-white/20 ${
+              // backwards), so only the camera is mirrored. The tile is
+              // 16:9 to match the capture, so nothing is cropped away.
+              className={`absolute bottom-4 right-4 h-24 w-40 rounded-xl border border-white/20 ${
                 sharing ? "object-contain bg-ink" : "object-cover -scale-x-100"
               } ${camOff && !sharing ? "opacity-30" : ""}`}
             />
@@ -188,6 +219,44 @@ export function FullScreenCall() {
           <span className="text-[11px] text-white/50">End</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ParticipantTile({ participant }: { participant: Participant }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    el.srcObject = participant.stream;
+    if (participant.stream) void el.play().catch(() => undefined);
+    return () => {
+      el.srcObject = null;
+    };
+  }, [participant.stream]);
+
+  return (
+    <div className="relative overflow-hidden rounded-lg bg-ink-soft">
+      {/* Muted: audio plays through the provider's sinks. */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className={`h-full w-full object-cover ${
+          participant.hasVideo ? "" : "hidden"
+        }`}
+      />
+      {!participant.hasVideo && (
+        <div className="flex h-full items-center justify-center">
+          <Avatar name={participant.name} size="lg" />
+        </div>
+      )}
+      <span className="absolute bottom-1 left-1 max-w-[85%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white">
+        {participant.name}
+        {!participant.connected && " · connecting…"}
+      </span>
     </div>
   );
 }

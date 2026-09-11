@@ -10,6 +10,7 @@ import { PresenceDot } from "@/components/PresenceDot";
 import { NewDmButton } from "@/components/NewDmButton";
 import { NewGroupButton } from "@/components/NewGroupButton";
 import { Input } from "@/components/uikit/input";
+import { GlobalSearch } from "@/components/search/GlobalSearch";
 import type { MyRoom } from "@/lib/types";
 
 type Filter = "all" | "unread" | "channels" | "dms";
@@ -129,6 +130,7 @@ export function MobileChatsScreen({
   const { rooms } = useRooms();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const unreadCount = rooms.filter((r) => r.unread_count > 0).length;
 
@@ -169,6 +171,17 @@ export function MobileChatsScreen({
             className="h-11 rounded-full border-line/80 bg-white pl-10 text-[16px] shadow-xs placeholder:text-muted"
             aria-label="Search conversations"
           />
+        </div>
+
+        <div className="px-4 pt-2">
+          <button
+            type="button"
+            onClick={() => setSearchOpen(true)}
+            className="flex w-full items-center justify-center gap-1.5 rounded-full border border-line/80 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-muted shadow-xs active:bg-mist"
+          >
+            <Search className="size-3.5" />
+            Search messages and people
+          </button>
         </div>
 
         <div className="no-scrollbar mt-2.5 flex gap-2 overflow-x-auto px-4 pb-3">
@@ -230,6 +243,8 @@ export function MobileChatsScreen({
           </div>
         )}
       </div>
+
+      {searchOpen && <GlobalSearch onClose={() => setSearchOpen(false)} />}
     </div>
   );
 }
