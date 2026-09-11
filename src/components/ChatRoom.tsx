@@ -47,6 +47,12 @@ import {
   SheetTitle,
 } from "@/components/uikit/sheet";
 import { GroupDetails } from "@/components/GroupDetails";
+import { MediaHistory } from "@/components/MediaHistory";
+import { ImageLightbox } from "@/components/ImageLightbox";
+import {
+  messageAttachments,
+  type MessageAttachment,
+} from "@/lib/media/attachments";
 import { buildDaySections } from "@/lib/chat/grouping";
 import type {
   Message,
@@ -138,6 +144,8 @@ export function ChatRoom({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showMembers, setShowMembers] = useState(false);
+  /** Which pane of the details sheet is showing (roster vs shared media). */
+  const [detailsTab, setDetailsTab] = useState<"members" | "media">("members");
   const [typers, setTypers] = useState<Record<string, number>>({});
   const [older, setOlder] = useState({ has: hasOlder, loading: false });
 
@@ -1221,17 +1229,37 @@ export function ChatRoom({
       )}
 
       {/* ── Details sheet ──────────────────────────────────────── */}
-      <Sheet open={showMembers} onOpenChange={setShowMembers}>
+      <Sheet
+        open={showMembers}
+        onOpenChange={(open) => {
+          setShowMembers(open);
+          if (!open) setDetailsTab("members");
+        }}
+      >
         <SheetContent
           side="right"
           className="w-[88%] gap-0 bg-paper sm:max-w-sm"
         >
-          {roomType === "dm" ? (
+          {detailsTab === "media" ? (
+            <>
+              <SheetHeader className="border-b border-line">
+                <SheetTitle>Details</SheetTitle>
+                <SheetDescription>Shared files and links</SheetDescription>
+              </SheetHeader>
+              <DetailsTabs value={detailsTab} onChange={setDetailsTab} />
+              <MediaHistory
+                roomId={roomId}
+                members={members}
+                liveMessages={messages}
+              />
+            </>
+          ) : roomType === "dm" ? (
             <>
               <SheetHeader className="border-b border-line">
                 <SheetTitle>Details</SheetTitle>
                 <SheetDescription>Direct message</SheetDescription>
               </SheetHeader>
+              <DetailsTabs value={detailsTab} onChange={setDetailsTab} />
               <ul className="flex-1 overflow-y-auto p-2">
                 {members.map((m) => (
                   <li
@@ -1258,6 +1286,7 @@ export function ChatRoom({
               currentUserRole={currentUserRole}
               myRoomRole={myRole}
               onRosterChanged={refreshMembers}
+              tabs={<DetailsTabs value={detailsTab} onChange={setDetailsTab} />}
             />
           )}
         </SheetContent>
@@ -1326,56 +1355,6 @@ function deliveryStatus(
     (m) => m.last_read_at != null && new Date(m.last_read_at).getTime() >= created,
   );
   return allSeen ? "seen" : "delivered";
-}
-
-type MessageAttachment = {
-  path: string;
-  name: string;
-  size: number | null;
-  mime: string | null;
-};
-
-/**
- * #8 every attachment a file message carries: the first lives in the
- * attachment_* columns, any extras in metadata.attachments. A plain
- * single-file message yields exactly one entry, so its bubble is
- * unchanged.
- */
-function messageAttachments(msg: Message): MessageAttachment[] {
-  if (msg.kind !== "file") return [];
-  const out: MessageAttachment[] = [];
-  if (msg.attachment_path) {
-    out.push({
-      path: msg.attachment_path,
-      name: msg.attachment_name ?? msg.body,
-      size: msg.attachment_size,
-      mime: msg.attachment_mime,
-    });
-  }
-  const extra = (msg.metadata as { attachments?: unknown } | null)?.attachments;
-  if (Array.isArray(extra)) {
-    for (const a of extra) {
-      if (
-        a &&
-        typeof a === "object" &&
-        typeof (a as { path?: unknown }).path === "string"
-      ) {
-        const rec = a as {
-          path: string;
-          name?: unknown;
-          size?: unknown;
-          mime?: unknown;
-        };
-        out.push({
-          path: rec.path,
-          name: typeof rec.name === "string" ? rec.name : "file",
-          size: typeof rec.size === "number" ? rec.size : null,
-          mime: typeof rec.mime === "string" ? rec.mime : null,
-        });
-      }
-    }
-  }
-  return out;
 }
 
 /** Display name of the author of the message `msg` replies to. */
@@ -1721,6 +1700,7 @@ function AttachmentImage({
   tail: boolean;
 }) {
   const { url, failed, setFailed } = useSignedUrl(path, sign);
+  const [zoomed, setZoomed] = useState(false);
 
   const shape = `rounded-2xl ${
     tail ? (tailSide === "right" ? "rounded-br-md" : "rounded-bl-md") : ""
@@ -1745,24 +1725,67 @@ function AttachmentImage({
   }
 
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={`block overflow-hidden border border-line bg-paper ${shape}`}
-      aria-label={`Open image ${name}`}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element -- signed
-          Supabase URLs are short-lived; next/image can't optimize them */}
-      <img
-        src={url}
-        alt={name}
-        loading="lazy"
-        onLoad={onLoaded}
-        onError={() => setFailed(true)}
-        className="max-h-72 w-auto max-w-full object-cover"
-      />
-    </a>
+    <>
+      {/* Opens an in-app viewer. It used to be an <a href> to the signed
+          URL, which navigated the tab away from the conversation. */}
+      <button
+        type="button"
+        onClick={() => setZoomed(true)}
+        className={`block overflow-hidden border border-line bg-paper ${shape}`}
+        aria-label={`Open image ${name}`}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element -- signed
+            Supabase URLs are short-lived; next/image can't optimize them */}
+        <img
+          src={url}
+          alt={name}
+          loading="lazy"
+          onLoad={onLoaded}
+          onError={() => setFailed(true)}
+          className="max-h-72 w-auto max-w-full object-cover"
+        />
+      </button>
+      {zoomed && (
+        <ImageLightbox src={url} name={name} onClose={() => setZoomed(false)} />
+      )}
+    </>
+  );
+}
+
+/** Segmented switch at the top of the details sheet: roster vs shared media.
+ *  Rendered for DMs and groups alike so both reach media history the same way. */
+function DetailsTabs({
+  value,
+  onChange,
+}: {
+  value: "members" | "media";
+  onChange: (v: "members" | "media") => void;
+}) {
+  const tabs: { key: "members" | "media"; label: string }[] = [
+    { key: "members", label: "Members" },
+    { key: "media", label: "Media" },
+  ];
+  return (
+    <div className="flex shrink-0 gap-1 border-b border-line bg-mist/40 p-2">
+      {tabs.map((t) => {
+        const active = value === t.key;
+        return (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => onChange(t.key)}
+            aria-pressed={active}
+            className={`h-8 flex-1 rounded-lg text-[13px] font-semibold transition-colors ${
+              active
+                ? "bg-paper text-ink shadow-xs"
+                : "text-muted hover:text-ink"
+            }`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

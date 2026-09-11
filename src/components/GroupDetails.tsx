@@ -49,6 +49,7 @@ export function GroupDetails({
   currentUserRole,
   myRoomRole,
   onRosterChanged,
+  tabs,
 }: {
   roomId: string;
   roomName: string;
@@ -60,6 +61,8 @@ export function GroupDetails({
   currentUserRole: Profile["role"];
   myRoomRole: RoomMemberRole;
   onRosterChanged: () => Promise<void>;
+  /** Optional switcher rendered under the header (Members / Media). */
+  tabs?: React.ReactNode;
 }) {
   const router = useRouter();
   const isGroup = roomType === "group";
@@ -163,6 +166,7 @@ export function GroupDetails({
           {members.length} {members.length === 1 ? "member" : "members"}
         </SheetDescription>
       </SheetHeader>
+      {tabs}
 
       <div className="flex min-h-0 flex-1 flex-col">
         {/* Group identity */}
