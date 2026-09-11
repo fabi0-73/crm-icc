@@ -6,6 +6,7 @@ import {
   LogOut,
   Settings,
   ShieldCheck,
+  Trash2,
   UserMinus,
   UserPlus,
 } from "lucide-react";
@@ -25,6 +26,7 @@ import { createClient } from "@/lib/supabase/client";
 import { uploadGroupAvatar } from "@/lib/avatars";
 import {
   addRoomMember,
+  deleteRoom,
   leaveRoom,
   openDm,
   removeRoomMember,
@@ -41,6 +43,7 @@ export function GroupDetails({
   roomName,
   roomType,
   roomAvatarUrl,
+  roomCreatedBy,
   members,
   currentUserId,
   currentUserRole,
@@ -51,6 +54,7 @@ export function GroupDetails({
   roomName: string;
   roomType: RoomType;
   roomAvatarUrl: string | null;
+  roomCreatedBy?: string | null;
   members: RoomMemberView[];
   currentUserId: string;
   currentUserRole: Profile["role"];
@@ -66,12 +70,19 @@ export function GroupDetails({
   // of them (they're placed and removed by an admin).
   const canManage = isGroup && (myRoomRole === "admin" || appManager);
   const canAdd = canManage;
+  // Deletion: an app admin removes ANY group; a manager or assistant removes
+  // only a group they created. Mirrors the server rule in delete_room so the
+  // button is never shown to someone the RPC would reject.
+  const canDelete =
+    isGroup &&
+    (currentUserRole === "admin" || roomCreatedBy === currentUserId);
 
   const addModal = useModal();
   const settingsModal = useModal();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   async function run(key: string, fn: () => Promise<{ error?: string } | void>) {
     setBusy(key);
@@ -114,11 +125,32 @@ export function GroupDetails({
     );
     if (ok) router.push("/rooms");
   }
+  async function onDelete() {
+    setBusy("delete");
+    setError(null);
+    try {
+      const res = await deleteRoom(roomId);
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      router.push("/rooms");
+    } catch {
+      setError("Something went wrong. Try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
   // An agent's only entry point to start a private DM with an assistant
-  // they share a workspace with (agents have no sidebar / DM list).
+  // they share a workspace with (agents have no sidebar / DM list). Surface
+  // the error instead of failing silently if the DM can't be opened.
   async function onMessage(userId: string) {
     const res = await openDm(userId);
-    if (res.roomId) router.push(`/rooms/${res.roomId}`);
+    if (res.roomId) {
+      router.push(`/rooms/${res.roomId}`);
+    } else if (res.error) {
+      setError(res.error);
+    }
   }
 
   const admins = members.filter((m) => m.room_role === "admin").length;
@@ -234,6 +266,41 @@ export function GroupDetails({
                 className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
               >
                 <LogOut className="size-4" /> Leave group
+              </button>
+            )}
+          </div>
+        )}
+
+        {canDelete && (
+          <div className="border-t border-line p-3">
+            {confirmDelete ? (
+              <div className="flex items-center gap-2">
+                <span className="flex-1 text-sm text-ink">
+                  Delete this group for everyone? This can’t be undone.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(false)}
+                  className="rounded-md px-3 py-1.5 text-sm text-muted hover:bg-mist"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  disabled={busy === "delete"}
+                  className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:brightness-110 disabled:opacity-50"
+                >
+                  {busy === "delete" ? "Deleting…" : "Delete"}
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+              >
+                <Trash2 className="size-4" /> Delete group
               </button>
             )}
           </div>

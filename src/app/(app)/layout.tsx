@@ -29,19 +29,10 @@ export default async function AppLayout({
 
   const { supabase, profile } = ctx;
 
-  // CallProvider + PresenceProvider wrap BOTH branches so agents
-  // ring and register presence too; agents keep the bare layout.
-  if (profile.role === "agent") {
-    return (
-      <CallProvider userId={profile.id} userName={profile.full_name}>
-        <PresenceProvider userId={profile.id}>
-          <KeyboardInsets />
-          <div className="h-app">{children}</div>
-        </PresenceProvider>
-      </CallProvider>
-    );
-  }
-
+  // Everyone — agents included — gets the sidebar dashboard now. Agents have
+  // their workspace and any agent↔assistant DMs to navigate between, so they
+  // get the same groups + direct-messages rail as staff (get_my_rooms is
+  // membership-keyed, so it simply returns the rooms the agent belongs to).
   const { data } = await supabase.rpc("get_my_rooms");
   return (
     <CallProvider userId={profile.id} userName={profile.full_name}>

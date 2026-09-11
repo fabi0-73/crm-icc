@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireProfile, requireRole } from "@/lib/auth";
+import { createServiceClient } from "@/lib/supabase/server";
 import type { ActionState } from "@/app/actions/admin";
 import { historyFromPreset } from "@/lib/history-presets";
 import type { HistoryPreset } from "@/lib/types";
@@ -49,10 +50,20 @@ export async function createGroup(formData: FormData): Promise<RoomActionResult>
   }
 }
 
-/** Open (or create) the caller's DM with another staff member. */
+/**
+ * Open (or create) the caller's DM with another person. Agents are allowed
+ * through here too — they may DM assistants (agent↔assistant private chats).
+ * The exact pairing rules (staff↔staff, agent↔assistant) are enforced in the
+ * get_or_create_dm RPC, so this only needs to admit an active account.
+ */
 export async function openDm(otherUserId: string): Promise<RoomActionResult> {
   try {
-    const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+    const { supabase } = await requireRole([
+      "admin",
+      "manager",
+      "assistant",
+      "agent",
+    ]);
     const { data: roomId, error } = await supabase.rpc("get_or_create_dm", {
       p_other_user: otherUserId,
     });
@@ -153,6 +164,42 @@ export async function leaveRoom(
   // (calling this action imperatively means we can't redirect here).
   revalidatePath("/rooms", "layout");
   return { success: "You left the group." };
+}
+
+/**
+ * Delete a group entirely. Authorization is enforced in the delete_room RPC:
+ * an app admin may delete ANY group; a manager or assistant may delete only a
+ * group they created. The RPC removes the messages, memberships, and the room
+ * (call_signals cascade; audit rows are detached, not lost) in one transaction
+ * and returns the attachment object paths it orphaned, which we then sweep from
+ * storage — the DB has no FK to the storage bucket, so nothing else does it.
+ */
+export async function deleteRoom(roomId: string): Promise<RoomActionResult> {
+  if (!roomId) return { error: "Missing room." };
+  try {
+    const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+    const { data: paths, error } = await supabase.rpc("delete_room", {
+      p_room_id: roomId,
+    });
+    if (error) return { error: error.message };
+
+    // Best-effort storage cleanup. The room row is already gone, so a failure
+    // here only leaves harmless orphaned blobs — never block on it.
+    const attachmentPaths = ((paths as string[] | null) ?? []).filter(Boolean);
+    if (attachmentPaths.length) {
+      try {
+        const service = createServiceClient();
+        await service.storage.from("attachments").remove(attachmentPaths);
+      } catch {
+        /* orphaned attachment objects are harmless; ignore */
+      }
+    }
+
+    revalidatePath("/rooms", "layout");
+    return { roomId };
+  } catch (e) {
+    return { error: actionError(e, "Could not delete the group.") };
+  }
 }
 
 export async function setRoomMemberRole(

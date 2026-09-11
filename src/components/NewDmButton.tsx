@@ -65,9 +65,9 @@ export function NewDmButton({
     const supabase = createClient();
     void supabase.auth.getUser().then(async ({ data: { user } }) => {
       if (!user) return;
-      // Who you may DM mirrors the get_or_create_dm rules: staff DM staff;
-      // an assistant may also DM agents (private agent↔assistant chats),
-      // so include agents in the picker only for assistants.
+      // Who you may DM mirrors the get_or_create_dm rules: staff DM staff; an
+      // assistant may also DM agents, and an agent may ONLY DM assistants
+      // (private agent↔assistant chats). Anything else the RPC would reject.
       const { data: me } = await supabase
         .from("profiles")
         .select("role")
@@ -76,7 +76,9 @@ export function NewDmButton({
       const allowed: StaffRow["role"][] =
         me?.role === "assistant"
           ? ["admin", "manager", "assistant", "agent"]
-          : ["admin", "manager", "assistant"];
+          : me?.role === "agent"
+            ? ["assistant"]
+            : ["admin", "manager", "assistant"];
       const { data } = await supabase
         .from("profiles")
         .select("id, full_name, role")

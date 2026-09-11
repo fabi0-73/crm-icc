@@ -48,6 +48,23 @@ const RING_TIMEOUT_CALLEE_MS = 35_000;
 const STALE_INVITE_MS = 45_000;
 const RESEND_MS = 3_000;
 
+// GROUP CALLS — mesh convergence tuning.
+/** How often the mesh reconciles: (re)discovers missing peers and heals stuck
+ *  ones. */
+const GROUP_HEARTBEAT_MS = 3_000;
+/** A mesh edge that has not reached "connected" within this window is torn down
+ *  and rebuilt from scratch. This is what heals a lost offer/answer or an ICE
+ *  stall that would otherwise leave one pair permanently unable to see each
+ *  other. Comfortably longer than a healthy handshake (≈1–5s). */
+const GROUP_EDGE_STUCK_MS = 11_000;
+/** Per-stream video send budget in a GROUP call. A full mesh uploads one copy
+ *  of your camera to every other peer, so total uplink ≈ this × (peers). Kept
+ *  modest so 8–10 camera streams fit a normal home/office uplink. */
+const GROUP_VIDEO_MAX_BITRATE = 320_000;
+/** Screen share is the one thing worth spending bitrate on, so it gets a higher
+ *  budget than a camera tile in a group call. */
+const GROUP_SCREEN_MAX_BITRATE = 1_200_000;
+
 type SignalKind = "invite" | "offer" | "answer" | "ice" | "hangup" | "decline";
 
 type SignalPayload = {
@@ -113,6 +130,12 @@ type PeerEntry = {
   remoteSet: boolean;
   /** ICE that arrived before the remote description was set. */
   pendingIce: RTCIceCandidateInit[];
+  /** ms timestamp this edge was (re)created. The heartbeat uses it to detect an
+   *  edge that never reached "connected" and rebuild it. */
+  since: number;
+  /** True once this edge has reached a connected ICE state at least once, so a
+   *  brief later blip is treated as a drop, not a never-connected stall. */
+  connected: boolean;
 };
 
 type CallContextValue = {
@@ -199,6 +222,27 @@ function isMediaError(err: unknown): boolean {
     );
   }
   return false;
+}
+
+/**
+ * GROUP CALLS: cap a peer connection's outgoing video bitrate. A full mesh
+ * uploads one video copy per peer, so without a cap 8–10 camera streams
+ * saturate a normal uplink and everyone's video stalls. Best-effort — silently
+ * ignored on browsers that don't support setParameters encodings.
+ */
+async function setVideoSendBudget(pc: RTCPeerConnection, maxBitrate: number) {
+  const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+  if (!sender) return;
+  try {
+    const params = sender.getParameters();
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}];
+    }
+    params.encodings[0].maxBitrate = maxBitrate;
+    await sender.setParameters(params);
+  } catch {
+    /* ignore — best effort */
+  }
 }
 
 /** mm:ss (or h:mm:ss) for a connected-call duration, used in call-history. */
@@ -623,7 +667,19 @@ export function CallProvider({
         autoGainControl: true,
         channelCount: 1,
       },
-      video: video ? { facingMode: "user" } : false,
+      // A group (mesh) video call captures at a modest resolution so N encoded
+      // copies fit the uplink; a 1:1 call keeps full quality. groupRef is set
+      // before getMedia runs on both group entry paths (start + accept).
+      video: video
+        ? groupRef.current
+          ? {
+              facingMode: "user",
+              width: { ideal: 480, max: 640 },
+              height: { ideal: 360, max: 480 },
+              frameRate: { ideal: 20, max: 24 },
+            }
+          : { facingMode: "user" }
+        : false,
     });
     if (callGenRef.current !== gen) {
       stream.getTracks().forEach((t) => t.stop());
@@ -809,6 +865,8 @@ export function CallProvider({
         hasVideo: false,
         remoteSet: false,
         pendingIce: [],
+        since: Date.now(),
+        connected: false,
       };
       peersRef.current.set(peerId, entry);
 
@@ -838,6 +896,12 @@ export function CallProvider({
           }
         }
       }
+      // Keep each outgoing video stream within a per-peer budget so a full mesh
+      // of 8–10 camera tiles fits the uplink; a live screen share gets more.
+      void setVideoSendBudget(
+        pc,
+        activeScreen ? GROUP_SCREEN_MAX_BITRATE : GROUP_VIDEO_MAX_BITRATE,
+      );
 
       pc.onicecandidate = (e) => {
         if (!e.candidate || !callIdRef.current || !roomIdRef.current) return;
@@ -883,7 +947,11 @@ export function CallProvider({
       };
       pc.oniceconnectionstatechange = () => {
         const s = pc.iceConnectionState;
-        if (s === "connected" || s === "completed") onGroupPeerConnected();
+        if (s === "connected" || s === "completed") {
+          const cur = peersRef.current.get(peerId);
+          if (cur) cur.connected = true;
+          onGroupPeerConnected();
+        }
       };
       // Like the 1:1 path, connectionState changes are not throttled in a
       // background tab, so a peer that closes its side tears down promptly.
@@ -1401,20 +1469,43 @@ export function CallProvider({
       const callId = callIdRef.current;
       const roomId = roomIdRef.current;
       if (!callId || !roomId) return;
-      for (const id of groupMembersRef.current) {
-        if (!id || id === userId) continue;
-        const st = peersRef.current.get(id)?.pc.connectionState;
-        if (st === "connected" || st === "connecting") continue;
+      const announce = (id: string) =>
         void send("invite", callId, id, roomId, {
           group: true,
           joining: true,
           video: groupVideoRef.current,
           fromName: userName,
         });
+      for (const id of groupMembersRef.current) {
+        if (!id || id === userId) continue;
+        const entry = peersRef.current.get(id);
+        const st = entry?.pc.connectionState;
+        // Healthy edge — leave the connection completely alone.
+        if (st === "connected") continue;
+        // No edge yet: (re)announce our presence so a missed presence/offer
+        // re-forms. Idempotent — the offerer-by-id rule and the stable-state
+        // guards prevent glare or duplicate offers.
+        if (!entry) {
+          announce(id);
+          continue;
+        }
+        // An edge that has NEVER connected and has sat past the grace window is
+        // wedged — a lost answer leaves the offerer stuck in have-local-offer
+        // forever, and an initial ICE stall never recovers on its own. Tear it
+        // down and rebuild from scratch; closing our side also nudges the peer
+        // to re-pair. THIS is what stops one pair being permanently unable to
+        // see each other. An edge that DID connect and later dropped is left to
+        // ICE auto-recovery / the failed-state handler, never thrashed here.
+        if (!entry.connected && Date.now() - entry.since > GROUP_EDGE_STUCK_MS) {
+          dropGroupPeer(id, { endIfEmpty: false });
+          announce(id);
+        }
+        // Otherwise it is still settling within the grace window (or a dropped
+        // edge recovering) — do not disturb it with a re-announce.
       }
-    }, 3000);
+    }, GROUP_HEARTBEAT_MS);
     return () => clearInterval(t);
-  }, [phase, send, userId, userName]);
+  }, [dropGroupPeer, phase, send, userId, userName]);
 
   const dial = useCallback(
     async (
@@ -1526,8 +1617,26 @@ export function CallProvider({
         return;
       }
       if (phaseRef.current !== "idle") return;
+
+      // Ring EVERYONE currently in the room, not just the client-cached roster
+      // the call button happened to hold. A member added after this tab last
+      // synced its roster would otherwise be silently skipped — this is the
+      // "call holds only N people, the next person's phone never rings" bug.
+      // The fresh DB read is the source of truth; fall back to the passed list.
+      let roster = memberIds;
+      try {
+        const { data } = await supabase
+          .from("room_members")
+          .select("user_id")
+          .eq("room_id", roomId);
+        if (data && data.length) {
+          roster = [...memberIds, ...data.map((r) => r.user_id as string)];
+        }
+      } catch {
+        /* network hiccup — keep the passed list rather than block the call */
+      }
       const others = Array.from(
-        new Set(memberIds.filter((id) => id && id !== userId)),
+        new Set(roster.filter((id) => id && id !== userId)),
       );
       if (others.length === 0) {
         showNotice("No one else in this room to call");
@@ -1595,7 +1704,7 @@ export function CallProvider({
         cleanup({ purge: true });
       }
     },
-    [cleanup, getMedia, send, showNotice, signalReady, userId, userName],
+    [cleanup, getMedia, send, showNotice, signalReady, supabase, userId, userName],
   );
 
   /** GROUP CALLS: accept a ringing group invite and announce our presence. */
@@ -2014,6 +2123,11 @@ export function CallProvider({
         if (pc.signalingState === "stable") await negotiateGroupOffer(peerId);
       }
     }
+    // Screen share is over — hand the (restored) camera back the smaller
+    // per-tile budget. A no-op on a voice call (no video sender remains).
+    for (const entry of peersRef.current.values()) {
+      void setVideoSendBudget(entry.pc, GROUP_VIDEO_MAX_BITRATE);
+    }
     screen?.getTracks().forEach((t) => t.stop());
     screenStreamRef.current = null;
     screenAddedSenderRef.current = false;
@@ -2071,6 +2185,10 @@ export function CallProvider({
           }
           if (pc.signalingState === "stable") await negotiateGroupOffer(peerId);
         }
+      }
+      // A shared screen is worth more bitrate than a camera tile.
+      for (const entry of peersRef.current.values()) {
+        void setVideoSendBudget(entry.pc, GROUP_SCREEN_MAX_BITRATE);
       }
       screenAddedSenderRef.current = !cameraTrackRef.current;
       setSharing(true);

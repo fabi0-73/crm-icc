@@ -96,6 +96,7 @@ export function ChatRoom({
   roomName,
   roomType = "group",
   roomAvatarUrl = null,
+  roomCreatedBy = null,
   dmOtherUserId = null,
   currentUserId,
   currentUserRole = "assistant",
@@ -110,6 +111,8 @@ export function ChatRoom({
   roomName: string;
   roomType?: RoomType;
   roomAvatarUrl?: string | null;
+  /** Who created the room — used to gate group deletion (creator or admin). */
+  roomCreatedBy?: string | null;
   dmOtherUserId?: string | null;
   currentUserId: string;
   currentUserRole?: Role;
@@ -1249,6 +1252,7 @@ export function ChatRoom({
               roomName={roomName}
               roomType={roomType}
               roomAvatarUrl={roomAvatarUrl}
+              roomCreatedBy={roomCreatedBy}
               members={members}
               currentUserId={currentUserId}
               currentUserRole={currentUserRole}

@@ -94,7 +94,12 @@ export function Sidebar({ profile }: { profile: Profile }) {
 
   const channels = rooms.filter((r) => r.type !== "dm");
   const dms = rooms.filter((r) => r.type === "dm");
-  const canManage = profile.role === "admin" || profile.role === "manager";
+  // Admins, managers AND assistants can create groups (and delete their own);
+  // agents cannot start groups, only DM assistants.
+  const canCreateGroup =
+    profile.role === "admin" ||
+    profile.role === "manager" ||
+    profile.role === "assistant";
   const nav = NAV.filter((n) => n.roles.includes(profile.role));
 
   return (
@@ -136,7 +141,7 @@ export function Sidebar({ profile }: { profile: Profile }) {
 
         <SectionHeader
           label="Channels"
-          action={canManage ? <NewGroupButton compact dark /> : undefined}
+          action={canCreateGroup ? <NewGroupButton compact dark /> : undefined}
         />
         <div className="space-y-0.5">
           {channels.map((r) => (
