@@ -675,12 +675,61 @@ export async function setAgentManager(
     }
   }
 
+  // Who was responsible before, so a reassignment can hand the room over.
+  const { data: before } = await service
+    .from("agents")
+    .select("manager_id")
+    .eq("id", agentId)
+    .maybeSingle<{ manager_id: string | null }>();
+  const previousManagerId = before?.manager_id ?? null;
+
   const { error } = await service
     .from("agents")
     .update({ manager_id: managerId || null })
     .eq("id", agentId);
   if (error) return { error: error.message };
 
+  // Assigning a manager has to actually put them IN the agent's workspace —
+  // manager_id alone grants nothing, and get_my_rooms is membership-keyed, so
+  // without this the room never appears for them. room_members is in the
+  // realtime publication, so everyone's roster updates without a refresh.
+  const { data: room } = await service
+    .from("rooms")
+    .select("id, created_by")
+    .eq("agent_id", agentId)
+    .eq("type", "agent_workspace")
+    .maybeSingle<{ id: string; created_by: string }>();
+
+  if (room) {
+    if (managerId) {
+      await service
+        .from("room_members")
+        .upsert(
+          {
+            room_id: room.id,
+            user_id: managerId,
+            added_by: managerId,
+            can_view_history_from: null,
+          },
+          { onConflict: "room_id,user_id", ignoreDuplicates: true },
+        );
+    }
+    // Hand over: drop the outgoing manager, but never strip the person who
+    // created the workspace (usually an admin) of their own room.
+    if (
+      previousManagerId &&
+      previousManagerId !== managerId &&
+      previousManagerId !== room.created_by
+    ) {
+      await service
+        .from("room_members")
+        .delete()
+        .eq("room_id", room.id)
+        .eq("user_id", previousManagerId);
+    }
+  }
+
   revalidatePath(`/agents/${agentId}`);
+  revalidatePath("/rooms", "layout");
   return { success: managerId ? "Manager assigned." : "Manager cleared." };
 }

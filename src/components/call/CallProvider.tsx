@@ -644,15 +644,16 @@ export function CallProvider({
       // A group (mesh) video call captures at a modest resolution so N encoded
       // copies fit the uplink; a 1:1 call keeps full quality. groupRef is set
       // before getMedia runs on both group entry paths (start + accept).
+      // Capture a real 16:9 frame rather than the browser's default (often
+      // 4:3). The call surfaces are widescreen, so a 4:3 source had to be
+      // cropped to fit — which is what looked zoomed in.
       video: video
-        ? groupRef.current
-          ? {
-              facingMode: "user",
-              width: { ideal: 480, max: 640 },
-              height: { ideal: 360, max: 480 },
-              frameRate: { ideal: 20, max: 24 },
-            }
-          : { facingMode: "user" }
+        ? {
+            facingMode: "user",
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            aspectRatio: { ideal: 16 / 9 },
+          }
         : false,
     });
     if (callGenRef.current !== gen) {

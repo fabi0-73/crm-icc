@@ -47,11 +47,11 @@ export function FullScreenCall() {
   // after the peer stops sharing.
   const showVideo = Boolean(call?.video || remoteHasVideo || sharing);
   // #5: the REMOTE element fit is about the REMOTE content, not our local
-  // share. A camera fills the frame (object-cover, no letterbox bars); a
-  // shared screen must never be cropped (object-contain). On a voice call the
-  // only way remote video appears is a screen share, so that's our signal.
-  const remoteIsScreen = !call?.video && remoteHasVideo;
-  const fitClass = remoteIsScreen ? "object-contain" : "object-cover";
+  // Nothing is cropped any more. object-cover filled the frame by zooming
+  // into the middle of the camera image, which is what read as "too zoomed
+  // in"; letterboxing shows the whole picture instead. A shared screen must
+  // never be cropped either, so both cases agree.
+  const fitClass = "object-contain";
 
   useEffect(() => {
     const el = remoteVideoRef.current;
@@ -136,8 +136,8 @@ export function FullScreenCall() {
               // does, so it reads like a mirror instead of "reversed". A
               // shared screen must never be flipped (its text would go
               // backwards), so only the camera is mirrored.
-              className={`absolute bottom-4 right-4 h-36 w-28 rounded-xl border border-white/20 ${
-                sharing ? "object-contain bg-ink" : "object-cover -scale-x-100"
+              className={`absolute bottom-4 right-4 h-24 w-40 rounded-xl border border-white/20 bg-ink object-contain ${
+                sharing ? "" : "-scale-x-100"
               } ${camOff && !sharing ? "opacity-30" : ""}`}
             />
           </>

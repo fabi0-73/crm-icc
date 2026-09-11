@@ -108,6 +108,12 @@ export async function connectCallRoom(opts: {
     // 10-person call sane on ordinary connections.
     adaptiveStream: true,
     dynacast: true,
+    videoCaptureDefaults: {
+      // Match the 1:1 path: a 16:9 source so widescreen tiles don't have to
+      // crop into the middle of the picture.
+      resolution: { width: 1280, height: 720, frameRate: 24 },
+      facingMode: "user",
+    },
   });
 
   const remoteStreams = new Map<string, MediaStream>();

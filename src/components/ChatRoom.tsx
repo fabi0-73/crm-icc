@@ -206,6 +206,9 @@ export function ChatRoom({
   const [actionBusy, setActionBusy] = useState(false);
   // #8 jump-to-latest visibility, derived from scroll position.
   const [showJump, setShowJump] = useState(false);
+  /** Messages that arrived while the reader was scrolled away from the
+   *  bottom, so the jump button can say how many they haven't seen. */
+  const [unseenBelow, setUnseenBelow] = useState(0);
 
   const streamRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -335,6 +338,11 @@ export function ChatRoom({
       lastCreatedAtRef.current = next[next.length - 1]?.created_at ?? null;
       return next;
     });
+    // Arrived while scrolled up? Surface it on the jump button instead of
+    // letting it slip in unnoticed above the fold.
+    if (!nearBottomRef.current && msg.sender_id !== currentUserId) {
+      setUnseenBelow((n) => n + 1);
+    }
     // A message from someone means they stopped typing.
     if (msg.sender_id) {
       setTypers((prev) => {
@@ -491,6 +499,7 @@ export function ChatRoom({
   }, [typers]);
 
   const scrollToBottom = useCallback((smooth: boolean) => {
+    setUnseenBelow(0);
     bottomRef.current?.scrollIntoView({
       behavior: smooth ? "smooth" : "auto",
       block: "end",
@@ -520,6 +529,7 @@ export function ChatRoom({
     const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     nearBottomRef.current = distFromBottom < 140;
     setShowJump(distFromBottom > 200);
+    if (distFromBottom < 140) setUnseenBelow(0);
   }, []);
 
   /** Scroll the stream to a specific message (used by reply quotes). */
@@ -1139,9 +1149,22 @@ export function ChatRoom({
           <button
             type="button"
             onClick={() => scrollToBottom(true)}
-            aria-label="Jump to latest messages"
-            className="absolute bottom-4 right-4 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-line/70 bg-paper text-ink shadow-md backdrop-blur transition hover:bg-mist active:scale-95"
+            aria-label={
+              unseenBelow > 0
+                ? `${unseenBelow} new message${unseenBelow === 1 ? "" : "s"} — jump to latest`
+                : "Jump to latest messages"
+            }
+            className={`absolute bottom-4 right-4 z-10 flex items-center justify-center gap-1.5 rounded-full border shadow-md backdrop-blur transition active:scale-95 ${
+              unseenBelow > 0
+                ? "border-transparent bg-brand-600 px-3.5 h-10 text-[13px] font-semibold text-white hover:bg-brand-700"
+                : "h-10 w-10 border-line/70 bg-paper text-ink hover:bg-mist"
+            }`}
           >
+            {unseenBelow > 0 && (
+              <span className="tabular-nums">
+                {unseenBelow > 99 ? "99+" : unseenBelow} new
+              </span>
+            )}
             <ChevronDown className="size-5" />
           </button>
         )}

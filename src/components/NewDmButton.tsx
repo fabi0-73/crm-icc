@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Search } from "lucide-react";
+import { Input } from "@/components/uikit/input";
 import { useRouter } from "next/navigation";
 import { Modal, useModal } from "@/components/Modal";
 import { openDm } from "@/app/actions/rooms";
@@ -59,6 +61,19 @@ export function NewDmButton({
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+
+  // Filters the roster this person is already allowed to message, so search
+  // can never surface someone they may not DM.
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return staff;
+    return staff.filter(
+      (p) =>
+        p.full_name.toLowerCase().includes(q) ||
+        p.role.toLowerCase().includes(q),
+    );
+  }, [staff, query]);
 
   useEffect(() => {
     if (!open) return;
@@ -128,8 +143,20 @@ export function NewDmButton({
             {error}
           </p>
         )}
+        <div className="relative mb-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
+          <Input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search people"
+            aria-label="Search people"
+            autoFocus
+            className="h-10 rounded-full border-line/80 bg-paper pl-9 text-[14px]"
+          />
+        </div>
         <ul className="-mx-2 max-h-[60vh] overflow-y-auto">
-          {staff.map((p) => (
+          {visible.map((p) => (
             <li key={p.id}>
               <PersonRow
                 person={p}
@@ -138,9 +165,11 @@ export function NewDmButton({
               />
             </li>
           ))}
-          {staff.length === 0 && (
+          {visible.length === 0 && (
             <li className="px-2 py-8 text-center text-sm text-muted">
-              No other staff members
+              {staff.length === 0
+                ? "No other staff members"
+                : "Nobody matches that search"}
             </li>
           )}
         </ul>

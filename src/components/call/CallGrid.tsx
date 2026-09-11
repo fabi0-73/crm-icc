@@ -15,15 +15,25 @@ export function CallGrid() {
   const { groupPeers, localStream, camOff, sharing, call } = useCall();
 
   const total = groupPeers.length + 1; // + self
-  const cols = total <= 1 ? 1 : total <= 4 ? 2 : 3;
-  // A voice call only ever shows remote video via a screen share (never crop
-  // it); a video call shows cameras (fill the tile).
-  const remoteFit = call?.video ? "object-cover" : "object-contain";
+  // Square-ish layout: 2 cols for a pair, 3 for six, 4 for twelve, and so on.
+  // The old fixed 3 columns turned a 20-person call into 7 rows of slivers.
+  const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(total))));
+  // Past a roomful, tiles get a floor and the grid scrolls instead of
+  // shrinking every tile into nothing.
+  const dense = total > 12;
+  // Never crop a shared screen. Cameras are letterboxed rather than
+  // cropped — filling the tile zooms into the middle of the frame.
+  const remoteFit = "object-contain";
 
   return (
     <div
-      className="grid h-full w-full content-center gap-2 p-2 sm:gap-3 sm:p-3"
-      style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+      className={`grid h-full w-full gap-2 p-2 sm:gap-3 sm:p-3 ${
+        dense ? "content-start overflow-y-auto" : "content-center"
+      }`}
+      style={{
+        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+        gridAutoRows: dense ? "minmax(120px, 1fr)" : undefined,
+      }}
     >
       {groupPeers.map((peer) => (
         <RemoteTile key={peer.id} peer={peer} fitClass={remoteFit} />
@@ -148,8 +158,8 @@ function SelfTile({
         autoPlay
         playsInline
         muted
-        className={`h-full w-full bg-ink ${
-          sharing ? "object-contain" : "object-cover -scale-x-100"
+        className={`h-full w-full bg-ink object-contain ${
+          sharing ? "" : "-scale-x-100"
         } ${showVideo ? "" : "opacity-0"}`}
       />
       {!showVideo && (

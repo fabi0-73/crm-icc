@@ -14,7 +14,7 @@ export default async function AgentDetailPage({
   params: Promise<{ agentId: string }>;
 }) {
   const { agentId } = await params;
-  const { supabase, profile: self } = await requireRole(["admin", "manager"]);
+  const { supabase, profile: self } = await requireRole(["admin"]);
   const isAdmin = self.role === "admin";
 
   const { data: agent } = await supabase

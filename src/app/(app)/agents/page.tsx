@@ -5,7 +5,7 @@ import { Avatar } from "@/components/Avatar";
 import { PageHeader } from "@/components/ui/PageHeader";
 
 export default async function AgentsPage() {
-  const { supabase } = await requireRole(["admin", "manager"]);
+  const { supabase } = await requireRole(["admin"]);
 
   const { data: agents, error } = await supabase
     .from("agents")
