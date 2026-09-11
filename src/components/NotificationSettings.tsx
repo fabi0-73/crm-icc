@@ -12,8 +12,8 @@ import {
   notificationPermission,
   notificationsSupported,
   registerServiceWorker,
-  subscribeToPush,
 } from "@/lib/notify";
+import { savePushSubscription } from "@/lib/push/client";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 const ROWS: {
@@ -93,10 +93,11 @@ function DesktopNotificationsRow() {
       const granted = await ensureNotifyPermission();
       setPerm(notificationsSupported() ? notificationPermission() : "unsupported");
       if (granted) {
-        // Register the SW (click routing + Web Push readiness). subscribeToPush
-        // is a no-op unless a VAPID key is configured, so it's safe to call.
+        // Register the SW (click routing + Web Push readiness), then subscribe
+        // this device and persist it server-side so closed-app pushes work.
+        // Both are no-ops if a VAPID key isn't configured, so this is safe.
         await registerServiceWorker();
-        await subscribeToPush();
+        await savePushSubscription();
       }
     } finally {
       setBusy(false);

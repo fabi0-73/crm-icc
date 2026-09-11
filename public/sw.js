@@ -46,10 +46,30 @@ self.addEventListener("push", (event) => {
     tag: data && data.tag ? String(data.tag) : undefined,
     icon: "/icons/icon-192.webp",
     badge: "/icons/icon-96.webp",
+    // A quiet, basic pop-up: no vibration pattern and not sticky, so it uses
+    // the OS's short default notification chime rather than a loud ring.
+    renotify: false,
+    requireInteraction: false,
     data: { url: (data && data.url) || "/" },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    (async () => {
+      // If a window of the app is already open AND visible, the in-app layer
+      // is handling the alert — don't stack a system pop-up on top of it.
+      // (A backgrounded or closed app has no visible client, so it shows.)
+      try {
+        const windows = await self.clients.matchAll({
+          type: "window",
+          includeUncontrolled: true,
+        });
+        if (windows.some((c) => c.visibilityState === "visible")) return;
+      } catch (_) {
+        /* fall through and show */
+      }
+      return self.registration.showNotification(title, options);
+    })(),
+  );
 });
 
 // Focus/open the app on the notification's URL when clicked.

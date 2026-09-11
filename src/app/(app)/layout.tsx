@@ -4,6 +4,7 @@ import { SidebarShell } from "@/components/sidebar/SidebarShell";
 import { CallProvider } from "@/components/call/CallProvider";
 import { PresenceProvider } from "@/components/presence/PresenceProvider";
 import { KeyboardInsets } from "@/components/mobile/KeyboardInsets";
+import { PushRegistrar } from "@/components/PushRegistrar";
 import { requireProfile } from "@/lib/auth";
 import { sitePath } from "@/lib/site-url";
 import type { MyRoom } from "@/lib/types";
@@ -38,6 +39,7 @@ export default async function AppLayout({
     <CallProvider userId={profile.id} userName={profile.full_name}>
       <PresenceProvider userId={profile.id}>
         <KeyboardInsets />
+        <PushRegistrar />
         <SidebarShell profile={profile} initialRooms={(data ?? []) as MyRoom[]}>
           {children}
         </SidebarShell>
