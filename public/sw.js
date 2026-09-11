@@ -18,7 +18,7 @@
 
 /** How long a call notification may sit on a closed device before it expires.
  *  Matches the caller-side ring window, so a missed call stops nagging. */
-const CALL_NOTIFICATION_TTL_MS = 35000;
+const CALL_NOTIFICATION_TTL_MS = 65000;
 
 self.addEventListener("install", () => {
   // Activate this version without waiting for old tabs to close.

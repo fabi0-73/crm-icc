@@ -49,9 +49,11 @@ import { PeerAudioSinks } from "@/components/call/CallGrid";
 const CONNECT_TIMEOUT_MS = 25_000;
 /** A "disconnected" ICE state this long counts as a dropped call. */
 const DROP_GRACE_MS = 12_000;
-const RING_TIMEOUT_MS = 30_000;
+/** How long we keep ringing before giving up and logging a missed call.
+ *  Long on purpose — 30s stopped before people could reach their phone. */
+const RING_TIMEOUT_MS = 60_000;
 /** Callee gives the caller's timeout a grace window before going quiet. */
-const RING_TIMEOUT_CALLEE_MS = 35_000;
+const RING_TIMEOUT_CALLEE_MS = 65_000;
 const STALE_INVITE_MS = 45_000;
 const RESEND_MS = 3_000;
 
@@ -271,6 +273,10 @@ export function CallProvider({
   // GROUP CALLS: the live LiveKit room for the active group call. A call is
   // either 1:1 (pcRef, peer-to-peer) or a group (lkRef, SFU), never both.
   const lkRef = useRef<CallRoomHandle | null>(null);
+  /** Calls this device has declined. A group initiator keeps re-inviting for
+   *  the whole ring window (it ignores declines so the call can continue for
+   *  everyone else), which would otherwise re-ring someone who already said no. */
+  const declinedCallsRef = useRef<Set<string>>(new Set());
   /** True while the active/ringing call is a group call. */
   const groupRef = useRef(false);
   /** Whether the active group call is a video call (drives offer payloads). */
@@ -827,6 +833,7 @@ export function CallProvider({
         // LiveKit does discovery itself, so it is now only noise — ignore it.
         if (p.joining) return;
         // Initial ring invite (mirror of the 1:1 invite guards).
+        if (declinedCallsRef.current.has(row.call_id)) return; // we said no
         if (Date.now() - Date.parse(row.created_at) > STALE_INVITE_MS) return;
         if (phaseRef.current !== "idle" && callIdRef.current !== row.call_id) {
           if (incomingRef.current?.callId !== row.call_id) {
@@ -939,6 +946,7 @@ export function CallProvider({
       }
 
       if (row.kind === "invite") {
+        if (declinedCallsRef.current.has(row.call_id)) return; // we said no
         if (Date.now() - Date.parse(row.created_at) > STALE_INVITE_MS) return;
         // Busy with a different call → auto-decline.
         if (phaseRef.current !== "idle" && callIdRef.current !== row.call_id) {
@@ -1442,10 +1450,14 @@ export function CallProvider({
   const decline = useCallback(() => {
     const inc = incomingRef.current;
     if (!inc) return;
-    // GROUP CALLS: tag the decline so the initiator routes it to the mesh
+    // GROUP CALLS: tag the decline so the initiator routes it to the group
     // handler (which ignores it) instead of the 1:1 path (which would end the
     // whole call). Declining a group call never ends it for the others.
     void send("decline", inc.callId, inc.peerId, inc.roomId, inc.group ? { group: true } : {});
+    // Remember the refusal: a group initiator keeps re-inviting for the whole
+    // ring window, which would otherwise ring us again seconds after we said no.
+    if (declinedCallsRef.current.size > 50) declinedCallsRef.current.clear();
+    declinedCallsRef.current.add(inc.callId);
     pendingOfferRef.current = null;
     cleanup();
   }, [cleanup, send]);
