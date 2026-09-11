@@ -148,6 +148,15 @@ export function RichText({ text }: { text: string }) {
   );
 }
 
+/** Every URL in a message body, in the order they were typed. */
+export function extractUrls(text: string): string[] {
+  const found: string[] = [];
+  let match: RegExpExecArray | null;
+  URL_RE.lastIndex = 0;
+  while ((match = URL_RE.exec(text)) !== null) found.push(match[0]);
+  return found;
+}
+
 /** Plain-text preview (search results, notifications) with markers stripped. */
 export function stripFormatting(text: string) {
   return text

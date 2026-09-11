@@ -266,6 +266,30 @@ export async function fetchPinnedMessages(
   return (data ?? []) as Message[];
 }
 
+/**
+ * Every message in a room that carries an attachment or a link — the
+ * media history. Read straight from `messages`, so the RLS policy that
+ * governs the chat (membership plus each member's history cutoff)
+ * governs this list too.
+ */
+export async function fetchRoomMediaMessages(
+  supabase: SupabaseClient,
+  roomId: string,
+  limit = 300,
+): Promise<Message[]> {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("*")
+    .eq("room_id", roomId)
+    .neq("kind", "system")
+    .or("attachment_path.not.is.null,body.ilike.*http*,body.ilike.*www.*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+  return (data ?? []) as Message[];
+}
+
 export async function fetchRecentMessages(
   supabase: SupabaseClient,
   roomId: string,
