@@ -1384,7 +1384,7 @@ export function CallProvider({
   const accept = useCallback(async () => {
     const inc = incomingRef.current;
     if (!inc) return;
-    // GROUP CALLS: a group invite takes the mesh accept path.
+    // GROUP CALLS: a group invite takes the LiveKit accept path.
     if (inc.group) {
       await groupAccept(inc);
       return;
@@ -1396,6 +1396,8 @@ export function CallProvider({
     isCallerRef.current = false; // #2: the callee never logs call-history
     startedLoggedRef.current = false;
     stopTones();
+    // Clear the pushed "Incoming call" pop-up now that it's answered.
+    void dismissNotifications("call");
     clearTimers();
     armConnectTimeout();
     setCall({
