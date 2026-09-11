@@ -53,6 +53,7 @@ import {
   messageAttachments,
   type MessageAttachment,
 } from "@/lib/media/attachments";
+import { extractLinks } from "@/lib/media/links";
 import { buildDaySections } from "@/lib/chat/grouping";
 import type {
   Message,
@@ -63,6 +64,46 @@ import type {
 } from "@/lib/types";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
+/** Messages are chat, not documents — anything longer belongs in a file. */
+const MAX_MESSAGE_CHARS = 1000;
+/** Show the counter only when the limit is actually in sight. */
+const COUNTER_VISIBLE_FROM = 800;
+
+/**
+ * Attachments are restricted to formats a team actually shares. This is an
+ * ALLOWLIST rather than a blocklist of ".exe"-style extensions: a blocklist
+ * is impossible to keep complete (.exe .msi .bat .cmd .scr .js .jar .ps1 …),
+ * and anything unexpected should be refused rather than waved through.
+ */
+const ALLOWED_FILE_EXT = new Set([
+  // documents
+  "pdf", "doc", "docx", "xls", "xlsx", "csv", "ppt", "pptx",
+  "txt", "rtf", "odt", "ods", "odp",
+  // images
+  "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "svg", "avif",
+  // audio / video
+  "mp3", "wav", "m4a", "ogg", "mp4", "mov", "webm", "avi", "mkv",
+  // archives
+  "zip", "rar", "7z",
+]);
+
+function fileExt(name: string): string {
+  const i = name.lastIndexOf(".");
+  return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
+}
+
+/** null when allowed, otherwise the reason to show the user. */
+function rejectFile(file: File): string | null {
+  if (file.size > MAX_FILE_BYTES) {
+    return `${file.name} is larger than 25 MB.`;
+  }
+  const ext = fileExt(file.name);
+  if (!ext) return `${file.name} has no file extension, so it can't be sent.`;
+  if (!ALLOWED_FILE_EXT.has(ext)) {
+    return `.${ext} files can't be sent for security reasons. Allowed: documents, images, audio, video and zip archives.`;
+  }
+  return null;
+}
 const TYPING_THROTTLE_MS = 2000;
 const TYPING_EXPIRE_MS = 4000;
 const PAGE_SIZE = 50;
@@ -599,10 +640,11 @@ export function ChatRoom({
   function stageFiles(files: File[]) {
     if (files.length === 0) return;
     const additions: StagedItem[] = [];
-    let rejected = false;
+    let rejection: string | null = null;
     for (const file of files) {
-      if (file.size > MAX_FILE_BYTES) {
-        rejected = true;
+      const reason = rejectFile(file);
+      if (reason) {
+        rejection = rejection ?? reason;
         continue;
       }
       additions.push({
@@ -611,7 +653,7 @@ export function ChatRoom({
         url: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
       });
     }
-    setError(rejected ? "Each file must be under 25 MB." : null);
+    setError(rejection);
     if (additions.length === 0) return;
     setStaged((prev) => [...prev, ...additions]);
     requestAnimationFrame(() => taRef.current?.focus());
@@ -655,6 +697,12 @@ export function ChatRoom({
   async function sendText() {
     const text = body.trim();
     if (!text || sending) return;
+    if (text.length > MAX_MESSAGE_CHARS) {
+      setError(
+        `Messages are limited to ${MAX_MESSAGE_CHARS} characters (yours is ${text.length}).`,
+      );
+      return;
+    }
     setSending(true);
     setError(null);
 
@@ -1180,6 +1228,7 @@ export function ChatRoom({
                 }, 250);
               }}
               rows={1}
+              maxLength={MAX_MESSAGE_CHARS}
               placeholder={staged.length > 0 ? "Add a caption…" : "Message"}
               className="max-h-32 w-full resize-none bg-transparent text-[16px] leading-snug text-ink outline-none placeholder:text-muted"
               onKeyDown={(e) => {
@@ -1225,6 +1274,18 @@ export function ChatRoom({
             <SendHorizontal className="size-5" />
           </button>
         </form>
+        {/* Only appears as the limit comes into view, so it never nags. */}
+        {body.length >= COUNTER_VISIBLE_FROM && (
+          <p
+            className={`px-4 pb-1 text-right text-[11px] tabular-nums ${
+              body.length >= MAX_MESSAGE_CHARS
+                ? "font-semibold text-red-600"
+                : "text-muted"
+            }`}
+          >
+            {body.length} / {MAX_MESSAGE_CHARS}
+          </p>
+        )}
       </div>
       )}
 
@@ -1383,6 +1444,41 @@ function messageSnippet(msg: Message): string {
  * literal "@Full Name" strings whose ids are in metadata.mentions; longest
  * names match first so "@Anna Maria" wins over "@Anna".
  */
+/**
+ * Turn bare URLs in a run of message text into real links. Opened in a new
+ * tab with noopener/noreferrer so a linked page can never reach back into the
+ * app through window.opener. Plain text is returned untouched, so message
+ * formatting and whitespace are preserved exactly.
+ */
+function linkifyText(text: string, keyPrefix: string, mine: boolean): React.ReactNode {
+  const urls = extractLinks(text, 20);
+  if (urls.length === 0) return text;
+  // Split on the exact URLs we extracted, longest first so a URL that is a
+  // prefix of another can't truncate it.
+  const ordered = Array.from(new Set(urls)).sort((a, b) => b.length - a.length);
+  const re = new RegExp(`(${ordered.map(escapeRegExp).join("|")})`, "g");
+  return text.split(re).map((part, i) =>
+    ordered.includes(part) ? (
+      <a
+        key={`${keyPrefix}l${i}`}
+        href={part}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className={
+          mine
+            ? "underline decoration-white/60 underline-offset-2 hover:decoration-white"
+            : "text-brand-700 underline underline-offset-2 hover:text-brand-800"
+        }
+      >
+        {part}
+      </a>
+    ) : (
+      <span key={`${keyPrefix}t${i}`}>{part}</span>
+    ),
+  );
+}
+
 function renderMentions(
   body: string,
   msg: Message,
@@ -1390,11 +1486,15 @@ function renderMentions(
   mine: boolean,
 ): React.ReactNode {
   const ids = (msg.metadata as { mentions?: unknown } | null)?.mentions;
-  if (!memberMap || !Array.isArray(ids) || ids.length === 0) return body;
-  const names = ids
-    .map((id) => (typeof id === "string" ? memberMap.get(id) : undefined))
-    .filter((n): n is string => Boolean(n));
-  if (names.length === 0) return body;
+  const names =
+    memberMap && Array.isArray(ids)
+      ? ids
+          .map((id) => (typeof id === "string" ? memberMap.get(id) : undefined))
+          .filter((n): n is string => Boolean(n))
+      : [];
+  // No mentions to highlight — still linkify the text.
+  if (names.length === 0) return linkifyText(body, "b", mine);
+
   const unique = Array.from(new Set(names)).sort((a, b) => b.length - a.length);
   const re = new RegExp(`(${unique.map((n) => `@${escapeRegExp(n)}`).join("|")})`, "g");
   return body.split(re).map((part, i) =>
@@ -1410,7 +1510,8 @@ function renderMentions(
         {part}
       </span>
     ) : (
-      <span key={i}>{part}</span>
+      // Mentions and links can coexist in one message.
+      <span key={i}>{linkifyText(part, `m${i}`, mine)}</span>
     ),
   );
 }

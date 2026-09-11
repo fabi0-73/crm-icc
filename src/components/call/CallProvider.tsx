@@ -56,6 +56,9 @@ const RING_TIMEOUT_MS = 60_000;
 const RING_TIMEOUT_CALLEE_MS = 65_000;
 const STALE_INVITE_MS = 45_000;
 const RESEND_MS = 3_000;
+/** Grace before deleting a finished call's signal rows, so the hangup that
+ *  ends the call is still there to be delivered. */
+const PURGE_DELAY_MS = 8_000;
 
 type SignalKind = "invite" | "offer" | "answer" | "ice" | "hangup" | "decline";
 
@@ -325,15 +328,23 @@ export function CallProvider({
     }, CONNECT_TIMEOUT_MS);
   }, [showNotice]);
 
-  /** Ephemeral signaling rows are deleted once their call ends. */
+  /**
+   * Ephemeral signaling rows are deleted once their call ends — but never
+   * immediately. Purging the instant we hang up deleted the cancellation we
+   * had just inserted, so a receiver whose realtime socket was mid-reconnect
+   * never learned the call was over and kept ringing. Deleting a few seconds
+   * later leaves the hangup long enough to be delivered.
+   */
   const purgeSignals = useCallback(
     (callId: string | null) => {
       if (!callId) return;
-      void supabase
-        .from("call_signals")
-        .delete()
-        .eq("call_id", callId)
-        .then(() => undefined);
+      setTimeout(() => {
+        void supabase
+          .from("call_signals")
+          .delete()
+          .eq("call_id", callId)
+          .then(() => undefined);
+      }, PURGE_DELAY_MS);
     },
     [supabase],
   );
@@ -368,6 +379,15 @@ export function CallProvider({
         dropTimerRef.current = null;
       }
       connectedAtRef.current = null;
+      // Remember this call is over. The caller re-sends invites every few
+      // seconds for the whole ring window, and those inserts race the single
+      // hangup — without this, an invite landing just after the hangup finds
+      // us back in "idle" with everything cleared, sails through every guard
+      // and rings us again for a call that no longer exists.
+      if (callIdRef.current) {
+        if (declinedCallsRef.current.size > 50) declinedCallsRef.current.clear();
+        declinedCallsRef.current.add(callIdRef.current);
+      }
       stopTones();
       // The pushed "Incoming call" pop-up has nothing else to clear it once
       // the call is answered, declined, missed or hung up.
@@ -884,8 +904,11 @@ export function CallProvider({
         groupMembersRef.current = groupMembersRef.current.filter(
           (id) => id !== row.from_user,
         );
-        if (!acceptedRef.current) {
-          // We were only ringing and the call ended before we joined.
+        // Only the person who invited us ending things means the call is over
+        // for us. hangupGroup fans its notice out to EVERY member, so without
+        // this check any participant leaving a live call would stop a still
+        // ringing invitee with a bogus "Missed call".
+        if (!acceptedRef.current && row.from_user === peerIdRef.current) {
           if (phaseRef.current === "ringing") showNotice("Missed call");
           cleanup();
         }
@@ -1465,9 +1488,16 @@ export function CallProvider({
   const toggleMic = useCallback(() => {
     setMuted((prev) => {
       const next = !prev;
-      localStreamRef.current?.getAudioTracks().forEach((t) => {
-        t.enabled = !next;
-      });
+      // GROUP CALLS: LiveKit publishes its own capture — localStreamRef is
+      // null there, so muting MUST go through the room or the microphone
+      // keeps broadcasting while the UI claims it is muted.
+      if (groupRef.current) {
+        void lkRef.current?.setMic(!next);
+      } else {
+        localStreamRef.current?.getAudioTracks().forEach((t) => {
+          t.enabled = !next;
+        });
+      }
       return next;
     });
   }, []);
@@ -1475,6 +1505,10 @@ export function CallProvider({
   const toggleCam = useCallback(() => {
     setCamOff((prev) => {
       const next = !prev;
+      if (groupRef.current) {
+        void lkRef.current?.setCamera(!next);
+        return next;
+      }
       // While screensharing, cam toggle only affects the parked camera track.
       const target =
         cameraTrackRef.current ??

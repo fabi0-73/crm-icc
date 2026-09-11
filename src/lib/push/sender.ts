@@ -89,6 +89,9 @@ export function startPushSender(): void {
     notifiedInvites.set(key, now);
     return false;
   };
+  /** Did we actually ring this person for this call? Gates the missed-call
+   *  replacement so we never invent one for a call they were never rung for. */
+  const wasNotified = (key: string): boolean => notifiedInvites.has(key);
 
   supabase
     .channel("push-sender")
@@ -105,9 +108,12 @@ export function startPushSender(): void {
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "call_signals" },
       (payload) => {
-        void onCallSignal(supabase, payload.new as SignalRow, alreadyNotified).catch(
-          (e) => console.warn("[push] call handler failed:", e?.message ?? e),
-        );
+        void onCallSignal(
+          supabase,
+          payload.new as SignalRow,
+          alreadyNotified,
+          wasNotified,
+        ).catch((e) => console.warn("[push] call handler failed:", e?.message ?? e));
       },
     )
     .subscribe((status) => {
@@ -168,11 +174,31 @@ async function onCallSignal(
   supabase: SupabaseClient,
   row: SignalRow,
   alreadyNotified: (key: string) => boolean,
+  wasNotified: (key: string) => boolean,
 ): Promise<void> {
-  if (!row || row.kind !== "invite") return;
+  if (!row || !row.to_user || !row.call_id) return;
   const p = row.payload ?? {};
+
+  // The caller gave up or cancelled. A closed device has nothing running to
+  // clear the persistent "Incoming call" alert, so replace it (same tag) with
+  // a quiet "Missed call" — that both clears the ring and says what happened.
+  // Only for someone we actually rang, so a normal end-of-call hangup between
+  // people who already talked doesn't invent a missed call.
+  if (row.kind === "hangup") {
+    if (!wasNotified(`${row.call_id}:${row.to_user}`)) return;
+    const caller = p.fromName || "Someone";
+    await sendToUsers(supabase, [row.to_user], {
+      title: "Missed call",
+      body: `${caller} called`,
+      url: `/rooms/${row.room_id}`,
+      tag: "call",
+      type: "message",
+    });
+    return;
+  }
+
+  if (row.kind !== "invite") return;
   if (p.joining) return; // a presence announcement, not a fresh ring
-  if (!row.to_user || !row.call_id) return;
   if (alreadyNotified(`${row.call_id}:${row.to_user}`)) return;
 
   const caller = p.fromName || "Someone";
