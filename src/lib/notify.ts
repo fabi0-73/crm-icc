@@ -82,6 +82,26 @@ export function notify(opts: NotifyOptions): void {
 }
 
 /**
+ * Close any notifications already on screen with this tag. Used to clear the
+ * "Incoming call" pop-up the moment the call is answered, declined or ends —
+ * otherwise a pushed call alert sits there long after the call is over.
+ * Best-effort; never throws.
+ */
+export async function dismissNotifications(tag: string): Promise<void> {
+  try {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+      return;
+    }
+    const reg = await navigator.serviceWorker.getRegistration("/");
+    if (!reg) return;
+    const open = await reg.getNotifications({ tag });
+    open.forEach((n) => n.close());
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
  * Register the service worker (needed for Web Push and for notification-click
  * routing that outlives the page). Best-effort; returns the registration or
  * null. Reuses an existing registration so repeated calls are cheap.

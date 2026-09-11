@@ -36,17 +36,41 @@ export function installAutoResume() {
   window.addEventListener("keydown", resume, { capture: true });
 }
 
-type ToneSpec = { freqs: number[]; onMs: number; periodMs: number };
+type ToneSpec = {
+  freqs: number[];
+  onMs: number;
+  periodMs: number;
+  /** Per-oscillator peak gain. The incoming ring is deliberately loud — it
+   *  has to carry across a room like a phone call, not blend in like a
+   *  message chime. */
+  gain: number;
+  vibrate: number[];
+};
 
-/** US-style dual ringtone for the callee: 440+480 Hz, 1s on / 2s off. */
-const RINGTONE: ToneSpec = { freqs: [440, 480], onMs: 1000, periodMs: 3000 };
-/** Ringback for the caller: 425 Hz, 1s on / 3s off. */
-const RINGBACK: ToneSpec = { freqs: [425], onMs: 1000, periodMs: 4000 };
+/**
+ * Incoming call: classic 440+480 Hz dual tone, but loud and with a short gap
+ * so it reads as an insistent phone ring rather than a polite beep.
+ */
+const RINGTONE: ToneSpec = {
+  freqs: [440, 480],
+  onMs: 1200,
+  periodMs: 2600,
+  gain: 0.22,
+  vibrate: [600, 250, 600, 250],
+};
+/** Ringback for the caller: 425 Hz, quiet — it's only feedback in your ear. */
+const RINGBACK: ToneSpec = {
+  freqs: [425],
+  onMs: 1000,
+  periodMs: 4000,
+  gain: 0.08,
+  vibrate: [],
+};
 
 class TonePlayer {
   private timer: ReturnType<typeof setInterval> | null = null;
 
-  private burst(spec: ToneSpec, vibrate: boolean) {
+  private burst(spec: ToneSpec) {
     const c = ensureCtx();
     if (c) {
       if (c.state === "suspended") void c.resume().catch(() => undefined);
@@ -58,8 +82,8 @@ class TonePlayer {
           osc.type = "sine";
           osc.frequency.value = f;
           gain.gain.setValueAtTime(0, t);
-          gain.gain.linearRampToValueAtTime(0.07, t + 0.02);
-          gain.gain.setValueAtTime(0.07, t + spec.onMs / 1000 - 0.04);
+          gain.gain.linearRampToValueAtTime(spec.gain, t + 0.02);
+          gain.gain.setValueAtTime(spec.gain, t + spec.onMs / 1000 - 0.04);
           gain.gain.linearRampToValueAtTime(0, t + spec.onMs / 1000);
           osc.connect(gain).connect(c.destination);
           osc.start(t);
@@ -67,15 +91,15 @@ class TonePlayer {
         }
       }
     }
-    if (vibrate && typeof navigator !== "undefined") {
-      navigator.vibrate?.([400, 200, 400]);
+    if (spec.vibrate.length > 0 && typeof navigator !== "undefined") {
+      navigator.vibrate?.(spec.vibrate);
     }
   }
 
-  start(spec: ToneSpec, vibrate: boolean) {
+  start(spec: ToneSpec) {
     this.stop();
-    this.burst(spec, vibrate);
-    this.timer = setInterval(() => this.burst(spec, vibrate), spec.periodMs);
+    this.burst(spec);
+    this.timer = setInterval(() => this.burst(spec), spec.periodMs);
   }
 
   stop() {
@@ -90,11 +114,11 @@ class TonePlayer {
 const player = new TonePlayer();
 
 export function startRingtone() {
-  player.start(RINGTONE, true);
+  player.start(RINGTONE);
 }
 
 export function startRingback() {
-  player.start(RINGBACK, false);
+  player.start(RINGBACK);
 }
 
 export function stopTones() {

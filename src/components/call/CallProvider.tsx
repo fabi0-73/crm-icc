@@ -32,7 +32,7 @@ import {
   stopTones,
 } from "@/lib/call/tones";
 import { readNotifyPrefs } from "@/lib/notify-prefs";
-import { notify } from "@/lib/notify";
+import { dismissNotifications, notify } from "@/lib/notify";
 import { IncomingCallOverlay } from "@/components/call/IncomingCallOverlay";
 import { FloatingCallTile } from "@/components/call/FloatingCallTile";
 import { FullScreenCall } from "@/components/call/FullScreenCall";
@@ -415,6 +415,9 @@ export function CallProvider({
       }
       connectedAtRef.current = null;
       stopTones();
+      // The pushed "Incoming call" pop-up has nothing else to clear it once
+      // the call is answered, declined, missed or hung up.
+      void dismissNotifications("call");
       if (opts?.purge) purgeSignals(callIdRef.current);
       pcRef.current?.close();
       pcRef.current = null;
@@ -1719,6 +1722,7 @@ export function CallProvider({
       groupVideoRef.current = inc.video;
       groupMembersRef.current = inc.memberIds ?? [];
       stopTones();
+      void dismissNotifications("call");
       clearTimers();
       armConnectTimeout();
       callIdRef.current = inc.callId;

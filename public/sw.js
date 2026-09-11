@@ -16,6 +16,10 @@
  * handler simply never fires, and everything else keeps working.
  */
 
+/** How long a call notification may sit on a closed device before it expires.
+ *  Matches the caller-side ring window, so a missed call stops nagging. */
+const CALL_NOTIFICATION_TTL_MS = 35000;
+
 self.addEventListener("install", () => {
   // Activate this version without waiting for old tabs to close.
   self.skipWaiting();
@@ -40,34 +44,54 @@ self.addEventListener("push", (event) => {
     }
   }
 
+  const isCall = Boolean(data && data.type === "call");
   const title = (data && data.title) || "ICC Desk";
+  const tag = (data && data.tag ? String(data.tag) : null) || (isCall ? "call" : undefined);
   const options = {
     body: data && data.body ? String(data.body) : undefined,
-    tag: data && data.tag ? String(data.tag) : undefined,
+    tag: tag,
     icon: "/icons/icon-192.webp",
     badge: "/icons/icon-96.webp",
-    // A quiet, basic pop-up: no vibration pattern and not sticky, so it uses
-    // the OS's short default notification chime rather than a loud ring.
-    renotify: false,
-    requireInteraction: false,
-    data: { url: (data && data.url) || "/" },
+    // A call should stay on screen and buzz until it is dealt with. A message
+    // is a quiet one-shot that never nags.
+    renotify: isCall,
+    requireInteraction: isCall,
+    vibrate: isCall ? [600, 250, 600, 250, 600] : undefined,
+    data: { url: (data && data.url) || "/", type: isCall ? "call" : "message" },
   };
 
   event.waitUntil(
     (async () => {
-      // If a window of the app is already open AND visible, the in-app layer
-      // is handling the alert — don't stack a system pop-up on top of it.
-      // (A backgrounded or closed app has no visible client, so it shows.)
+      // If ANY app window is open — even a background tab — the running app
+      // already rings/chimes through its own layer. Showing a push on top of
+      // that is what produced the double alert. Only a fully closed app needs
+      // this notification.
       try {
         const windows = await self.clients.matchAll({
           type: "window",
           includeUncontrolled: true,
         });
-        if (windows.some((c) => c.visibilityState === "visible")) return;
+        if (windows.length > 0) return;
       } catch (_) {
         /* fall through and show */
       }
-      return self.registration.showNotification(title, options);
+
+      await self.registration.showNotification(title, options);
+
+      // Nobody is running to cancel a missed call's notification when the app
+      // is closed, so expire it with the ring window instead of leaving an
+      // "Incoming call" sitting on the lock screen forever.
+      if (isCall) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, CALL_NOTIFICATION_TTL_MS),
+        );
+        try {
+          const open = await self.registration.getNotifications({ tag: tag });
+          open.forEach((n) => n.close());
+        } catch (_) {
+          /* ignore */
+        }
+      }
     })(),
   );
 });

@@ -43,6 +43,9 @@ type PushPayload = {
   body: string;
   url: string;
   tag: string;
+  /** Drives how the service worker presents it: a call is persistent and
+   *  vibrates until dealt with, a message is a quiet one-shot. */
+  type: "call" | "message";
 };
 
 let started = false;
@@ -156,6 +159,7 @@ async function onMessage(
     body,
     url: `/rooms/${msg.room_id}`,
     tag: `room-${msg.room_id}`,
+    type: "message",
   });
 }
 
@@ -179,6 +183,7 @@ async function onCallSignal(
     body,
     url: `/rooms/${row.room_id}`,
     tag: "call",
+    type: "call",
   });
 }
 
