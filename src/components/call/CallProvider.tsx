@@ -31,7 +31,10 @@ import type {
   CallRoomHandle,
   LiveKitParticipant,
 } from "@/lib/call/livekit-room";
-import { createCallToken } from "@/app/actions/livekit";
+import {
+  createCallToken,
+  removeCallParticipant,
+} from "@/app/actions/livekit";
 import {
   installAutoResume,
   startRingback,
@@ -44,6 +47,8 @@ import { IncomingCallOverlay } from "@/components/call/IncomingCallOverlay";
 import { FloatingCallTile } from "@/components/call/FloatingCallTile";
 import { FullScreenCall } from "@/components/call/FullScreenCall";
 import { PeerAudioSinks } from "@/components/call/CallGrid";
+import { X } from "lucide-react";
+import type { Role } from "@/lib/types";
 
 /** Answered but never connected — give up instead of hanging forever. */
 const CONNECT_TIMEOUT_MS = 25_000;
@@ -62,6 +67,12 @@ const PURGE_DELAY_MS = 8_000;
 /** How long a group call may sit with nobody else in it before it ends
  *  itself. Long enough to ride out a reconnect, short enough not to strand. */
 const EMPTY_ROOM_GRACE_MS = 4_000;
+/** How long a left group call stays rejoinable. */
+const REJOIN_WINDOW_MS = 120_000;
+/** How long late invites for a finished call are ignored. Must outlive the
+ *  resend window (RING_TIMEOUT_MS) but stay short enough that a deliberate
+ *  re-invite from "add participant" still rings. */
+const DONE_CALL_TTL_MS = 90_000;
 
 type SignalKind = "invite" | "offer" | "answer" | "ice" | "hangup" | "decline";
 
@@ -132,8 +143,18 @@ type CallContextValue = {
   remoteStream: MediaStream | null;
   remoteHasVideo: boolean;
   connectedAt: number | null;
-  /** GROUP CALLS: remote participants for the mesh grid ([] for a 1:1 call). */
+  /** GROUP CALLS: remote participants for the grid ([] for a 1:1 call). */
   groupPeers: GroupParticipant[];
+  /** True when this user may add/remove people in the active call. */
+  canManageCall: boolean;
+  /** GROUP CALLS: ring someone into the call already in progress. */
+  addParticipant: (userId: string) => Promise<void>;
+  /** GROUP CALLS: evict someone from the call in progress. */
+  removeParticipant: (userId: string) => Promise<void>;
+  /** A group call this device just left and can still rejoin, if any. */
+  rejoinable: { callId: string; roomId: string; roomName: string; video: boolean } | null;
+  rejoinCall: () => Promise<void>;
+  dismissRejoin: () => void;
   dial: (
     roomId: string,
     roomName: string,
@@ -217,10 +238,13 @@ function formatCallDuration(totalSeconds: number): string {
 export function CallProvider({
   userId,
   userName,
+  userRole,
   children,
 }: {
   userId: string;
   userName: string;
+  /** Only admins and managers may manage participants mid-call. */
+  userRole?: Role;
   children: React.ReactNode;
 }) {
   const supabase = useMemo(() => createClient(), []);
@@ -240,8 +264,15 @@ export function CallProvider({
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  // GROUP CALLS: render-facing snapshot of the mesh peers (empty for 1:1).
+  // GROUP CALLS: render-facing snapshot of the peers (empty for 1:1).
   const [groupPeers, setGroupPeers] = useState<GroupParticipant[]>([]);
+  /** A group call this device left that can still be rejoined. */
+  const [rejoinable, setRejoinable] = useState<{
+    callId: string;
+    roomId: string;
+    roomName: string;
+    video: boolean;
+  } | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -255,6 +286,8 @@ export function CallProvider({
   const peerIdRef = useRef<string | null>(null);
   const phaseRef = useRef<CallPhase>("idle");
   const incomingRef = useRef<IncomingCall | null>(null);
+  /** Mirror of `call` for callbacks that must not depend on it. */
+  const callRef = useRef<ActiveCall | null>(null);
   const pendingOfferRef = useRef<{ callId: string; from: string; payload: SignalPayload } | null>(null);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const acceptedRef = useRef(false);
@@ -284,10 +317,17 @@ export function CallProvider({
   const hadPeersRef = useRef(false);
   /** Debounces the empty-room check so a reconnect blip can't end a call. */
   const emptyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** Calls this device has declined. A group initiator keeps re-inviting for
-   *  the whole ring window (it ignores declines so the call can continue for
-   *  everyone else), which would otherwise re-ring someone who already said no. */
-  const declinedCallsRef = useRef<Set<string>>(new Set());
+  /**
+   * Calls this device is done with, and when. A group initiator keeps
+   * re-inviting for the whole ring window (it ignores declines so the call
+   * continues for everyone else), which would otherwise re-ring someone who
+   * already said no — or who just left.
+   *
+   * Time-bounded on purpose: a permanent block would also swallow a
+   * DELIBERATE re-invite from "add participant", so it only has to outlive
+   * the resend window.
+   */
+  const declinedCallsRef = useRef<Map<string, number>>(new Map());
   /** True while the active/ringing call is a group call. */
   const groupRef = useRef(false);
   /** Whether the active group call is a video call (drives offer payloads). */
@@ -298,6 +338,17 @@ export function CallProvider({
 
   phaseRef.current = phase;
   incomingRef.current = incoming;
+  callRef.current = call;
+
+  /** True while late invites for a finished call should still be ignored. */
+  const isCallDone = useCallback((callId: string) => {
+    const now = Date.now();
+    for (const [id, ts] of declinedCallsRef.current) {
+      if (now - ts > DONE_CALL_TTL_MS) declinedCallsRef.current.delete(id);
+    }
+    const ts = declinedCallsRef.current.get(callId);
+    return ts !== undefined && now - ts <= DONE_CALL_TTL_MS;
+  }, []);
 
   const showNotice = useCallback((text: string) => {
     setNotice(text);
@@ -393,8 +444,7 @@ export function CallProvider({
       // us back in "idle" with everything cleared, sails through every guard
       // and rings us again for a call that no longer exists.
       if (callIdRef.current) {
-        if (declinedCallsRef.current.size > 50) declinedCallsRef.current.clear();
-        declinedCallsRef.current.add(callIdRef.current);
+        declinedCallsRef.current.set(callIdRef.current, Date.now());
       }
       stopTones();
       // The pushed "Incoming call" pop-up has nothing else to clear it once
@@ -886,7 +936,7 @@ export function CallProvider({
         // LiveKit does discovery itself, so it is now only noise — ignore it.
         if (p.joining) return;
         // Initial ring invite (mirror of the 1:1 invite guards).
-        if (declinedCallsRef.current.has(row.call_id)) return; // we said no
+        if (isCallDone(row.call_id)) return; // finished, or we said no
         if (Date.now() - Date.parse(row.created_at) > STALE_INVITE_MS) return;
         if (phaseRef.current !== "idle" && callIdRef.current !== row.call_id) {
           if (incomingRef.current?.callId !== row.call_id) {
@@ -955,7 +1005,7 @@ export function CallProvider({
       // SFU negotiates media itself. decline is intentionally ignored: a group
       // call continues with whoever joined.
     },
-    [cleanup, send, showNotice],
+    [cleanup, isCallDone, send, showNotice],
   );
 
   const handleSignal = useCallback(
@@ -1002,7 +1052,7 @@ export function CallProvider({
       }
 
       if (row.kind === "invite") {
-        if (declinedCallsRef.current.has(row.call_id)) return; // we said no
+        if (isCallDone(row.call_id)) return; // finished, or we said no
         if (Date.now() - Date.parse(row.created_at) > STALE_INVITE_MS) return;
         // Busy with a different call → auto-decline.
         if (phaseRef.current !== "idle" && callIdRef.current !== row.call_id) {
@@ -1140,7 +1190,7 @@ export function CallProvider({
         }
       }
     },
-    [answerOffer, answerRenegotiation, armConnectTimeout, cleanup, clearTimers, flushIce, handleGroupSignal, loadMissedIce, send, showNotice, userId],
+    [answerOffer, answerRenegotiation, armConnectTimeout, cleanup, clearTimers, flushIce, handleGroupSignal, isCallDone, loadMissedIce, send, showNotice, userId],
   );
 
   handlingRef.current = handleSignal;
@@ -1150,6 +1200,16 @@ export function CallProvider({
   const hangupGroup = useCallback(() => {
     const callId = callIdRef.current;
     const roomId = roomIdRef.current;
+    // Leaving a group call is usually not final — the others may still be
+    // talking — so keep the door open for a short while.
+    if (callId && roomId && acceptedRef.current) {
+      setRejoinable({
+        callId,
+        roomId,
+        roomName: callRef.current?.peerName || "Group call",
+        video: groupVideoRef.current,
+      });
+    }
     if (callId && roomId) {
       // Tell everyone we were ringing (or sitting in the room with) that we're
       // gone, so a still-ringing invitee stops. Participants already in the
@@ -1180,6 +1240,99 @@ export function CallProvider({
   endCallRef.current = hangup;
 
 
+  const canManageCall = userRole === "admin" || userRole === "manager";
+
+  /**
+   * Ring someone into a call that is already running. The invite carries the
+   * SAME call id, so accepting drops them into the same LiveKit room as
+   * everyone else — no separate call, no renegotiation.
+   */
+  const addParticipant = useCallback(
+    async (targetId: string) => {
+      if (!canManageCall) return;
+      const callId = callIdRef.current;
+      const roomId = roomIdRef.current;
+      if (!groupRef.current || !callId || !roomId) return;
+      if (!targetId || targetId === userId) return;
+
+      if (!groupMembersRef.current.includes(targetId)) {
+        groupMembersRef.current = [...groupMembersRef.current, targetId];
+      }
+      await send("invite", callId, targetId, roomId, {
+        group: true,
+        video: groupVideoRef.current,
+        fromName: userName,
+        roomName: callRef.current?.peerName,
+        members: groupMembersRef.current,
+      });
+      showNotice("Ringing them now");
+    },
+    [canManageCall, send, showNotice, userId, userName],
+  );
+
+  /** Evict someone mid-call. Only the LiveKit server API can do this. */
+  const removeParticipant = useCallback(
+    async (targetId: string) => {
+      if (!canManageCall) return;
+      const callId = callIdRef.current;
+      const roomId = roomIdRef.current;
+      if (!groupRef.current || !callId || !roomId) return;
+      // Stop re-ringing them if they were still being invited.
+      groupMembersRef.current = groupMembersRef.current.filter(
+        (id) => id !== targetId,
+      );
+      void send("hangup", callId, targetId, roomId, { group: true });
+      const res = await removeCallParticipant(roomId, callId, targetId);
+      if (res.error) showNotice(res.error);
+    },
+    [canManageCall, send, showNotice],
+  );
+
+  /** Rejoin the group call this device just left. */
+  const rejoinCall = useCallback(async () => {
+    const target = rejoinable;
+    if (!target || phaseRef.current !== "idle") return;
+    setRejoinable(null);
+
+    callGenRef.current += 1;
+    const gen = callGenRef.current;
+    acceptedRef.current = true;
+    isCallerRef.current = false; // rejoining never re-logs call history
+    startedLoggedRef.current = true;
+    groupRef.current = true;
+    groupVideoRef.current = target.video;
+    groupMembersRef.current = [];
+    callIdRef.current = target.callId;
+    roomIdRef.current = target.roomId;
+    peerIdRef.current = null;
+    // A fresh join, so the empty-room grace starts over and we wait for
+    // others rather than ending immediately.
+    hadPeersRef.current = false;
+    setCall({
+      callId: target.callId,
+      roomId: target.roomId,
+      peerId: "",
+      peerName: target.roomName,
+      video: target.video,
+      group: true,
+    });
+    setPhase("in-call");
+    setView("full");
+    setStatusText("Rejoining…");
+    const joined = await joinLiveKit(target.roomId, target.callId, target.video, gen);
+    if (callGenRef.current !== gen) return;
+    if (!joined) cleanup();
+  }, [cleanup, joinLiveKit, rejoinable]);
+
+  const dismissRejoin = useCallback(() => setRejoinable(null), []);
+
+  // The offer to rejoin goes stale — by then the call is usually long over.
+  useEffect(() => {
+    if (!rejoinable) return;
+    const t = setTimeout(() => setRejoinable(null), REJOIN_WINDOW_MS);
+    return () => clearTimeout(t);
+  }, [rejoinable]);
+
   const dial = useCallback(
     async (
       roomId: string,
@@ -1195,6 +1348,7 @@ export function CallProvider({
 
       // FIX A: a new call begins here — bump the generation so any async
       // continuation from a previous (torn-down) call aborts itself.
+      setRejoinable(null);
       callGenRef.current += 1;
       const gen = callGenRef.current;
 
@@ -1316,6 +1470,7 @@ export function CallProvider({
         return;
       }
 
+      setRejoinable(null);
       callGenRef.current += 1;
       const gen = callGenRef.current;
 
@@ -1512,8 +1667,7 @@ export function CallProvider({
     void send("decline", inc.callId, inc.peerId, inc.roomId, inc.group ? { group: true } : {});
     // Remember the refusal: a group initiator keeps re-inviting for the whole
     // ring window, which would otherwise ring us again seconds after we said no.
-    if (declinedCallsRef.current.size > 50) declinedCallsRef.current.clear();
-    declinedCallsRef.current.add(inc.callId);
+    declinedCallsRef.current.set(inc.callId, Date.now());
     pendingOfferRef.current = null;
     cleanup();
   }, [cleanup, send]);
@@ -1877,6 +2031,12 @@ export function CallProvider({
       remoteHasVideo,
       connectedAt,
       groupPeers,
+      canManageCall,
+      addParticipant,
+      removeParticipant,
+      rejoinable,
+      rejoinCall,
+      dismissRejoin,
       dial,
       startGroupCall,
       accept,
@@ -1904,6 +2064,12 @@ export function CallProvider({
       remoteHasVideo,
       connectedAt,
       groupPeers,
+      canManageCall,
+      addParticipant,
+      removeParticipant,
+      rejoinable,
+      rejoinCall,
+      dismissRejoin,
       dial,
       startGroupCall,
       accept,
@@ -1934,6 +2100,30 @@ export function CallProvider({
           className="pointer-events-none fixed bottom-20 left-1/2 z-[130] -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-[13px] font-medium text-white shadow-lg"
         >
           {notice}
+        </div>
+      )}
+      {/* Left a group call? The others may still be talking, so offer a way
+          back in rather than making them ring you again. */}
+      {rejoinable && phase === "idle" && (
+        <div className="fixed bottom-24 left-1/2 z-[130] flex -translate-x-1/2 items-center gap-3 rounded-full border border-line/70 bg-paper px-3 py-2 shadow-lg sm:bottom-6">
+          <span className="max-w-[40vw] truncate text-[13px] text-ink">
+            Left {rejoinable.roomName}
+          </span>
+          <button
+            type="button"
+            onClick={() => void rejoinCall()}
+            className="rounded-full bg-brand-600 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-brand-700"
+          >
+            Rejoin
+          </button>
+          <button
+            type="button"
+            onClick={dismissRejoin}
+            aria-label="Dismiss"
+            className="rounded-full p-1 text-muted hover:bg-mist"
+          >
+            <X className="size-4" />
+          </button>
         </div>
       )}
     </CallContext.Provider>

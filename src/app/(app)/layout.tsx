@@ -37,7 +37,11 @@ export default async function AppLayout({
   // membership-keyed, so it simply returns the rooms the agent belongs to).
   const { data } = await supabase.rpc("get_my_rooms");
   return (
-    <CallProvider userId={profile.id} userName={profile.full_name}>
+    <CallProvider
+      userId={profile.id}
+      userName={profile.full_name}
+      userRole={profile.role}
+    >
       <PresenceProvider userId={profile.id}>
         <KeyboardInsets />
         <PushRegistrar />

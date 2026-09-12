@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Avatar } from "@/components/Avatar";
 import { useCall } from "@/components/call/CallProvider";
 import { CallGrid } from "@/components/call/CallGrid";
+import { CallParticipants } from "@/components/call/CallParticipants";
 import { useDuration } from "@/components/call/useDuration";
 import {
   CamIcon,
@@ -15,8 +16,10 @@ import {
   NoiseIcon,
   ScreenShareIcon,
 } from "@/components/icons";
+import { Users } from "lucide-react";
 
 export function FullScreenCall() {
+  const [showPeople, setShowPeople] = useState(false);
   const {
     call,
     phase,
@@ -92,6 +95,9 @@ export function FullScreenCall() {
 
   return (
     <div className="fixed inset-0 z-[115] flex flex-col bg-ink text-white">
+      {showPeople && call.group && (
+        <CallParticipants onClose={() => setShowPeople(false)} />
+      )}
       {/* The page draws under the notch (viewport-fit=cover), so the
           minimize button needs the inset or it sits under the status bar. */}
       <div className="flex items-center gap-3 px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
@@ -169,6 +175,15 @@ export function FullScreenCall() {
             label={camOff ? "Camera on" : "Camera off"}
           >
             {camOff ? <CamOffIcon /> : <CamIcon />}
+          </CallControlButton>
+        )}
+        {phase === "in-call" && call.group && (
+          <CallControlButton
+            onClick={() => setShowPeople((v) => !v)}
+            active={showPeople}
+            label="Participants"
+          >
+            <Users className="size-[22px]" />
           </CallControlButton>
         )}
         {phase === "in-call" && (
