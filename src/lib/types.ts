@@ -42,6 +42,8 @@ export type Room = {
   name: string;
   created_by: string;
   created_at: string;
+  /** Group chat wallpaper (public URL); null for DMs and un-imaged groups. */
+  background_url?: string | null;
 };
 
 export type RoomMember = {

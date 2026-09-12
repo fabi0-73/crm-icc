@@ -193,6 +193,7 @@ export function ChatRoom({
   roomName,
   roomType = "group",
   roomAvatarUrl = null,
+  roomBackgroundUrl = null,
   dmOtherUserId = null,
   currentUserId,
   currentUserRole = "assistant",
@@ -207,6 +208,8 @@ export function ChatRoom({
   roomName: string;
   roomType?: RoomType;
   roomAvatarUrl?: string | null;
+  /** Group chat wallpaper; ignored for DMs and workspaces. */
+  roomBackgroundUrl?: string | null;
   dmOtherUserId?: string | null;
   currentUserId: string;
   currentUserRole?: Role;
@@ -236,6 +239,9 @@ export function ChatRoom({
   const [showMedia, setShowMedia] = useState(false);
   const [pinned, setPinned] = useState<Message[]>([]);
   const [unseen, setUnseen] = useState(0);
+  const [backgroundUrl, setBackgroundUrl] = useState<string | null>(
+    roomType === "group" ? (roomBackgroundUrl ?? null) : null,
+  );
 
   // Pinning exists for group chats and private messages, and only
   // admins/managers may do it (set_message_pinned enforces the same).
@@ -264,6 +270,39 @@ export function ChatRoom({
   useEffect(() => {
     setMyRole(myRoomRole);
   }, [myRoomRole]);
+  useEffect(() => {
+    setBackgroundUrl(roomType === "group" ? (roomBackgroundUrl ?? null) : null);
+  }, [roomBackgroundUrl, roomType]);
+
+  useEffect(() => {
+    if (roomType !== "group") return;
+    let channel: RealtimeChannel | null = null;
+    let cancelled = false;
+    (async () => {
+      await ensureRealtimeAuth(supabase);
+      if (cancelled) return;
+      channel = supabase
+        .channel(`room-bg:${roomId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "rooms",
+            filter: `id=eq.${roomId}`,
+          },
+          (payload) => {
+            const row = payload.new as { background_url?: string | null };
+            setBackgroundUrl(row.background_url ?? null);
+          },
+        )
+        .subscribe();
+    })();
+    return () => {
+      cancelled = true;
+      if (channel) void supabase.removeChannel(channel);
+    };
+  }, [supabase, roomId, roomType]);
 
   // Live roster: any room_members change for this room re-reads the
   // authoritative membership. If it no longer includes me (removed or I
@@ -869,7 +908,7 @@ export function ChatRoom({
             <Avatar name={roomName} size="sm" src={roomAvatarUrl} />
           </span>
         ) : (
-          <span className="ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700 sm:ml-0">
+          <span className="ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-300 sm:ml-0">
             <Hash className="size-[18px]" strokeWidth={2.2} />
           </span>
         )}
@@ -970,10 +1009,25 @@ export function ChatRoom({
 
       {/* ── Message stream ─────────────────────────────────────── */}
       <div className="relative min-h-0 flex-1">
+        {backgroundUrl && (
+          <>
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 bg-cover bg-center"
+              style={{
+                backgroundImage: `url("${backgroundUrl.replace(/"/g, "")}")`,
+              }}
+            />
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 bg-stream/80 dark:bg-mist/75"
+            />
+          </>
+        )}
         <div
           ref={streamRef}
           onScroll={onStreamScroll}
-          className="h-full overflow-y-auto overscroll-contain px-3 py-3 sm:px-6"
+          className="relative h-full overflow-y-auto overscroll-contain px-3 py-3 sm:px-6"
         >
           <div className="mx-auto w-full max-w-3xl">
           {older.has && (
@@ -982,7 +1036,7 @@ export function ChatRoom({
                 type="button"
                 onClick={() => void loadOlder()}
                 disabled={older.loading}
-                className="rounded-full border border-line/70 bg-white/80 px-3.5 py-1.5 text-[12px] font-medium text-muted shadow-xs backdrop-blur active:bg-mist disabled:opacity-50"
+                className="rounded-full border border-line/70 bg-paper/80 px-3.5 py-1.5 text-[12px] font-medium text-muted shadow-xs backdrop-blur active:bg-mist disabled:opacity-50"
               >
                 {older.loading ? "Loading…" : "Load earlier messages"}
               </button>
@@ -993,7 +1047,7 @@ export function ChatRoom({
               <div className="my-3 flex justify-center">
                 <span
                   suppressHydrationWarning
-                  className="rounded-full border border-line/70 bg-white/75 px-3 py-1 text-[11px] font-medium text-muted shadow-xs backdrop-blur"
+                  className="rounded-full border border-line/70 bg-paper/80 px-3 py-1 text-[11px] font-medium text-muted shadow-xs backdrop-blur"
                 >
                   {day.label}
                 </span>
@@ -1083,7 +1137,7 @@ export function ChatRoom({
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="flex items-baseline gap-2 pl-0.5">
-                        <span className="truncate text-[13px] font-semibold text-brand-700">
+                        <span className="truncate text-[13px] font-semibold text-brand-700 dark:text-brand-300">
                           {name}
                         </span>
                         <span
@@ -1145,7 +1199,7 @@ export function ChatRoom({
       {!readOnly && (
       <div className="shrink-0 border-t border-line/80 bg-paper/95 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur sm:px-3">
         {error && (
-          <p className="mx-auto mb-2 w-full max-w-3xl rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700">
+          <p className="mx-auto mb-2 w-full max-w-3xl rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </p>
         )}
@@ -1344,6 +1398,7 @@ export function ChatRoom({
               roomName={roomName}
               roomType={roomType}
               roomAvatarUrl={roomAvatarUrl}
+              roomBackgroundUrl={backgroundUrl}
               members={members}
               currentUserId={currentUserId}
               currentUserRole={currentUserRole}
@@ -1478,7 +1533,7 @@ function Bubble({
       {msg.pinned_at && (
         <p
           className={`mb-0.5 flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wide ${
-            mine ? "text-white/80" : "text-amber-600"
+            mine ? "text-white/80" : "text-amber-600 dark:text-amber-400"
           }`}
         >
           <Pin className="size-3" /> Pinned
@@ -1509,7 +1564,7 @@ function AttachmentFile({
     <>
       <span
         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-          mine ? "bg-white/20" : "bg-brand-50 text-brand-700"
+          mine ? "bg-white/20" : "bg-brand-50 text-brand-700 dark:bg-brand-900/50 dark:text-brand-300"
         }`}
       >
         <FileText className="size-[18px]" />

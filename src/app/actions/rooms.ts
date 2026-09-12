@@ -224,6 +224,24 @@ export async function setRoomAvatar(
   return { success: "Group image updated." };
 }
 
+export async function setRoomBackground(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const { supabase } = await requireRole(["admin", "manager", "assistant"]);
+  const roomId = String(formData.get("room_id") ?? "");
+  const backgroundUrl = String(formData.get("background_url") ?? "").trim();
+  if (!roomId) return { error: "Missing room." };
+
+  const { error } = await supabase.rpc("set_room_background", {
+    p_room_id: roomId,
+    p_background_url: backgroundUrl || null,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/rooms/${roomId}`);
+  return { success: "Chat background updated." };
+}
+
 /** Admins delete any channel; managers only ones they manage. */
 export async function deleteRoom(
   _prev: ActionState,

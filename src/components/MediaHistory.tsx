@@ -311,8 +311,8 @@ function MediaRow({
       <span
         className={`flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-lg ${
           item.kind === "link"
-            ? "bg-secondary text-brand-700"
-            : "bg-brand-50 text-brand-700"
+            ? "bg-secondary text-brand-700 dark:text-brand-300"
+            : "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-300"
         }`}
       >
         {item.category === "image" && url ? (
@@ -334,7 +334,7 @@ function MediaRow({
         </span>
         <span className="block truncate text-[12px] text-muted">{meta}</span>
         {item.kind === "link" && (
-          <span className="block truncate text-[12px] text-brand-700">
+          <span className="block truncate text-[12px] text-brand-700 dark:text-brand-300">
             {linkDetail(item.url ?? "") || item.url}
           </span>
         )}

@@ -116,7 +116,7 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
         </div>
 
         {error && (
-          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </p>
         )}
@@ -193,7 +193,7 @@ function ResultIcon({ result }: { result: SearchResult }) {
   }
   if (result.kind === "conversation") {
     return (
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
         {result.room_type === "dm" ? (
           <User className="size-4" />
         ) : (

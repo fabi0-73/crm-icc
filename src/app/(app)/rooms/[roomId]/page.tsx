@@ -19,13 +19,14 @@ export default async function RoomPage({
 
   const { data: room } = await supabase
     .from("rooms")
-    .select("id, name, type, avatar_url")
+    .select("id, name, type, avatar_url, background_url")
     .eq("id", roomId)
     .maybeSingle<{
       id: string;
       name: string;
       type: RoomType;
       avatar_url: string | null;
+      background_url: string | null;
     }>();
 
   if (!room) notFound();
@@ -112,6 +113,7 @@ export default async function RoomPage({
       roomName={dmOther ? publicDisplayName(dmOther) : room.name}
       roomType={room.type}
       roomAvatarUrl={room.avatar_url}
+      roomBackgroundUrl={room.type === "group" ? room.background_url : null}
       dmOtherUserId={dmOther?.id ?? null}
       currentUserId={user.id}
       currentUserRole={profile.role}

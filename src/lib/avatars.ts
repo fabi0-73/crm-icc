@@ -61,6 +61,37 @@ export async function uploadGroupAvatar(file: File): Promise<AvatarUploadResult>
 }
 
 /**
+ * Upload a group chat wallpaper. Same bucket and size limit as the
+ * group image; stored under groups/backgrounds/ so it stays separate
+ * from the circular avatar.
+ */
+export async function uploadGroupBackground(
+  file: File,
+): Promise<AvatarUploadResult> {
+  if (!file.type.startsWith("image/")) {
+    return { error: "Choose an image file." };
+  }
+  if (file.size > MAX_AVATAR_BYTES) {
+    return { error: "Image must be 2 MB or smaller." };
+  }
+
+  const supabase = createClient();
+  const ext = (file.name.split(".").pop() ?? "png")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, 5) || "png";
+  const key = `groups/backgrounds/${crypto.randomUUID()}.${ext}`;
+
+  const { error } = await supabase.storage
+    .from(AVATAR_BUCKET)
+    .upload(key, file, { cacheControl: "3600", upsert: false });
+  if (error) return { error: error.message };
+
+  const { data } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(key);
+  return { url: data.publicUrl };
+}
+
+/**
  * Upload a profile picture under avatars/users/{userId}/. The public
  * URL is stable; the caller writes it onto profiles.avatar_url.
  */

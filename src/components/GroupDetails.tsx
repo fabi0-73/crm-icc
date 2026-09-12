@@ -25,7 +25,7 @@ import { useIsOnline } from "@/components/presence/PresenceProvider";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
 import { createClient } from "@/lib/supabase/client";
-import { uploadGroupAvatar } from "@/lib/avatars";
+import { uploadGroupAvatar, uploadGroupBackground } from "@/lib/avatars";
 import {
   addRoomMember,
   deleteRoom,
@@ -34,6 +34,7 @@ import {
   removeRoomMember,
   renameRoom,
   setRoomAvatar,
+  setRoomBackground,
   setRoomMemberRole,
 } from "@/app/actions/rooms";
 import type { Profile, RoomMemberRole, RoomMemberView, RoomType } from "@/lib/types";
@@ -47,6 +48,7 @@ export function GroupDetails({
   roomName,
   roomType,
   roomAvatarUrl,
+  roomBackgroundUrl = null,
   members,
   currentUserId,
   currentUserRole,
@@ -57,6 +59,7 @@ export function GroupDetails({
   roomName: string;
   roomType: RoomType;
   roomAvatarUrl: string | null;
+  roomBackgroundUrl?: string | null;
   members: RoomMemberView[];
   currentUserId: string;
   currentUserRole: Profile["role"];
@@ -68,6 +71,8 @@ export function GroupDetails({
   const appManager = currentUserRole === "admin" || currentUserRole === "manager";
   // Group admins run the room; app admins/managers can run any group.
   const canManage = isGroup && (myRoomRole === "admin" || appManager);
+  const canSetBackground =
+    isGroup && (myRoomRole === "admin" || currentUserRole === "admin");
   const canAdd = canManage;
   // Admins delete any channel; managers only the ones they run. Everyone
   // else never sees the control (delete_room re-checks server-side).
@@ -167,7 +172,7 @@ export function GroupDetails({
         </div>
 
         {error && (
-          <p className="mx-4 mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="mx-4 mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </p>
         )}
@@ -269,6 +274,8 @@ export function GroupDetails({
           roomId={roomId}
           initialName={roomName}
           initialAvatar={roomAvatarUrl}
+          initialBackground={roomBackgroundUrl ?? null}
+          canSetBackground={canSetBackground}
           canDelete={canDelete}
           onClose={settingsModal.closeModal}
         />
@@ -326,7 +333,7 @@ function MemberItem({
           {shownName}
           {self && <span className="text-[12px] text-muted">(you)</span>}
           {isAdmin && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
               <ShieldCheck className="size-3" /> Admin
             </span>
           )}
@@ -463,7 +470,7 @@ function AddMembersModal({
     <Modal title="Add members" open onClose={onClose}>
       <div className="space-y-4">
         {error && (
-          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </p>
         )}
@@ -507,12 +514,16 @@ function GroupSettingsModal({
   roomId,
   initialName,
   initialAvatar,
+  initialBackground,
+  canSetBackground,
   canDelete,
   onClose,
 }: {
   roomId: string;
   initialName: string;
   initialAvatar: string | null;
+  initialBackground: string | null;
+  canSetBackground: boolean;
   canDelete: boolean;
   onClose: () => void;
 }) {
@@ -521,10 +532,15 @@ function GroupSettingsModal({
   const [deleting, setDeleting] = useState(false);
   const [name, setName] = useState(initialName);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(initialAvatar);
+  const [backgroundUrl, setBackgroundUrl] = useState<string | null>(
+    initialBackground,
+  );
   const [uploading, setUploading] = useState(false);
+  const [uploadingBg, setUploadingBg] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const bgFileRef = useRef<HTMLInputElement>(null);
 
   async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -539,6 +555,21 @@ function GroupSettingsModal({
       return;
     }
     setAvatarUrl(res.url);
+  }
+
+  async function onPickBackground(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploadingBg(true);
+    setError(null);
+    const res = await uploadGroupBackground(file);
+    setUploadingBg(false);
+    if (res.error || !res.url) {
+      setError(res.error ?? "Could not upload the image.");
+      return;
+    }
+    setBackgroundUrl(res.url);
   }
 
   async function onSave() {
@@ -573,8 +604,22 @@ function GroupSettingsModal({
         return;
       }
     }
-    // Name/avatar show in the header and sidebar, which the client router
-    // caches; a reload is the reliable way to reflect them everywhere.
+    if (
+      canSetBackground &&
+      (backgroundUrl ?? "") !== (initialBackground ?? "")
+    ) {
+      const f = new FormData();
+      f.set("room_id", roomId);
+      f.set("background_url", backgroundUrl ?? "");
+      const res = await setRoomBackground({}, f);
+      if (res.error) {
+        setError(res.error);
+        setPending(false);
+        return;
+      }
+    }
+    // Name/avatar/background show in the header and stream, which the
+    // client router caches; a reload is the reliable way to reflect them.
     window.location.reload();
   }
 
@@ -582,7 +627,7 @@ function GroupSettingsModal({
     <Modal title="Group settings" open onClose={onClose}>
       <div className="space-y-4">
         {error && (
-          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </p>
         )}
@@ -624,10 +669,63 @@ function GroupSettingsModal({
             autoComplete="off"
           />
         </div>
+        {canSetBackground && (
+          <div>
+            <Label>Chat background</Label>
+            <p className="mb-2 text-[12px] text-muted">
+              Shown behind messages for everyone in this group. JPG, PNG or
+              WEBP. 2 MB or smaller.
+            </p>
+            <div className="flex items-center gap-3">
+              {backgroundUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element -- public bucket
+                <img
+                  src={backgroundUrl}
+                  alt=""
+                  className="h-14 w-20 shrink-0 rounded-md object-cover ring-1 ring-line"
+                />
+              ) : (
+                <span className="flex h-14 w-20 shrink-0 items-center justify-center rounded-md bg-mist text-[11px] text-muted ring-1 ring-line">
+                  None
+                </span>
+              )}
+              <div className="min-w-0">
+                <button
+                  type="button"
+                  onClick={() => bgFileRef.current?.click()}
+                  disabled={uploadingBg}
+                  className="rounded-md border border-line px-3 py-1.5 text-sm font-medium text-ink hover:bg-mist disabled:opacity-50"
+                >
+                  {uploadingBg
+                    ? "Uploading…"
+                    : backgroundUrl
+                      ? "Change background"
+                      : "Add background"}
+                </button>
+                {backgroundUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setBackgroundUrl(null)}
+                    className="ml-2 text-sm text-muted hover:text-ink"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <input
+                ref={bgFileRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={onPickBackground}
+              />
+            </div>
+          </div>
+        )}
         <Button
           type="button"
           onClick={onSave}
-          disabled={pending || uploading}
+          disabled={pending || uploading || uploadingBg}
           className="w-full"
         >
           {pending ? "Saving…" : "Save changes"}

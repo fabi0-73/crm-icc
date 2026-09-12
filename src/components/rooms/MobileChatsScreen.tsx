@@ -76,7 +76,7 @@ function ChatRow({ room }: { room: MyRoom }) {
           className="ring-1 ring-black/5"
         />
       ) : (
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-50 to-brand-100 text-brand-700 ring-1 ring-brand-200/60">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-50 to-brand-100 text-brand-700 ring-1 ring-brand-200/60 dark:from-brand-900/50 dark:to-brand-950 dark:text-brand-300 dark:ring-brand-800">
           <Hash className="size-5" strokeWidth={2.2} />
         </span>
       )}
@@ -170,7 +170,7 @@ export function MobileChatsScreen({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search conversations"
-            className="h-11 rounded-full border-line/80 bg-white pl-10 text-[16px] shadow-xs placeholder:text-muted"
+            className="h-11 rounded-full border-line/80 bg-paper pl-10 text-[16px] shadow-xs placeholder:text-muted"
             aria-label="Search conversations"
           />
         </div>
@@ -179,7 +179,7 @@ export function MobileChatsScreen({
           <button
             type="button"
             onClick={() => setSearchOpen(true)}
-            className="flex w-full items-center justify-center gap-1.5 rounded-full border border-line/80 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-muted shadow-xs active:bg-mist"
+            className="flex w-full items-center justify-center gap-1.5 rounded-full border border-line/80 bg-paper px-3 py-1.5 text-[12.5px] font-semibold text-muted shadow-xs active:bg-mist"
           >
             <Search className="size-3.5" />
             Search messages and people
@@ -197,7 +197,7 @@ export function MobileChatsScreen({
                 className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold transition-colors ${
                   active
                     ? "bg-ink text-white shadow-soft"
-                    : "border border-line/80 bg-white text-muted shadow-xs active:bg-mist"
+                    : "border border-line/80 bg-paper text-muted shadow-xs active:bg-mist"
                 }`}
               >
                 {f.label}
