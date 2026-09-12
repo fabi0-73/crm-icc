@@ -195,15 +195,20 @@ export function FullScreenCall() {
             <ScreenShareIcon />
           </CallControlButton>
         )}
-        {/* FIX 5: suppression is ON by default (noiseOff starts false), so the
-            control shows as engaged (active) whenever the filter is on. */}
-        <CallControlButton
-          onClick={toggleNoise}
-          active={!noiseOff}
-          label={noiseOff ? "Noise filter off" : "Noise filter on"}
-        >
-          <NoiseIcon />
-        </CallControlButton>
+        {/* Suppression is ON by default (noiseOff starts false), so the control
+            shows as engaged whenever the filter is on.
+            Hidden in a group call: LiveKit owns microphone capture there, so
+            toggleNoise is a deliberate no-op — showing a control that flips
+            its own state but changes nothing is worse than not offering it. */}
+        {!call.group && (
+          <CallControlButton
+            onClick={toggleNoise}
+            active={!noiseOff}
+            label={noiseOff ? "Noise filter off" : "Noise filter on"}
+          >
+            <NoiseIcon />
+          </CallControlButton>
+        )}
         <div className="flex flex-col items-center gap-1.5">
           <button
             type="button"

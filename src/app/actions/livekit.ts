@@ -2,6 +2,37 @@
 
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { requireProfile, requireRole } from "@/lib/auth";
+import { createServiceClient } from "@/lib/supabase/server";
+
+/**
+ * Refuse a callId that belongs to a DIFFERENT room.
+ *
+ * Membership is checked against the client-supplied roomId, so without this a
+ * member of room A could present room B's callId and be issued a token for
+ * (or evict someone from) B's call. Call ids are random UUIDs and call_signals
+ * is RLS-restricted, so learning a foreign one is already hard — this closes
+ * the hole rather than relying on that.
+ *
+ * Uses the SERVICE client deliberately: with the caller's own client, RLS
+ * could hide the very conflicting row we are looking for and the check would
+ * pass. An unknown callId is allowed — that is a brand-new call, so there is
+ * no other call to hijack.
+ */
+async function callBelongsToRoom(callId: string, roomId: string): Promise<boolean> {
+  try {
+    const service = createServiceClient();
+    const { data } = await service
+      .from("call_signals")
+      .select("room_id")
+      .eq("call_id", callId)
+      .limit(1)
+      .maybeSingle<{ room_id: string }>();
+    return !data || data.room_id === roomId;
+  } catch {
+    // Can't verify (service client misconfigured) — fail closed.
+    return false;
+  }
+}
 
 export type CallTokenResult = { token?: string; url?: string; error?: string };
 
@@ -37,6 +68,9 @@ export async function createCallToken(
       .eq("user_id", user.id)
       .maybeSingle();
     if (!membership) return { error: "You're not a member of this room." };
+    if (!(await callBelongsToRoom(callId, roomId))) {
+      return { error: "That call doesn't belong to this conversation." };
+    }
 
     const at = new AccessToken(apiKey, apiSecret, {
       identity: user.id,
@@ -93,6 +127,9 @@ export async function removeCallParticipant(
       .maybeSingle();
     if (!membership) return { error: "You're not a member of this room." };
     if (identity === user.id) return { error: "Use Leave to drop yourself." };
+    if (!(await callBelongsToRoom(callId, roomId))) {
+      return { error: "That call doesn't belong to this conversation." };
+    }
 
     // The SDK speaks HTTP(S); the browser-facing URL is a websocket one.
     const httpUrl = url.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");

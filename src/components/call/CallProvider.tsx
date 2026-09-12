@@ -704,12 +704,11 @@ export function CallProvider({
         autoGainControl: true,
         channelCount: 1,
       },
-      // A group (mesh) video call captures at a modest resolution so N encoded
-      // copies fit the uplink; a 1:1 call keeps full quality. groupRef is set
-      // before getMedia runs on both group entry paths (start + accept).
-      // Capture a real 16:9 frame rather than the browser's default (often
-      // 4:3). The call surfaces are widescreen, so a 4:3 source had to be
-      // cropped to fit — which is what looked zoomed in.
+      // 1:1 only — group calls never reach here, LiveKit owns their capture
+      // (see livekit-room.ts videoCaptureDefaults). Ask for a real 16:9 frame
+      // rather than the browser's default (often 4:3): the call surfaces are
+      // widescreen, so a 4:3 source had to be cropped, which is what looked
+      // zoomed in.
       video: video
         ? {
             facingMode: "user",
