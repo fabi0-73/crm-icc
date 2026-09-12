@@ -111,6 +111,10 @@ export default async function RoomPage({
 
   return (
     <ChatRoom
+      // Force a fresh instance per room: without it the component's message,
+      // scroll and composer state depends on Next choosing to remount, and a
+      // reused instance would interleave the previous room's messages.
+      key={room.id}
       roomId={room.id}
       roomName={dmOther ? dmOther.full_name : room.name}
       roomType={room.type}

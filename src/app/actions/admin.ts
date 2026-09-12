@@ -413,11 +413,35 @@ async function buildFootprint(
   };
 }
 
+/**
+ * Deleting an account is irreversible, so the privilege is narrow: admins may
+ * remove anyone, a manager may remove ASSISTANTS ONLY — never an admin,
+ * another manager, or an agent. Returns an error string when refused.
+ */
+async function assertMayDeleteUser(
+  service: Service,
+  actorRole: Role,
+  targetId: string,
+): Promise<string | null> {
+  if (actorRole === "admin") return null;
+  if (actorRole !== "manager") return "You don't have access to do that.";
+  const { data: target } = await service
+    .from("profiles")
+    .select("role")
+    .eq("id", targetId)
+    .maybeSingle<{ role: Role }>();
+  if (!target) return "That account no longer exists.";
+  if (target.role !== "assistant") {
+    return "Managers can only delete assistants.";
+  }
+  return null;
+}
+
 /** Read-only preview for the delete dialog. */
 export async function describeUserDeletion(
   userId: string,
 ): Promise<{ footprint?: DeletionFootprint; error?: string }> {
-  const { profile: actor } = await requireRole(["admin"]);
+  const { profile: actor } = await requireRole(["admin", "manager"]);
   if (!userId) return { error: "Missing user." };
 
   let service;
@@ -429,6 +453,9 @@ export async function describeUserDeletion(
     };
   }
 
+  const refusal = await assertMayDeleteUser(service, actor.role, userId);
+  if (refusal) return { error: refusal };
+
   const footprint = await buildFootprint(service, userId, actor.id);
   if (!footprint) return { error: "That account no longer exists." };
   return { footprint };
@@ -438,7 +465,7 @@ export async function deleteUserAccount(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { profile: actor } = await requireRole(["admin"]);
+  const { profile: actor } = await requireRole(["admin", "manager"]);
   const userId = String(formData.get("user_id") ?? "");
   const typed = String(formData.get("confirm") ?? "").trim();
   if (!userId) return { error: "Missing user." };
@@ -451,6 +478,10 @@ export async function deleteUserAccount(
       error: friendlyAuthError((e as Error).message, "Server misconfigured."),
     };
   }
+
+  // Re-checked server-side: the UI only decides what to SHOW.
+  const refusal = await assertMayDeleteUser(service, actor.role, userId);
+  if (refusal) return { error: refusal };
 
   // Recomputed here: the dialog's numbers are a preview, not permission.
   const footprint = await buildFootprint(service, userId, actor.id);

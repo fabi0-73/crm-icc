@@ -59,6 +59,9 @@ const RESEND_MS = 3_000;
 /** Grace before deleting a finished call's signal rows, so the hangup that
  *  ends the call is still there to be delivered. */
 const PURGE_DELAY_MS = 8_000;
+/** How long a group call may sit with nobody else in it before it ends
+ *  itself. Long enough to ride out a reconnect, short enough not to strand. */
+const EMPTY_ROOM_GRACE_MS = 4_000;
 
 type SignalKind = "invite" | "offer" | "answer" | "ice" | "hangup" | "decline";
 
@@ -276,6 +279,11 @@ export function CallProvider({
   // GROUP CALLS: the live LiveKit room for the active group call. A call is
   // either 1:1 (pcRef, peer-to-peer) or a group (lkRef, SFU), never both.
   const lkRef = useRef<CallRoomHandle | null>(null);
+  /** True once at least one other person has been in this group call, so an
+   *  empty room means "everyone left" rather than "nobody has joined yet". */
+  const hadPeersRef = useRef(false);
+  /** Debounces the empty-room check so a reconnect blip can't end a call. */
+  const emptyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Calls this device has declined. A group initiator keeps re-inviting for
    *  the whole ring window (it ignores declines so the call can continue for
    *  everyone else), which would otherwise re-ring someone who already said no. */
@@ -404,6 +412,11 @@ export function CallProvider({
         if (handle) void handle.disconnect();
       }
       groupRef.current = false;
+      hadPeersRef.current = false;
+      if (emptyTimerRef.current) {
+        clearTimeout(emptyTimerRef.current);
+        emptyTimerRef.current = null;
+      }
       groupVideoRef.current = false;
       groupMembersRef.current = [];
       setGroupPeers([]);
@@ -780,6 +793,11 @@ export function CallProvider({
       );
       setLocalStream(payload.localStream);
       if (payload.participants.length > 0) {
+        hadPeersRef.current = true;
+        if (emptyTimerRef.current) {
+          clearTimeout(emptyTimerRef.current);
+          emptyTimerRef.current = null;
+        }
         // NOTE: deliberately does NOT clearTimers() — the initiator's re-ring
         // loop must keep running for people who haven't answered yet just
         // because the first person joined. Those timers expire on their own.
@@ -792,9 +810,23 @@ export function CallProvider({
         });
       } else if (!connectedAtRef.current) {
         setStatusText("Waiting for others…");
+      } else if (hadPeersRef.current && !emptyTimerRef.current) {
+        // Everyone else has gone. A group call stays open while anyone is
+        // still in it, but nobody should be left sitting alone in an empty
+        // room — which is exactly how the "other participant stays stuck in
+        // the call" report happened. Debounced so a reconnect blip can't end
+        // a live call.
+        setStatusText("Everyone left");
+        emptyTimerRef.current = setTimeout(() => {
+          emptyTimerRef.current = null;
+          if (!groupRef.current) return;
+          if ((lkRef.current?.room.remoteParticipants.size ?? 0) > 0) return;
+          showNotice("Call ended");
+          endCallRef.current?.();
+        }, EMPTY_ROOM_GRACE_MS);
       }
     },
-    [],
+    [showNotice],
   );
 
   /**

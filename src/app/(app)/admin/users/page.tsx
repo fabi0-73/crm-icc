@@ -27,8 +27,8 @@ async function loadUsernames(): Promise<Map<string, string>> {
 }
 
 export default async function UsersPage() {
-  // Managers reach this page to create assistants; only admins get the
-  // per-row management controls.
+  // Managers reach this page to create assistants, and may delete
+  // assistants (and only assistants). Everything else is admin-only.
   const { supabase, profile: self } = await requireRole(["admin", "manager"]);
   const isAdmin = self.role === "admin";
 
@@ -120,6 +120,11 @@ export default async function UsersPage() {
                       <DeleteUserButton userId={u.id} name={u.full_name} />
                     )}
                   </div>
+                ) : u.role === "assistant" && u.id !== self.id ? (
+                  // Managers get exactly one control: removing an assistant.
+                  // The server re-checks this — the UI only decides what to
+                  // show.
+                  <DeleteUserButton userId={u.id} name={u.full_name} />
                 ) : (
                   <span className="text-muted">—</span>
                 )}
