@@ -11,6 +11,8 @@ import { PresenceDot } from "@/components/PresenceDot";
 import { NewGroupButton } from "@/components/NewGroupButton";
 import { NewDmButton } from "@/components/NewDmButton";
 import { HashIcon, SignOutIcon } from "@/components/icons";
+import { Search } from "lucide-react";
+import { OPEN_SEARCH_EVENT } from "@/components/GlobalSearch";
 import type { MyRoom, Profile } from "@/lib/types";
 
 export const NAV: { href: string; label: string; roles: Profile["role"][] }[] = [
@@ -117,6 +119,19 @@ export function Sidebar({ profile }: { profile: Profile }) {
       </Link>
 
       <div className="flex-1 overflow-y-auto px-2 pb-3">
+        <button
+          type="button"
+          onClick={() =>
+            window.dispatchEvent(new CustomEvent(OPEN_SEARCH_EVENT))
+          }
+          className="mt-3 flex w-full items-center gap-2 rounded-lg bg-white/8 px-2 py-1.5 text-[13px] text-white/60 transition-colors hover:bg-white/12 hover:text-white"
+        >
+          <Search className="size-4 shrink-0" />
+          <span className="flex-1 text-left">Search</span>
+          <span className="shrink-0 rounded border border-white/20 px-1 text-[10px] text-white/40">
+            ⌘K
+          </span>
+        </button>
         {nav.length > 0 && (
           <nav className="mt-3 space-y-0.5">
             {nav.map((l) => {

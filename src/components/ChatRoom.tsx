@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
   Bold,
@@ -189,6 +189,7 @@ export function ChatRoom({
 }) {
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [members, setMembers] = useState<RoomMemberView[]>(initialMembers);
   const [myRole, setMyRole] = useState<RoomMemberRole>(myRoomRole);
@@ -923,6 +924,20 @@ export function ChatRoom({
         .sort((a, b) => (b.pinned_at ?? "").localeCompare(a.pinned_at ?? "")),
     [messages],
   );
+
+  // Arriving from a search result: ?m=<id> asks us to reveal that message.
+  // It may be outside the loaded window, in which case jumpToMessage says so
+  // rather than failing silently.
+  const focusMessageId = searchParams.get("m");
+  const focusedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusMessageId || focusedRef.current === focusMessageId) return;
+    if (!messages.some((m) => m.id === focusMessageId)) return;
+    focusedRef.current = focusMessageId;
+    // Let the stream paint before scrolling to it.
+    const t = setTimeout(() => jumpToMessage(focusMessageId), 120);
+    return () => clearTimeout(t);
+  }, [focusMessageId, messages, jumpToMessage]);
 
   /** Pinning is an admin/manager privilege; the RPC enforces it too. */
   const canPinMessages =

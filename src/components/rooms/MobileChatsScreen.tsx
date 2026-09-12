@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Hash, MessagesSquare, Search } from "lucide-react";
+import { Hash, MessagesSquare, Search, Telescope } from "lucide-react";
+import { OPEN_SEARCH_EVENT } from "@/components/GlobalSearch";
 import { useRooms } from "@/components/rooms/RoomsProvider";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
 import { Avatar } from "@/components/Avatar";
@@ -154,6 +155,17 @@ export function MobileChatsScreen({
             Chats
           </h1>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                window.dispatchEvent(new CustomEvent(OPEN_SEARCH_EVENT))
+              }
+              aria-label="Search everything"
+              title="Search messages, people and conversations"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-paper text-ink shadow-xs ring-1 ring-line/60 active:bg-mist"
+            >
+              <Telescope className="size-[18px]" />
+            </button>
             <NewDmButton big />
             {canCreateGroup && <NewGroupButton compact big />}
           </div>
