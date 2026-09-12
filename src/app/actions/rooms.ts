@@ -302,6 +302,33 @@ export async function deleteMessage(
   return { success: "Message deleted." };
 }
 
+/**
+ * Pin or unpin a message. Admins and managers only — enforced in the
+ * set_message_pinned RPC, so this allowlist is a fast path, not the gate.
+ */
+export async function setMessagePinned(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const id = String(formData.get("message_id") ?? "");
+  const roomId = String(formData.get("room_id") ?? "");
+  const pinned = String(formData.get("pinned") ?? "") === "true";
+  if (!id) return { error: "Missing message." };
+
+  try {
+    const { supabase } = await requireRole(["admin", "manager"]);
+    const { error } = await supabase.rpc("set_message_pinned", {
+      p_id: id,
+      p_pinned: pinned,
+    });
+    if (error) return { error: error.message };
+  } catch (e) {
+    return { error: actionError(e, "Could not pin the message.") };
+  }
+  if (roomId) revalidatePath(`/rooms/${roomId}`);
+  return { success: pinned ? "Message pinned." : "Message unpinned." };
+}
+
 export async function markRoomRead(roomId: string) {
   const { supabase } = await requireProfile();
   await supabase.rpc("mark_room_read", { p_room_id: roomId });

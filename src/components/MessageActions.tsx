@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CornerUpLeft, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import {
+  CornerUpLeft,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+  Trash2,
+} from "lucide-react";
 
 /**
  * The hover/tap "⋯" affordance on a message bubble. On desktop it fades
@@ -13,18 +20,25 @@ export function MessageActions({
   canReply,
   canEdit,
   canDelete,
+  canPin,
+  pinned,
   onReply,
   onEdit,
   onDelete,
+  onTogglePin,
 }: {
   /** Which side of the bubble the button sits on. */
   align: "left" | "right";
   canReply: boolean;
   canEdit: boolean;
   canDelete: boolean;
+  /** Admins and managers only. */
+  canPin: boolean;
+  pinned: boolean;
   onReply: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onTogglePin: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -52,7 +66,7 @@ export function MessageActions({
     };
   }, [open]);
 
-  if (!canReply && !canEdit && !canDelete) return null;
+  if (!canReply && !canEdit && !canDelete && !canPin) return null;
 
   const close = () => {
     setOpen(false);
@@ -105,6 +119,29 @@ export function MessageActions({
             >
               <Pencil className="size-[16px] text-muted" />
               Edit
+            </button>
+          )}
+          {canPin && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                close();
+                onTogglePin();
+              }}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[14px] text-ink hover:bg-mist"
+            >
+              {pinned ? (
+                <>
+                  <PinOff className="size-[16px] text-muted" />
+                  Unpin
+                </>
+              ) : (
+                <>
+                  <Pin className="size-[16px] text-muted" />
+                  Pin
+                </>
+              )}
             </button>
           )}
           {canDelete &&

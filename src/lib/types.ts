@@ -82,6 +82,9 @@ export type Message = {
   edited_at: string | null;
   /** Set when the message was deleted (soft tombstone). */
   deleted_at: string | null;
+  /** Set while the message is pinned (admins/managers only). */
+  pinned_at: string | null;
+  pinned_by: string | null;
 };
 
 export type AuditLog = {

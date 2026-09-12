@@ -16,6 +16,7 @@ import {
   List,
   ListOrdered,
   Paperclip,
+  Pin,
   SendHorizontal,
   Underline,
   X,
@@ -31,7 +32,12 @@ import {
   subscribeToRoomMessages,
   type TypingEvent,
 } from "@/lib/supabase/realtime";
-import { deleteMessage, editMessage, markRoomRead } from "@/app/actions/rooms";
+import {
+  deleteMessage,
+  editMessage,
+  markRoomRead,
+  setMessagePinned,
+} from "@/app/actions/rooms";
 import { CallButton } from "@/components/call/CallButton";
 import { Avatar } from "@/components/Avatar";
 import { MentionPopup } from "@/components/MentionPopup";
@@ -537,10 +543,23 @@ export function ChatRoom({
     if (distFromBottom < 140) setUnseenBelow(0);
   }, []);
 
-  /** Scroll the stream to a specific message (used by reply quotes). */
+  /** Scroll the stream to a message (reply quotes and the pinned banner).
+   *  Flashes it so it's obvious which one you landed on. */
   const jumpToMessage = useCallback((id: string) => {
-    const el = streamRef.current?.querySelector(`[data-mid="${id}"]`);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const el = streamRef.current?.querySelector<HTMLElement>(
+      `[data-mid="${id}"]`,
+    );
+    if (!el) {
+      // Outside the loaded window — say so instead of doing nothing.
+      setError("That message is further back. Load earlier messages to see it.");
+      return;
+    }
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("ring-2", "ring-amber-400", "rounded-2xl");
+    setTimeout(
+      () => el.classList.remove("ring-2", "ring-amber-400", "rounded-2xl"),
+      1600,
+    );
   }, []);
 
   const sign = useCallback<SignFn>(
@@ -895,6 +914,42 @@ export function ChatRoom({
     if (replyTo?.id === msg.id) setReplyTo(null);
   }
 
+  // Pinned messages among those loaded, newest pin first. Rides the same
+  // realtime UPDATE stream as edits, so a pin appears for everyone at once.
+  const pinnedMessages = useMemo(
+    () =>
+      messages
+        .filter((m) => m.pinned_at && !m.deleted_at)
+        .sort((a, b) => (b.pinned_at ?? "").localeCompare(a.pinned_at ?? "")),
+    [messages],
+  );
+
+  /** Pinning is an admin/manager privilege; the RPC enforces it too. */
+  const canPinMessages =
+    currentUserRole === "admin" || currentUserRole === "manager";
+
+  async function togglePin(msg: Message) {
+    if (actionBusy) return;
+    setActionBusy(true);
+    setError(null);
+    const fd = new FormData();
+    fd.set("message_id", msg.id);
+    fd.set("room_id", roomId);
+    fd.set("pinned", msg.pinned_at ? "false" : "true");
+    const res = await setMessagePinned({}, fd);
+    setActionBusy(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    // Optimistic; the realtime UPDATE confirms the same row shortly after.
+    upsertMessage({
+      ...msg,
+      pinned_at: msg.pinned_at ? null : new Date().toISOString(),
+      pinned_by: msg.pinned_at ? null : currentUserId,
+    });
+  }
+
   const canDeleteMessage = useCallback(
     (msg: Message) =>
       !msg.deleted_at &&
@@ -994,6 +1049,49 @@ export function ChatRoom({
         </button>
       </div>
 
+      {/* ── Pinned messages ────────────────────────────────────── */}
+      {pinnedMessages.length > 0 && (
+        <div className="shrink-0 border-b border-amber-200/70 bg-amber-50/80">
+          <div className="flex items-start gap-2 px-3 py-2">
+            <Pin className="mt-0.5 size-[15px] shrink-0 text-amber-700" />
+            <ul className="min-w-0 flex-1 space-y-1">
+              {pinnedMessages.slice(0, 3).map((m) => (
+                <li key={m.id} className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => jumpToMessage(m.id)}
+                    className="min-w-0 flex-1 truncate text-left text-[13px] text-amber-950 hover:underline"
+                    title="Jump to this message"
+                  >
+                    <span className="font-medium">
+                      {m.sender_id
+                        ? (memberMap.get(m.sender_id) ?? "Member")
+                        : "System"}
+                      :
+                    </span>{" "}
+                    {messageSnippet(m)}
+                  </button>
+                  {canPinMessages && !readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => void togglePin(m)}
+                      className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
+                    >
+                      Unpin
+                    </button>
+                  )}
+                </li>
+              ))}
+              {pinnedMessages.length > 3 && (
+                <li className="text-[11px] text-amber-800">
+                  +{pinnedMessages.length - 3} more pinned
+                </li>
+              )}
+            </ul>
+          </div>
+        </div>
+      )}
+
       {/* ── Message stream ─────────────────────────────────────── */}
       <div className="relative min-h-0 flex-1">
         <div
@@ -1085,9 +1183,12 @@ export function ChatRoom({
                               canReply={!readOnly}
                               canEdit={!readOnly && msg.kind === "text"}
                               canDelete={canDeleteMessage(msg)}
+                              canPin={canPinMessages && !readOnly && !msg.deleted_at}
+                              pinned={Boolean(msg.pinned_at)}
                               onReply={() => setReplyTo(msg)}
                               onEdit={() => setEditing(msg.id)}
                               onDelete={() => void removeMessage(msg)}
+                              onTogglePin={() => void togglePin(msg)}
                             />
                           )}
                         </div>
@@ -1172,9 +1273,12 @@ export function ChatRoom({
                               canReply={!readOnly}
                               canEdit={false}
                               canDelete={canDeleteMessage(msg)}
+                              canPin={canPinMessages && !readOnly && !msg.deleted_at}
+                              pinned={Boolean(msg.pinned_at)}
                               onReply={() => setReplyTo(msg)}
                               onEdit={() => {}}
                               onDelete={() => void removeMessage(msg)}
+                              onTogglePin={() => void togglePin(msg)}
                             />
                           )}
                         </div>
@@ -1683,6 +1787,20 @@ function Bubble({
     </span>
   ) : null;
 
+  // Marks a pinned message in the stream itself, so it's identifiable
+  // without cross-referencing the banner.
+  const pinMark = msg.pinned_at ? (
+    <span
+      className={`ml-1.5 inline-flex items-center gap-0.5 align-baseline text-[10.5px] font-medium ${
+        mine ? "text-white/80" : "text-amber-700"
+      }`}
+      title="Pinned"
+    >
+      <Pin className="size-[11px]" />
+      Pinned
+    </span>
+  ) : null;
+
   const shape = mine
     ? `rounded-2xl ${tail ? "rounded-br-md" : ""}`
     : `rounded-2xl ${tail ? "rounded-bl-md" : ""}`;
@@ -1703,9 +1821,15 @@ function Bubble({
       <p className="mt-1 whitespace-pre-wrap break-words px-1 text-[14px] text-ink">
         {renderBody(caption, msg, memberMap, false)}
         {edited}
+        {pinMark}
       </p>
     ) : (
-      edited && <div className="mt-0.5 px-1">{edited}</div>
+      (edited || pinMark) && (
+        <div className="mt-0.5 px-1">
+          {edited}
+          {pinMark}
+        </div>
+      )
     );
     return (
       <div className={accent}>
@@ -1759,6 +1883,7 @@ function Bubble({
         <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
           {renderBody(msg.body, msg, memberMap, mine)}
           {edited}
+          {pinMark}
         </p>
       </div>
     </div>
