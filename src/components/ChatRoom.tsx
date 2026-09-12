@@ -853,7 +853,12 @@ export function ChatRoom({
 
         {roomType === "dm" ? (
           <span className="relative ml-1 shrink-0 sm:ml-0">
-            <Avatar name={roomName} size="sm" />
+            <Avatar
+              name={roomName}
+              size="sm"
+              userId={dmOtherUserId}
+              src={members.find((m) => m.id === dmOtherUserId)?.avatar_url}
+            />
             <PresenceDot
               online={dmOtherOnline}
               className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
@@ -899,7 +904,11 @@ export function ChatRoom({
           // Deactivated accounts can't answer — never offer them.
           members={members
             .filter((m) => m.is_active !== false)
-            .map((m) => ({ id: m.id, full_name: publicDisplayName(m) }))}
+            .map((m) => ({
+              id: m.id,
+              full_name: publicDisplayName(m),
+              avatar_url: m.avatar_url ?? null,
+            }))}
         />
         )}
         <button
@@ -1063,6 +1072,12 @@ export function ChatRoom({
                       <Avatar
                         name={name}
                         size="sm"
+                        userId={g.senderId}
+                        src={
+                          g.senderId
+                            ? members.find((m) => m.id === g.senderId)?.avatar_url
+                            : undefined
+                        }
                         className="!h-8 !w-8 !text-[11px]"
                       />
                     </div>
@@ -1605,14 +1620,22 @@ function MemberRow({
   member,
   self,
 }: {
-  member: Pick<RoomMemberView, "id" | "full_name" | "public_name" | "role">;
+  member: Pick<
+    RoomMemberView,
+    "id" | "full_name" | "public_name" | "avatar_url" | "role"
+  >;
   self?: boolean;
 }) {
   const online = useIsOnline(member.id);
   return (
     <>
       <span className="relative shrink-0">
-        <Avatar name={publicDisplayName(member)} size="sm" />
+        <Avatar
+          name={publicDisplayName(member)}
+          size="sm"
+          userId={member.id}
+          src={member.avatar_url}
+        />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"

@@ -60,6 +60,8 @@ function ChatRow({ room }: { room: MyRoom }) {
         <span className="relative shrink-0">
           <Avatar
             name={room.display_name}
+            userId={room.dm_other_user_id}
+            src={room.avatar_url}
             className="ring-1 ring-black/5"
           />
           <PresenceDot

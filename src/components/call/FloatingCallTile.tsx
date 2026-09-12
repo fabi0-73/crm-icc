@@ -112,7 +112,12 @@ export function FloatingCallTile() {
               {phase !== "in-call" && (
                 <span className="absolute -inset-1.5 animate-ping rounded-full bg-brand-400/30 motion-reduce:hidden" />
               )}
-              <Avatar name={call.peerName} size="md" className="relative" />
+              <Avatar
+                name={call.peerName}
+                size="md"
+                userId={call.peerId}
+                className="relative"
+              />
             </div>
           </div>
         )}

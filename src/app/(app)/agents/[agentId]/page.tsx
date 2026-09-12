@@ -7,6 +7,7 @@ import { archiveAgent } from "@/app/actions/agents";
 import { buttonClasses } from "@/components/ui/Button";
 import { BackIcon } from "@/components/icons";
 import { AssignManagerForm } from "@/components/AssignManagerForm";
+import { Avatar } from "@/components/Avatar";
 
 export default async function AgentDetailPage({
   params,
@@ -41,7 +42,7 @@ export default async function AgentDetailPage({
   const { data: assistants } = assistantIds.length
     ? await supabase
         .from("profiles")
-        .select("id, full_name")
+        .select("id, full_name, avatar_url")
         .in("id", assistantIds)
     : { data: [] as { id: string; full_name: string }[] };
 
@@ -155,7 +156,15 @@ export default async function AgentDetailPage({
                   key={a.id}
                   className="flex items-center justify-between text-sm"
                 >
-                  <span>{a.full_name}</span>
+                  <span className="flex items-center gap-2">
+                    <Avatar
+                      name={a.full_name}
+                      size="sm"
+                      userId={a.id}
+                      src={"avatar_url" in a ? (a.avatar_url as string | null) : undefined}
+                    />
+                    {a.full_name}
+                  </span>
                 </li>
               ))}
             </ul>

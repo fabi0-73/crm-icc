@@ -9,6 +9,7 @@ import { ActionForm } from "@/components/ActionForm";
 import { deactivateUser, reactivateUser } from "@/app/actions/admin";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Table, TBody, Td, Th, THead } from "@/components/ui/Table";
+import { Avatar } from "@/components/Avatar";
 
 /** id → username, from the auth emails. Empty map if the service key is absent. */
 async function loadUsernames(): Promise<Map<string, string>> {
@@ -33,7 +34,7 @@ export default async function UsersPage() {
   const [{ data: users, error }, usernames] = await Promise.all([
     supabase
       .from("profiles")
-      .select("id, full_name, role, is_active, created_at")
+      .select("id, full_name, avatar_url, role, is_active, created_at")
       .order("full_name"),
     loadUsernames(),
   ]);
@@ -61,7 +62,18 @@ export default async function UsersPage() {
         <TBody>
           {(users ?? []).map((u) => (
             <tr key={u.id}>
-              <Td className="font-medium text-ink">{u.full_name}</Td>
+              <Td className="font-medium text-ink">
+                <span className="flex items-center gap-2.5">
+                  <Avatar
+                    name={u.full_name}
+                    size="sm"
+                    userId={u.id}
+                    src={(u as { avatar_url?: string | null }).avatar_url}
+                    className="!h-8 !w-8 !text-[10px]"
+                  />
+                  {u.full_name}
+                </span>
+              </Td>
               <Td className="font-mono text-xs text-muted">
                 {usernames.get(u.id) ?? "—"}
               </Td>

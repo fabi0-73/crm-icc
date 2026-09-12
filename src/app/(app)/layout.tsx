@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { SidebarShell } from "@/components/sidebar/SidebarShell";
 import { CallProvider } from "@/components/call/CallProvider";
 import { PresenceProvider } from "@/components/presence/PresenceProvider";
+import { ProfileAvatarsProvider } from "@/components/presence/ProfileAvatarsProvider";
 import { KeyboardInsets } from "@/components/mobile/KeyboardInsets";
 import { MuteProvider } from "@/components/mute/MuteProvider";
 import { NotificationProvider } from "@/components/notifications/NotificationProvider";
@@ -33,6 +34,7 @@ export default async function AppLayout({
   const { supabase, profile } = ctx;
 
   const displayName = publicDisplayName(profile);
+  const avatarSeed = { [profile.id]: profile.avatar_url ?? null };
 
   // CallProvider + PresenceProvider wrap BOTH branches so agents
   // ring and register presence too; agents keep the bare layout.
@@ -40,12 +42,14 @@ export default async function AppLayout({
     return (
       <MuteProvider userId={profile.id}>
         <NotificationProvider userId={profile.id}>
+        <ProfileAvatarsProvider initial={avatarSeed}>
         <CallProvider userId={profile.id} userName={displayName}>
           <PresenceProvider userId={profile.id}>
             <KeyboardInsets />
             <div className="h-app">{children}</div>
           </PresenceProvider>
         </CallProvider>
+        </ProfileAvatarsProvider>
         </NotificationProvider>
       </MuteProvider>
     );
@@ -55,6 +59,7 @@ export default async function AppLayout({
   return (
     <MuteProvider userId={profile.id}>
       <NotificationProvider userId={profile.id}>
+      <ProfileAvatarsProvider initial={avatarSeed}>
       <CallProvider userId={profile.id} userName={displayName}>
         <PresenceProvider userId={profile.id}>
           <KeyboardInsets />
@@ -63,6 +68,7 @@ export default async function AppLayout({
           </SidebarShell>
         </PresenceProvider>
       </CallProvider>
+      </ProfileAvatarsProvider>
       </NotificationProvider>
     </MuteProvider>
   );

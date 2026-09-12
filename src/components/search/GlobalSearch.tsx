@@ -182,7 +182,14 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
 
 function ResultIcon({ result }: { result: SearchResult }) {
   if (result.kind === "person") {
-    return <Avatar name={result.title} size="sm" className="!h-7 !w-7 !text-[10px]" />;
+    return (
+      <Avatar
+        name={result.title}
+        size="sm"
+        userId={result.user_id}
+        className="!h-7 !w-7 !text-[10px]"
+      />
+    );
   }
   if (result.kind === "conversation") {
     return (

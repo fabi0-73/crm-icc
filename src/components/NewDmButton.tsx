@@ -16,6 +16,7 @@ import type { Profile } from "@/lib/types";
 
 type StaffRow = Pick<Profile, "id" | "full_name" | "role"> & {
   public_name?: string | null;
+  avatar_url?: string | null;
 };
 
 function PersonRow({
@@ -39,7 +40,12 @@ function PersonRow({
       className="flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left hover:bg-mist disabled:opacity-50"
     >
       <span className="relative shrink-0">
-        <Avatar name={shown} size="sm" />
+        <Avatar
+          name={shown}
+          size="sm"
+          userId={person.id}
+          src={person.avatar_url}
+        />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
@@ -84,7 +90,7 @@ export function NewDmButton({
     void supabase.auth.getUser().then(async ({ data: { user } }) => {
       const { data } = await supabase
         .from("profiles")
-        .select("id, full_name, public_name, role")
+        .select("id, full_name, public_name, avatar_url, role")
         .eq("is_active", true)
         .in("role", ["admin", "manager", "assistant"])
         .neq("id", user?.id ?? "")
@@ -108,7 +114,7 @@ export function NewDmButton({
         if (userIds.length) {
           const { data: agentProfiles } = await supabase
             .from("profiles")
-            .select("id, full_name, public_name, role")
+            .select("id, full_name, public_name, avatar_url, role")
             .in("id", userIds);
           agents = (agentProfiles ?? []) as StaffRow[];
         }

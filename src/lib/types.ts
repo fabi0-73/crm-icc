@@ -5,6 +5,8 @@ export type Profile = {
   full_name: string;
   /** Chat-facing name; null means fall back to full_name. */
   public_name: string | null;
+  /** Public storage URL; null means the initials avatar. */
+  avatar_url: string | null;
   role: Role;
   is_active: boolean;
   created_at: string;
@@ -57,6 +59,7 @@ export type RoomMemberView = {
   id: string;
   full_name: string;
   public_name?: string | null;
+  avatar_url?: string | null;
   /** The person's app-wide role (admin/manager/assistant/agent). */
   role: Role;
   is_active: boolean | null;

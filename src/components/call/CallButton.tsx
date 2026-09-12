@@ -6,7 +6,7 @@ import { Modal } from "@/components/Modal";
 import { MAX_CALL_PARTICIPANTS, useCall } from "@/components/call/CallProvider";
 import { PhoneIcon, VideoIcon } from "@/components/icons";
 
-type CallMember = { id: string; full_name: string };
+type CallMember = { id: string; full_name: string; avatar_url?: string | null };
 
 /** Chat-header call button + member picker. Dialing hands off to the
  *  app-level CallProvider, so the call outlives this room's UI. */
@@ -165,7 +165,12 @@ export function CallButton({
                     aria-label={`Include ${m.full_name}`}
                   />
                 )}
-                <Avatar name={m.full_name} size="sm" />
+                <Avatar
+                  name={m.full_name}
+                  size="sm"
+                  userId={m.id}
+                  src={m.avatar_url}
+                />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
                   {m.full_name}
                 </span>

@@ -18,6 +18,7 @@ export function IncomingCallOverlay() {
           <Avatar
             name={incoming.peerName}
             size="lg"
+            userId={incoming.peerId}
             className="!h-24 !w-24 !text-2xl relative"
           />
         </div>

@@ -202,7 +202,7 @@ export async function fetchRoomMembers(
 ): Promise<RoomMemberView[]> {
   const { data, error } = await supabase
     .from("room_members")
-    .select("role, last_read_at, last_delivered_at, profiles!inner(id, full_name, public_name, role, is_active)")
+    .select("role, last_read_at, last_delivered_at, profiles!inner(id, full_name, public_name, avatar_url, role, is_active)")
     .eq("room_id", roomId);
   if (error) throw error;
 
@@ -214,6 +214,7 @@ export async function fetchRoomMembers(
       id: string;
       full_name: string;
       public_name: string | null;
+      avatar_url: string | null;
       role: RoomMemberView["role"];
       is_active: boolean | null;
     } | null;
@@ -227,6 +228,7 @@ export async function fetchRoomMembers(
       id: r.profiles.id,
       full_name: r.profiles.full_name,
       public_name: r.profiles.public_name,
+      avatar_url: r.profiles.avatar_url,
       role: r.profiles.role,
       is_active: r.profiles.is_active,
       room_role: r.role,

@@ -9,7 +9,7 @@ export default async function AgentsPage() {
 
   const { data: agents, error } = await supabase
     .from("agents")
-    .select("id, display_name, status, created_at")
+    .select("id, user_id, display_name, status, created_at")
     .order("display_name");
 
   if (error) {
@@ -29,7 +29,10 @@ export default async function AgentsPage() {
               href={`/agents/${a.id}`}
               className="flex items-center gap-3 px-3 py-3 hover:bg-mist"
             >
-              <Avatar name={a.display_name} />
+              <Avatar
+                name={a.display_name}
+                userId={(a as { user_id?: string }).user_id}
+              />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium text-ink">
                   {a.display_name}

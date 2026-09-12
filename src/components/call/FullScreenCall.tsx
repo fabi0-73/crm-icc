@@ -167,7 +167,12 @@ export function FullScreenCall() {
               {phase !== "in-call" && (
                 <span className="absolute -inset-2 animate-ping rounded-full bg-brand-400/30 motion-reduce:hidden" />
               )}
-              <Avatar name={call.peerName} size="lg" className="!h-24 !w-24 !text-2xl relative" />
+              <Avatar
+                name={call.peerName}
+                size="lg"
+                userId={call.peerId}
+                className="!h-24 !w-24 !text-2xl relative"
+              />
             </div>
             <p className="text-white/70 tabular-nums">{subtitle}</p>
           </div>
@@ -250,7 +255,7 @@ function ParticipantTile({ participant }: { participant: Participant }) {
       />
       {!participant.hasVideo && (
         <div className="flex h-full items-center justify-center">
-          <Avatar name={participant.name} size="lg" />
+          <Avatar name={participant.name} size="lg" userId={participant.id} />
         </div>
       )}
       <span className="absolute bottom-1 left-1 max-w-[85%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white">

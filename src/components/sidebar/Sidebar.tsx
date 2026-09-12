@@ -50,7 +50,13 @@ function RoomRow({ room, active }: { room: MyRoom; active: boolean }) {
     >
       {room.type === "dm" ? (
         <span className="relative shrink-0">
-          <Avatar name={room.display_name} size="sm" className="!h-5 !w-5 !text-[9px]" />
+          <Avatar
+            name={room.display_name}
+            size="sm"
+            userId={room.dm_other_user_id}
+            src={room.avatar_url}
+            className="!h-5 !w-5 !text-[9px]"
+          />
           <PresenceDot
             online={online}
             className="absolute -bottom-0.5 -right-0.5 ring-2 ring-ink"
@@ -189,7 +195,13 @@ export function Sidebar({ profile }: { profile: Profile }) {
           title="Account & password"
         >
           <span className="relative shrink-0">
-            <Avatar name={publicDisplayName(profile)} size="sm" className="!h-7 !w-7 !text-[10px]" />
+            <Avatar
+              name={publicDisplayName(profile)}
+              size="sm"
+              userId={profile.id}
+              src={profile.avatar_url}
+              className="!h-7 !w-7 !text-[10px]"
+            />
             <PresenceDot
               online={selfOnline}
               className="absolute -bottom-0.5 -right-0.5 ring-2 ring-ink"

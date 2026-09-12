@@ -6,6 +6,7 @@ import { emailToUsername } from "@/lib/username";
 import { ChangePasswordForm } from "@/components/PasswordForms";
 import { Avatar } from "@/components/Avatar";
 import { DarkModeToggle } from "@/components/account/DarkModeToggle";
+import { ProfilePictureForm } from "@/components/account/ProfilePictureForm";
 import { PublicNameForm } from "@/components/account/PublicNameForm";
 import { publicDisplayName } from "@/lib/display-name";
 
@@ -31,16 +32,36 @@ export default async function AccountPage() {
       </div>
 
       <div className="mx-auto w-full max-w-md space-y-4 p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-        <div className="flex items-center gap-3 rounded-2xl border border-line bg-paper p-4 shadow-xs">
-          <Avatar name={shown} />
-          <div className="min-w-0">
-            <p className="truncate text-[15px] font-semibold text-ink">
-              {shown}
+        <div className="rounded-2xl border border-line bg-paper p-4 shadow-xs">
+          <div className="flex items-center gap-3">
+            <Avatar
+              name={shown}
+              userId={profile.id}
+              src={profile.avatar_url}
+            />
+            <div className="min-w-0">
+              <p className="truncate text-[15px] font-semibold text-ink">
+                {shown}
+              </p>
+              <p className="truncate font-mono text-[13px] text-muted">
+                {username}
+              </p>
+              <p className="text-[12px] capitalize text-muted">{profile.role}</p>
+            </div>
+          </div>
+          <div className="mt-4 border-t border-line pt-4">
+            <h2 className="mb-1 text-[15px] font-semibold text-ink">
+              Profile photo
+            </h2>
+            <p className="mb-3 text-[13px] text-muted">
+              Shown in chats, member lists and calls. Remove it to go back
+              to your initials.
             </p>
-            <p className="truncate font-mono text-[13px] text-muted">
-              {username}
-            </p>
-            <p className="text-[12px] capitalize text-muted">{profile.role}</p>
+            <ProfilePictureForm
+              userId={profile.id}
+              name={shown}
+              initialUrl={profile.avatar_url}
+            />
           </div>
         </div>
 

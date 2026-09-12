@@ -310,7 +310,12 @@ function MemberItem({
   return (
     <li className="flex items-center gap-3 rounded-xl px-2.5 py-2.5 hover:bg-mist">
       <span className="relative shrink-0">
-        <Avatar name={shownName} size="sm" />
+        <Avatar
+          name={shownName}
+          size="sm"
+          userId={member.id}
+          src={member.avatar_url}
+        />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"

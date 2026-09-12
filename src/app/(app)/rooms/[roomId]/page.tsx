@@ -75,7 +75,7 @@ export default async function RoomPage({
   const memberIds = [...roleById.keys()];
   const { data: memberProfiles } = await supabase
     .from("profiles")
-    .select("id, full_name, public_name, role, is_active")
+    .select("id, full_name, public_name, avatar_url, role, is_active")
     .in(
       "id",
       memberIds.length ? memberIds : ["00000000-0000-0000-0000-000000000000"],
@@ -91,6 +91,7 @@ export default async function RoomPage({
     id: p.id,
     full_name: p.full_name,
     public_name: (p as { public_name?: string | null }).public_name ?? null,
+    avatar_url: (p as { avatar_url?: string | null }).avatar_url ?? null,
     role: p.role,
     is_active: p.is_active,
     room_role: roleById.get(p.id) ?? "member",
