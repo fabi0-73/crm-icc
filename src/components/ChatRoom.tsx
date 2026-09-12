@@ -5,14 +5,19 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
+  Bold,
   ChevronDown,
   ChevronLeft,
   CircleUserRound,
   FileText,
   Hash,
   Info,
+  Italic,
+  List,
+  ListOrdered,
   Paperclip,
   SendHorizontal,
+  Underline,
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -53,7 +58,7 @@ import {
   messageAttachments,
   type MessageAttachment,
 } from "@/lib/media/attachments";
-import { extractLinks } from "@/lib/media/links";
+import { renderRichText } from "@/lib/chat/rich-text";
 import { buildDaySections } from "@/lib/chat/grouping";
 import type {
   Message,
@@ -646,6 +651,44 @@ export function ChatRoom({
     return Array.from(new Set(ids));
   }
 
+  /**
+   * Apply formatting to the composer selection. Wraps the selected text in a
+   * delimiter, or prefixes each selected line for lists — so the toolbar is
+   * just a shortcut for syntax people can also type by hand.
+   */
+  function applyFormat(kind: "bold" | "italic" | "underline" | "bullet" | "number") {
+    const ta = taRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart ?? 0;
+    const end = ta.selectionEnd ?? 0;
+    const selected = body.slice(start, end);
+
+    let replacement: string;
+    if (kind === "bullet" || kind === "number") {
+      const lines = (selected || "").split(/\r?\n/);
+      replacement = lines
+        .map((line, i) => (kind === "bullet" ? `- ${line}` : `${i + 1}. ${line}`))
+        .join("\n");
+    } else {
+      const mark = kind === "bold" ? "**" : kind === "underline" ? "__" : "*";
+      replacement = `${mark}${selected}${mark}`;
+    }
+
+    const next = body.slice(0, start) + replacement + body.slice(end);
+    if (next.length > MAX_MESSAGE_CHARS) return;
+    setBody(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      // Put the caret inside the marks when nothing was selected, so typing
+      // continues in the new style.
+      const caret = selected
+        ? start + replacement.length
+        : start + (kind === "bullet" ? 2 : kind === "number" ? 3 : replacement.length / 2);
+      ta.setSelectionRange(caret, caret);
+      autoresize();
+    });
+  }
+
   // ── #8 attachment staging (multiple) ────────────────────────
   function stageFiles(files: File[]) {
     if (files.length === 0) return;
@@ -1202,6 +1245,29 @@ export function ChatRoom({
           </div>
         )}
         <StagedAttachments items={staged} onRemove={removeStaged} />
+        <div className="flex items-center gap-0.5 px-1 pb-1">
+          {(
+            [
+              { kind: "bold", label: "Bold", Icon: Bold },
+              { kind: "italic", label: "Italic", Icon: Italic },
+              { kind: "underline", label: "Underline", Icon: Underline },
+              { kind: "bullet", label: "Bulleted list", Icon: List },
+              { kind: "number", label: "Numbered list", Icon: ListOrdered },
+            ] as const
+          ).map(({ kind, label, Icon }) => (
+            <button
+              key={kind}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => applyFormat(kind)}
+              aria-label={label}
+              title={label}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-mist hover:text-ink"
+            >
+              <Icon className="size-4" />
+            </button>
+          ))}
+        </div>
         <form
           onSubmit={submit}
           className="mx-auto flex w-full max-w-3xl items-end gap-1.5"
@@ -1411,9 +1477,6 @@ function useSignedUrl(path: string | null, sign: SignFn) {
   return { url, failed, setFailed };
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 /** True when `userId` is listed in the message's metadata.mentions. */
 function mentionsUser(msg: Message, userId: string): boolean {
@@ -1468,75 +1531,25 @@ function messageSnippet(msg: Message): string {
  * names match first so "@Anna Maria" wins over "@Anna".
  */
 /**
- * Turn bare URLs in a run of message text into real links. Opened in a new
- * tab with noopener/noreferrer so a linked page can never reach back into the
- * app through window.opener. Plain text is returned untouched, so message
- * formatting and whitespace are preserved exactly.
+ * Message body → React nodes: light formatting (**bold**, *italic*,
+ * __underline__, bullet and numbered lists), @mention highlighting and
+ * clickable links. The parsing lives in lib/chat/rich-text so this component
+ * stays about the chat UI; nothing renders raw HTML.
  */
-function linkifyText(text: string, keyPrefix: string, mine: boolean): React.ReactNode {
-  const urls = extractLinks(text, 20);
-  if (urls.length === 0) return text;
-  // Split on the exact URLs we extracted, longest first so a URL that is a
-  // prefix of another can't truncate it.
-  const ordered = Array.from(new Set(urls)).sort((a, b) => b.length - a.length);
-  const re = new RegExp(`(${ordered.map(escapeRegExp).join("|")})`, "g");
-  return text.split(re).map((part, i) =>
-    ordered.includes(part) ? (
-      <a
-        key={`${keyPrefix}l${i}`}
-        href={part}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(e) => e.stopPropagation()}
-        className={
-          mine
-            ? "underline decoration-white/60 underline-offset-2 hover:decoration-white"
-            : "text-brand-700 underline underline-offset-2 hover:text-brand-800"
-        }
-      >
-        {part}
-      </a>
-    ) : (
-      <span key={`${keyPrefix}t${i}`}>{part}</span>
-    ),
-  );
-}
-
-function renderMentions(
+function renderBody(
   body: string,
   msg: Message,
   memberMap: Map<string, string> | undefined,
   mine: boolean,
 ): React.ReactNode {
   const ids = (msg.metadata as { mentions?: unknown } | null)?.mentions;
-  const names =
+  const mentionNames =
     memberMap && Array.isArray(ids)
       ? ids
           .map((id) => (typeof id === "string" ? memberMap.get(id) : undefined))
           .filter((n): n is string => Boolean(n))
       : [];
-  // No mentions to highlight — still linkify the text.
-  if (names.length === 0) return linkifyText(body, "b", mine);
-
-  const unique = Array.from(new Set(names)).sort((a, b) => b.length - a.length);
-  const re = new RegExp(`(${unique.map((n) => `@${escapeRegExp(n)}`).join("|")})`, "g");
-  return body.split(re).map((part, i) =>
-    i % 2 === 1 ? (
-      <span
-        key={i}
-        className={
-          mine
-            ? "font-semibold underline decoration-white/40 underline-offset-2"
-            : "font-semibold text-brand-700"
-        }
-      >
-        {part}
-      </span>
-    ) : (
-      // Mentions and links can coexist in one message.
-      <span key={i}>{linkifyText(part, `m${i}`, mine)}</span>
-    ),
-  );
+  return renderRichText(body, { mentionNames, mine });
 }
 
 /** Inline editor swapped in for a bubble while a message is being edited. */
@@ -1688,7 +1701,7 @@ function Bubble({
   if (attachments.length > 0) {
     const captionBlock = caption ? (
       <p className="mt-1 whitespace-pre-wrap break-words px-1 text-[14px] text-ink">
-        {renderMentions(caption, msg, memberMap, false)}
+        {renderBody(caption, msg, memberMap, false)}
         {edited}
       </p>
     ) : (
@@ -1744,7 +1757,7 @@ function Bubble({
       {replyQuote}
       <div className={`px-3.5 py-2 ${shape} ${surface}`}>
         <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
-          {renderMentions(msg.body, msg, memberMap, mine)}
+          {renderBody(msg.body, msg, memberMap, mine)}
           {edited}
         </p>
       </div>
