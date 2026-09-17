@@ -22,6 +22,21 @@ export function isImageFile(mime: string | null, name: string) {
   return (mime ?? "").startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
 }
 
+/** Voice notes are stored as file messages with metadata.voice, or any audio attachment. */
+export function isVoiceMessage(msg: Message) {
+  if (msg.kind !== "file") return false;
+  if (msg.metadata && msg.metadata.voice === true) return true;
+  const mime = msg.attachment_mime ?? "";
+  if (mime.startsWith("audio/")) return true;
+  const name = msg.attachment_name ?? msg.body ?? "";
+  return /\.(webm|ogg|opus|m4a|mp3|wav|aac)$/i.test(name);
+}
+
+export function voiceDurationSeconds(msg: Message) {
+  const raw = msg.metadata?.duration;
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
 export function packedAttachments(msg: Message): PackedAttachment[] {
   const extras = Array.isArray(msg.metadata?.attachments)
     ? (msg.metadata.attachments as PackedAttachment[]).filter(

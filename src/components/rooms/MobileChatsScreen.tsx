@@ -40,7 +40,9 @@ function preview(room: MyRoom) {
   if (room.last_message_kind === "system") return room.last_message_body ?? "";
   const body =
     room.last_message_kind === "file"
-      ? `📎 ${room.last_message_body ?? "Attachment"}`
+      ? room.last_message_body === "Voice message"
+        ? "Voice message"
+        : `📎 ${room.last_message_body ?? "Attachment"}`
       : (room.last_message_body ?? "");
   return room.last_message_sender
     ? `${room.last_message_sender.split(" ")[0]}: ${body}`

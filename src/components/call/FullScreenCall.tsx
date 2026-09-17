@@ -34,6 +34,8 @@ export function FullScreenCall() {
     toggleCam,
     toggleNoise,
     toggleScreenShare,
+    muteParticipant,
+    isHost,
     setView,
   } = useCall();
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -115,7 +117,12 @@ export function FullScreenCall() {
             style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
           >
             {participants.map((p) => (
-              <ParticipantTile key={p.id} participant={p} />
+              <ParticipantTile
+                key={p.id}
+                participant={p}
+                isHost={isHost}
+                onHostMute={muteParticipant}
+              />
             ))}
             <div className="relative overflow-hidden rounded-lg bg-ink-soft">
               <video
@@ -130,6 +137,12 @@ export function FullScreenCall() {
               <span className="absolute bottom-1 left-1 rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white">
                 You
               </span>
+              {muted && (
+                <div className="absolute bottom-1 right-1">
+                  <MuteBadge />
+                </div>
+              )}
+              {sharing && <SharingBadge />}
             </div>
           </div>
         ) : showVideo ? (
@@ -160,6 +173,29 @@ export function FullScreenCall() {
                 sharing ? "object-contain bg-ink" : "object-cover -scale-x-100"
               } ${camOff && !sharing ? "opacity-30" : ""}`}
             />
+            {muted && (
+              <div className="absolute bottom-28 right-5">
+                <MuteBadge />
+              </div>
+            )}
+            {participants[0]?.muted && (
+              <div className="absolute left-4 top-4">
+                <MuteBadge />
+              </div>
+            )}
+            {isHost && participants[0] && !participants[0].muted && (
+              <button
+                type="button"
+                onClick={() => muteParticipant(participants[0].id)}
+                className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/80"
+                aria-label={`Mute ${participants[0].name}`}
+                title={`Mute ${participants[0].name}`}
+              >
+                <span className="scale-75">
+                  <MicOffIcon />
+                </span>
+              </button>
+            )}
           </>
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-4">
@@ -173,7 +209,24 @@ export function FullScreenCall() {
                 userId={call.peerId}
                 className="!h-24 !w-24 !text-2xl relative"
               />
+              {participants[0]?.muted && (
+                <div className="absolute -bottom-1 -right-1">
+                  <MuteBadge />
+                </div>
+              )}
             </div>
+            {isHost && participants[0] && !participants[0].muted && (
+              <button
+                type="button"
+                onClick={() => muteParticipant(participants[0].id)}
+                className="mt-2 flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[12px] text-white hover:bg-white/25"
+              >
+                <span className="scale-75">
+                  <MicOffIcon />
+                </span>
+                Mute {participants[0].name.split(" ")[0]}
+              </button>
+            )}
             <p className="text-white/70 tabular-nums">{subtitle}</p>
           </div>
         )}
@@ -228,13 +281,52 @@ export function FullScreenCall() {
   );
 }
 
-function ParticipantTile({ participant }: { participant: Participant }) {
+function videoPreviewStream(stream: MediaStream | null) {
+  if (!stream) return null;
+  const live = stream
+    .getVideoTracks()
+    .filter((t) => t.readyState === "live");
+  const track = live[live.length - 1] ?? stream.getVideoTracks().at(-1);
+  return track ? new MediaStream([track]) : stream;
+}
+
+function MuteBadge() {
+  return (
+    <span
+      className="flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white"
+      title="Muted"
+      aria-label="Muted"
+    >
+      <span className="scale-75">
+        <MicOffIcon />
+      </span>
+    </span>
+  );
+}
+
+function SharingBadge() {
+  return (
+    <span className="absolute left-1 top-1 rounded bg-brand-500/90 px-1.5 py-0.5 text-[10px] font-medium">
+      Sharing
+    </span>
+  );
+}
+
+function ParticipantTile({
+  participant,
+  isHost,
+  onHostMute,
+}: {
+  participant: Participant;
+  isHost: boolean;
+  onHostMute: (peerId: string) => void;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
-    el.srcObject = participant.stream;
+    el.srcObject = videoPreviewStream(participant.stream);
     if (participant.stream) void el.play().catch(() => undefined);
     return () => {
       el.srcObject = null;
@@ -243,25 +335,45 @@ function ParticipantTile({ participant }: { participant: Participant }) {
 
   return (
     <div className="relative overflow-hidden rounded-lg bg-ink-soft">
-      {/* Muted: audio plays through the provider's sinks. */}
+      {/* Always mounted so a screen-share track can decode even while
+          browsers report it muted until the first frame. Avatar sits on
+          top until hasVideo is true. Audio plays through the provider. */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        className={`h-full w-full object-cover ${
-          participant.hasVideo ? "" : "hidden"
+        className={`h-full w-full object-contain bg-ink ${
+          participant.hasVideo ? "opacity-100" : "opacity-0"
         }`}
       />
       {!participant.hasVideo && (
-        <div className="flex h-full items-center justify-center">
+        <div className="absolute inset-0 flex items-center justify-center">
           <Avatar name={participant.name} size="lg" userId={participant.id} />
         </div>
       )}
-      <span className="absolute bottom-1 left-1 max-w-[85%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white">
+      <span className="absolute bottom-1 left-1 max-w-[70%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white">
         {participant.name}
         {!participant.connected && " · connecting…"}
       </span>
+      {participant.muted && (
+        <div className="absolute bottom-1 right-1">
+          <MuteBadge />
+        </div>
+      )}
+      {isHost && !participant.muted && (
+        <button
+          type="button"
+          onClick={() => onHostMute(participant.id)}
+          className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/80"
+          aria-label={`Mute ${participant.name}`}
+          title={`Mute ${participant.name}`}
+        >
+          <span className="scale-75">
+            <MicOffIcon />
+          </span>
+        </button>
+      )}
     </div>
   );
 }

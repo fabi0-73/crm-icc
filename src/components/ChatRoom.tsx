@@ -52,6 +52,7 @@ import {
   setMessagePinned,
 } from "@/app/actions/rooms";
 import { CallButton } from "@/components/call/CallButton";
+import { useCall } from "@/components/call/CallProvider";
 import { Avatar } from "@/components/Avatar";
 import { PresenceDot } from "@/components/PresenceDot";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
@@ -66,10 +67,14 @@ import {
 import { GroupDetails } from "@/components/GroupDetails";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MediaHistory } from "@/components/MediaHistory";
+import { VoiceRecorder } from "@/components/chat/VoiceRecorder";
+import { VoiceMessageBubble } from "@/components/chat/VoiceMessageBubble";
+import { useSignedUrl, type SignFn } from "@/components/chat/signed-url";
 import { buildDaySections } from "@/lib/chat/grouping";
 import {
   formatBytes,
   isImageFile,
+  isVoiceMessage,
   packedAttachments,
 } from "@/lib/chat/media";
 import { MAX_MESSAGE_CHARS, RichText, stripFormatting } from "@/lib/chat/rich-text";
@@ -186,8 +191,6 @@ function FormatButton({
   );
 }
 
-type SignFn = (path: string) => Promise<string | null>;
-
 export function ChatRoom({
   roomId,
   roomName,
@@ -226,6 +229,7 @@ export function ChatRoom({
   const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
   const { isUserMuted, toggleUserMute } = useMutes();
+  const { phase: callPhase } = useCall();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [members, setMembers] = useState<RoomMemberView[]>(initialMembers);
   const [myRole, setMyRole] = useState<RoomMemberRole>(myRoomRole);
@@ -233,6 +237,7 @@ export function ChatRoom({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const [typers, setTypers] = useState<Record<string, number>>({});
   const [older, setOlder] = useState({ has: hasOlder, loading: false });
   const [showMembers, setShowMembers] = useState(false);
@@ -742,6 +747,7 @@ export function ChatRoom({
     e.preventDefault();
     const text = body.trim();
     if (sending) return;
+    if (voiceBusy) return;
     if (!text && pendingFiles.length === 0) return;
     if (text.length > MAX_MESSAGE_CHARS) {
       setError(
@@ -854,6 +860,55 @@ export function ChatRoom({
     setBody("");
     setPendingFiles([]);
     requestAnimationFrame(autoresize);
+    if (data) mergeMessage(data as Message);
+    await markRoomRead(roomId).catch(() => {});
+  }
+
+  async function sendVoice(file: File, duration: number) {
+    const blocked = attachmentError(file);
+    if (blocked) {
+      setError(blocked);
+      throw new Error(blocked);
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      const msg = "Each file must be under 25 MB.";
+      setError(msg);
+      throw new Error(msg);
+    }
+    setSending(true);
+    setError(null);
+
+    const path = `${roomId}/${crypto.randomUUID()}/${safeKeyName(file.name)}`;
+    const { error: uploadError } = await supabase.storage
+      .from("attachments")
+      .upload(path, file, { contentType: file.type, upsert: false });
+    if (uploadError) {
+      setSending(false);
+      setError(uploadError.message);
+      throw new Error(uploadError.message);
+    }
+
+    const { data, error: insertError } = await supabase
+      .from("messages")
+      .insert({
+        room_id: roomId,
+        sender_id: currentUserId,
+        kind: "file",
+        body: "Voice message",
+        attachment_path: path,
+        attachment_name: file.name,
+        attachment_size: file.size,
+        attachment_mime: file.type || "audio/webm",
+        metadata: { voice: true, duration },
+      })
+      .select("*")
+      .single();
+
+    setSending(false);
+    if (insertError) {
+      setError(insertError.message);
+      throw new Error(insertError.message);
+    }
     if (data) mergeMessage(data as Message);
     await markRoomRead(roomId).catch(() => {});
   }
@@ -1256,13 +1311,14 @@ export function ChatRoom({
           />
           <button
             type="button"
-            disabled={sending}
+            disabled={sending || voiceBusy}
             onClick={() => fileRef.current?.click()}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-mist active:bg-mist disabled:opacity-40"
             aria-label="Attach file"
           >
             <Paperclip className="size-[21px]" />
           </button>
+          {voiceBusy ? null : (
           <div className="flex min-h-10 flex-1 flex-col rounded-3xl bg-secondary px-4 py-2">
             <div className="flex items-center gap-0.5 pb-1">
               <FormatButton label="Bold" onClick={() => wrapSelection("**")}>
@@ -1324,6 +1380,8 @@ export function ChatRoom({
               }}
             />
           </div>
+          )}
+          {!voiceBusy && (body.trim() || pendingFiles.length > 0) ? (
           <button
             type="submit"
             disabled={
@@ -1336,6 +1394,15 @@ export function ChatRoom({
           >
             <SendHorizontal className="size-5" />
           </button>
+          ) : (
+            <VoiceRecorder
+              disabled={sending}
+              callActive={callPhase !== "idle"}
+              onBusyChange={setVoiceBusy}
+              onSend={sendVoice}
+              onError={setError}
+            />
+          )}
         </form>
       </div>
       )}
@@ -1414,36 +1481,6 @@ export function ChatRoom({
 
 /* ── Bubbles & attachments ────────────────────────────────────── */
 
-/**
- * Signs the object as soon as the bubble renders. File attachments are
- * opened through a plain <a>: signing inside the click handler leaves the
- * user gesture behind, and mobile Safari then blocks the window silently.
- */
-function useSignedUrl(path: string | null, sign: SignFn) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    if (!path) return;
-    let cancelled = false;
-    setFailed(false);
-    void sign(path)
-      .then((signed) => {
-        if (cancelled) return;
-        if (signed) setUrl(signed);
-        else setFailed(true);
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [path, sign]);
-
-  return { url, failed, setFailed };
-}
-
 function Bubble({
   msg,
   mine,
@@ -1465,6 +1502,17 @@ function Bubble({
     : "border border-line/70 bg-paper text-ink shadow-xs";
 
   const files = packedAttachments(msg);
+  if (isVoiceMessage(msg) && msg.attachment_path) {
+    return (
+      <VoiceMessageBubble
+        msg={msg}
+        mine={mine}
+        shape={shape}
+        surface={surface}
+        sign={sign}
+      />
+    );
+  }
   if (files.length > 1 || (msg.kind === "file" && files.length === 1 && msg.body && msg.body !== files[0].name)) {
     return (
       <div className={`flex flex-col gap-1.5 px-2 py-2 ${shape} ${surface}`}>

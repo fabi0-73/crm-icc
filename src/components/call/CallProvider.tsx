@@ -56,7 +56,14 @@ const RESEND_MS = 3_000;
 /** Hard ceiling on a single group call. */
 export const MAX_CALL_PARTICIPANTS = 100;
 
-type SignalKind = "invite" | "offer" | "answer" | "ice" | "hangup" | "decline";
+type SignalKind =
+  | "invite"
+  | "offer"
+  | "answer"
+  | "ice"
+  | "hangup"
+  | "decline"
+  | "mute";
 
 type RosterEntry = { id: string; name: string };
 
@@ -71,6 +78,12 @@ type SignalPayload = {
   roster?: RosterEntry[];
   /** Who started the call — invitees never offer to them. */
   callerId?: string;
+  /** Intentional mic mute (self or host-forced). */
+  muted?: boolean;
+  /** Whose mic the mute signal is about. */
+  targetId?: string;
+  /** Snapshot so a late joiner can render mute badges immediately. */
+  mutedIds?: string[];
 };
 
 type SignalRow = {
@@ -94,6 +107,8 @@ export type ActiveCall = {
   video: boolean;
   /** Everyone invited, caller included. One entry in a 1:1. */
   roster: RosterEntry[];
+  /** The user who started the call — they can mute others. */
+  hostId: string;
 };
 
 export type IncomingCall = ActiveCall & { roomName: string | null };
@@ -104,6 +119,7 @@ export type Participant = {
   stream: MediaStream | null;
   hasVideo: boolean;
   connected: boolean;
+  muted: boolean;
 };
 
 type CallContextValue = {
@@ -136,6 +152,9 @@ type CallContextValue = {
   toggleCam: () => void;
   toggleNoise: () => void;
   toggleScreenShare: () => Promise<void>;
+  /** Host-only: force-mute one remote participant's microphone. */
+  muteParticipant: (peerId: string) => void;
+  isHost: boolean;
   setView: (v: "full" | "mini") => void;
 };
 
@@ -192,6 +211,7 @@ type PeerEntry = {
   stream: MediaStream | null;
   hasVideo: boolean;
   connected: boolean;
+  muted: boolean;
   pendingIce: RTCIceCandidateInit[];
   remoteSet: boolean;
   /** True once we added a screen track as an extra sender (voice call). */
@@ -235,6 +255,24 @@ export function CallProvider({
   const phaseRef = useRef<CallPhase>("idle");
   const incomingRef = useRef<IncomingCall | null>(null);
   const videoCallRef = useRef(false);
+  const mutedRef = useRef(false);
+  const mutedIdsRef = useRef<Set<string>>(new Set());
+  const pendingRemoteOffersRef = useRef<Map<string, RTCSessionDescriptionInit>>(
+    new Map(),
+  );
+  const pendingLocalRenegoRef = useRef<Set<string>>(new Set());
+  const answerRenegotiationRef = useRef<
+    | ((
+        sdp: RTCSessionDescriptionInit,
+        from: string,
+        callId: string,
+        roomId: string,
+      ) => Promise<void>)
+    | null
+  >(null);
+  const renegotiateRef = useRef<
+    ((peerId: string, entry: PeerEntry) => Promise<void>) | null
+  >(null);
   /** Offers that arrived before this user accepted, keyed by sender. */
   const pendingOffersRef = useRef<Map<string, SignalPayload>>(new Map());
   const acceptedRef = useRef(false);
@@ -285,9 +323,53 @@ export function CallProvider({
         stream: p.stream,
         hasVideo: p.hasVideo,
         connected: p.connected,
+        muted: mutedIdsRef.current.has(id) || p.muted,
       })),
     );
   }, []);
+
+  const applyLocalMicEnabled = useCallback((enabled: boolean) => {
+    localStreamRef.current?.getAudioTracks().forEach((t) => {
+      t.enabled = enabled;
+    });
+  }, []);
+
+  const setRemoteAudioEnabled = useCallback((peerId: string, enabled: boolean) => {
+    const entry = peersRef.current.get(peerId);
+    if (!entry) return;
+    entry.pc.getReceivers().forEach((r) => {
+      if (r.track?.kind === "audio") r.track.enabled = enabled;
+    });
+    entry.stream?.getAudioTracks().forEach((t) => {
+      t.enabled = enabled;
+    });
+  }, []);
+
+  const applyMuteSnapshot = useCallback(
+    (ids: string[] | undefined) => {
+      if (!ids) return;
+      mutedIdsRef.current = new Set(ids);
+      if (mutedRef.current) mutedIdsRef.current.add(userId);
+      for (const [id, entry] of peersRef.current) {
+        entry.muted = mutedIdsRef.current.has(id);
+        setRemoteAudioEnabled(id, !entry.muted);
+      }
+      syncParticipants();
+    },
+    [setRemoteAudioEnabled, syncParticipants, userId],
+  );
+
+  /** Lower id offers between invitees; the caller always offers. We are
+   *  polite toward a peer when they are the one expected to offer. */
+  const isPoliteToward = useCallback(
+    (peerId: string) => {
+      const callerId = callerIdRef.current;
+      if (callerId === userId) return false;
+      if (peerId === callerId) return true;
+      return userId > peerId;
+    },
+    [userId],
+  );
 
   /**
    * Once the call is answered nothing else was watching the connection:
@@ -372,6 +454,10 @@ export function CallProvider({
       videoCallRef.current = false;
       pendingOffersRef.current.clear();
       acceptedRef.current = false;
+      mutedRef.current = false;
+      mutedIdsRef.current.clear();
+      pendingRemoteOffersRef.current.clear();
+      pendingLocalRenegoRef.current.clear();
       setPhase("idle");
       setCall(null);
       setIncoming(null);
@@ -407,6 +493,28 @@ export function CallProvider({
       if (error) console.warn("call signal insert failed", error.message);
     },
     [supabase, userId],
+  );
+
+  const broadcastMute = useCallback(
+    (targetId: string, isMuted: boolean) => {
+      const callId = callIdRef.current;
+      const roomId = roomIdRef.current;
+      if (!callId || !roomId) return;
+      const payload: SignalPayload = {
+        muted: isMuted,
+        targetId,
+        mutedIds: [...mutedIdsRef.current],
+      };
+      const targets = new Set<string>([
+        ...peersRef.current.keys(),
+        ...rosterRef.current.map((r) => r.id),
+      ]);
+      targets.delete(userId);
+      for (const to of targets) {
+        void send("mute", callId, to, roomId, payload);
+      }
+    },
+    [send, userId],
   );
 
   const flushIce = useCallback(async (peerId: string) => {
@@ -463,6 +571,7 @@ export function CallProvider({
         stream: null,
         hasVideo: false,
         connected: false,
+        muted: mutedIdsRef.current.has(peerId),
         pendingIce: [],
         remoteSet: false,
         screenAddedSender: false,
@@ -474,6 +583,26 @@ export function CallProvider({
         void send("ice", callIdRef.current, peerId, roomIdRef.current, {
           candidate: e.candidate.toJSON(),
         });
+      };
+
+      pc.onsignalingstatechange = () => {
+        if (pc.signalingState !== "stable") return;
+        const remote = pendingRemoteOffersRef.current.get(peerId);
+        if (remote && callIdRef.current && roomIdRef.current) {
+          pendingRemoteOffersRef.current.delete(peerId);
+          void answerRenegotiationRef.current?.(
+            remote,
+            peerId,
+            callIdRef.current,
+            roomIdRef.current,
+          );
+          return;
+        }
+        if (pendingLocalRenegoRef.current.has(peerId)) {
+          pendingLocalRenegoRef.current.delete(peerId);
+          const live = peersRef.current.get(peerId);
+          if (live) void renegotiateRef.current?.(peerId, live);
+        }
       };
 
       pc.ontrack = (e) => {
@@ -489,22 +618,35 @@ export function CallProvider({
         if (!next.getTracks().some((x) => x.id === e.track.id)) {
           next.addTrack(e.track);
         }
+        // Newest live video wins so a screen share replaces a camera
+        // without the <video> element staying on the first track.
+        if (e.track.kind === "video") {
+          for (const old of next.getVideoTracks()) {
+            if (old.id !== e.track.id && old.readyState !== "live") {
+              next.removeTrack(old);
+            }
+          }
+        }
+        if (e.track.kind === "audio" && mutedIdsRef.current.has(peerId)) {
+          e.track.enabled = false;
+        }
         current.stream = next;
+        current.muted = mutedIdsRef.current.has(peerId);
 
         // Keep hasVideo honest as the peer's video comes and goes (screen
         // share stop/start, camera off) so the tile drops back to the
-        // avatar instead of freezing on the last frame.
+        // avatar instead of freezing on the last frame. Do not require
+        // !muted — display-media starts muted until the first frame, and
+        // a hidden video may never unmute.
         const recompute = () => {
           const live = peersRef.current.get(peerId);
           if (!live) return;
           live.hasVideo = live.pc
             .getReceivers()
             .some(
-              (r) =>
-                r.track?.kind === "video" &&
-                r.track.readyState === "live" &&
-                !r.track.muted,
+              (r) => r.track?.kind === "video" && r.track.readyState === "live",
             );
+          live.muted = mutedIdsRef.current.has(peerId);
           syncParticipants();
         };
         if (e.track.kind === "video") {
@@ -617,23 +759,41 @@ export function CallProvider({
     }
     localStreamRef.current = stream;
     cameraTrackRef.current = stream.getVideoTracks()[0] ?? null;
+    stream.getAudioTracks().forEach((t) => {
+      t.enabled = !mutedRef.current;
+    });
     setLocalStream(stream);
     return stream;
   }, []);
 
   /** Put our local tracks on a peer connection exactly once. */
-  const attachLocalTracks = useCallback((pc: RTCPeerConnection) => {
-    const stream = localStreamRef.current;
-    if (!stream) return;
-    for (const track of stream.getTracks()) {
-      if (!pc.getSenders().some((s) => s.track?.id === track.id)) {
-        pc.addTrack(track, stream);
+  const attachLocalTracks = useCallback(async (pc: RTCPeerConnection) => {
+    const camStream = localStreamRef.current;
+    const screen = screenStreamRef.current;
+    const screenTrack = screen?.getVideoTracks()[0] ?? null;
+
+    if (camStream) {
+      for (const track of camStream.getTracks()) {
+        if (screenTrack && track.kind === "video") continue;
+        if (!pc.getSenders().some((s) => s.track?.id === track.id)) {
+          pc.addTrack(track, camStream);
+        }
       }
     }
-    // If we are already screen sharing, the newcomer gets the screen too.
-    const screenTrack = screenStreamRef.current?.getVideoTracks()[0];
-    if (screenTrack && !pc.getSenders().some((s) => s.track?.id === screenTrack.id)) {
-      pc.addTrack(screenTrack, stream);
+
+    if (screenTrack && screen) {
+      const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
+      if (videoSender) {
+        if (videoSender.track?.id !== screenTrack.id) {
+          try {
+            await videoSender.replaceTrack(screenTrack);
+          } catch {
+            /* ignore */
+          }
+        }
+      } else if (!pc.getSenders().some((s) => s.track?.id === screenTrack.id)) {
+        pc.addTrack(screenTrack, screen);
+      }
     }
   }, []);
 
@@ -645,7 +805,7 @@ export function CallProvider({
       if (!callId || !roomId) return;
       const gen = callGenRef.current;
       const entry = ensurePeer(peerId, name);
-      attachLocalTracks(entry.pc);
+      await attachLocalTracks(entry.pc);
       if (entry.pc.signalingState !== "stable") return;
 
       const offer = await entry.pc.createOffer();
@@ -659,6 +819,7 @@ export function CallProvider({
         video,
         callerId: callerIdRef.current ?? undefined,
         roster: rosterRef.current,
+        mutedIds: [...mutedIdsRef.current],
         sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
       });
     },
@@ -674,7 +835,25 @@ export function CallProvider({
       roomId: string,
     ) => {
       const entry = peersRef.current.get(from);
-      if (!entry || entry.pc.signalingState !== "stable") return;
+      if (!entry) return;
+      if (entry.pc.signalingState !== "stable") {
+        if (
+          entry.pc.signalingState === "have-local-offer" &&
+          isPoliteToward(from)
+        ) {
+          try {
+            await entry.pc.setLocalDescription({
+              type: "rollback",
+            } as RTCSessionDescriptionInit);
+          } catch {
+            pendingRemoteOffersRef.current.set(from, sdp);
+            return;
+          }
+        } else {
+          pendingRemoteOffersRef.current.set(from, sdp);
+          return;
+        }
+      }
       await entry.pc.setRemoteDescription(sdp);
       await flushIce(from);
       const answer = await entry.pc.createAnswer();
@@ -685,7 +864,7 @@ export function CallProvider({
         sdp: { type: finalAnswer.type, sdp: finalAnswer.sdp },
       });
     },
-    [flushIce, send],
+    [flushIce, isPoliteToward, send],
   );
 
   /** Answer the initial offer from one peer. */
@@ -695,6 +874,7 @@ export function CallProvider({
       // stale continuation never sends an answer or flips phase.
       const gen = callGenRef.current;
       if (!offer.payload.sdp) return;
+      applyMuteSnapshot(offer.payload.mutedIds);
       const entry = ensurePeer(offer.from, offer.payload.fromName);
       if (entry.remoteSet || entry.pc.currentRemoteDescription) return;
       if (entry.pc.signalingState !== "stable") return;
@@ -702,7 +882,7 @@ export function CallProvider({
       const video = Boolean(offer.payload.video || videoCallRef.current);
       if (!localStreamRef.current) await getMedia(video);
       if (callGenRef.current !== gen) return;
-      attachLocalTracks(entry.pc);
+      await attachLocalTracks(entry.pc);
 
       await entry.pc.setRemoteDescription(offer.payload.sdp);
       if (callGenRef.current !== gen) return;
@@ -729,6 +909,7 @@ export function CallProvider({
       setIncoming(null);
     },
     [
+      applyMuteSnapshot,
       attachLocalTracks,
       ensurePeer,
       flushIce,
@@ -737,6 +918,8 @@ export function CallProvider({
       send,
     ],
   );
+
+  answerRenegotiationRef.current = answerRenegotiation;
 
   /** Connect to everyone else in the roster (mesh), avoiding glare. */
   const connectRoster = useCallback(
@@ -819,6 +1002,7 @@ export function CallProvider({
           roomName: p.roomName ?? null,
           video: Boolean(p.video),
           roster: rosterRef.current,
+          hostId: p.callerId ?? row.from_user,
         });
         setPhase("ringing");
         startRingtone();
@@ -865,6 +1049,7 @@ export function CallProvider({
       }
 
       if (row.kind === "offer" && p.sdp) {
+        applyMuteSnapshot(p.mutedIds);
         const known = peersRef.current.get(row.from_user);
         // Mid-call renegotiation (screenshare started/stopped).
         if (known?.remoteSet && callIdRef.current === row.call_id) {
@@ -932,11 +1117,39 @@ export function CallProvider({
         } else {
           entry.pendingIce.push(p.candidate);
         }
+        return;
+      }
+
+      if (row.kind === "mute") {
+        if (callIdRef.current && callIdRef.current !== row.call_id) return;
+        const targetId = p.targetId;
+        if (!targetId) return;
+        applyMuteSnapshot(p.mutedIds);
+        const isMuted = Boolean(p.muted);
+        if (isMuted) mutedIdsRef.current.add(targetId);
+        else mutedIdsRef.current.delete(targetId);
+
+        if (targetId === userId) {
+          // Host (or another tab's view of us) asked us to mute/unmute.
+          // Mute: cut the mic first so nothing leaks. Unmute: apply after
+          // the snapshot so remotes already know.
+          if (isMuted) applyLocalMicEnabled(false);
+          mutedRef.current = isMuted;
+          setMuted(isMuted);
+          if (!isMuted) applyLocalMicEnabled(true);
+        } else {
+          const entry = peersRef.current.get(targetId);
+          if (entry) entry.muted = isMuted;
+          setRemoteAudioEnabled(targetId, !isMuted);
+        }
+        syncParticipants();
       }
     },
     [
       answerOffer,
       answerRenegotiation,
+      applyLocalMicEnabled,
+      applyMuteSnapshot,
       armConnectTimeout,
       cleanup,
       clearTimers,
@@ -944,7 +1157,9 @@ export function CallProvider({
       flushIce,
       loadMissedIce,
       send,
+      setRemoteAudioEnabled,
       showNotice,
+      syncParticipants,
       userId,
       userName,
     ],
@@ -1027,6 +1242,7 @@ export function CallProvider({
             : `${roomName} · ${invitees.length + 1} people`,
         video,
         roster,
+        hostId: userId,
       });
       setPhase("dialing");
       setView("full");
@@ -1046,7 +1262,7 @@ export function CallProvider({
 
         for (const peer of invitees) {
           const entry = ensurePeer(peer.id, peer.name);
-          attachLocalTracks(entry.pc);
+          await attachLocalTracks(entry.pc);
           await send("invite", callId, peer.id, roomId, invitePayload);
         }
         if (callGenRef.current !== gen) return;
@@ -1075,6 +1291,7 @@ export function CallProvider({
             video,
             roster,
             callerId: userId,
+            mutedIds: [...mutedIdsRef.current],
             sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
           };
           offers.set(peer.id, payload);
@@ -1158,6 +1375,7 @@ export function CallProvider({
           : inc.peerName,
       video: inc.video,
       roster: inc.roster,
+      hostId: inc.hostId ?? callerIdRef.current ?? inc.peerId,
     });
     setPhase("connecting");
     setView("full");
@@ -1213,14 +1431,39 @@ export function CallProvider({
   }, [cleanup, send]);
 
   const toggleMic = useCallback(() => {
-    setMuted((prev) => {
-      const next = !prev;
-      localStreamRef.current?.getAudioTracks().forEach((t) => {
-        t.enabled = !next;
-      });
-      return next;
-    });
-  }, []);
+    const next = !mutedRef.current;
+    if (next) {
+      applyLocalMicEnabled(false);
+      mutedIdsRef.current.add(userId);
+    }
+    mutedRef.current = next;
+    setMuted(next);
+    if (!next) {
+      mutedIdsRef.current.delete(userId);
+      broadcastMute(userId, false);
+      applyLocalMicEnabled(true);
+    } else {
+      broadcastMute(userId, true);
+    }
+    syncParticipants();
+  }, [applyLocalMicEnabled, broadcastMute, syncParticipants, userId]);
+
+  const muteParticipant = useCallback(
+    (peerId: string) => {
+      if (callerIdRef.current !== userId) return;
+      if (peerId === userId) {
+        if (!mutedRef.current) toggleMic();
+        return;
+      }
+      mutedIdsRef.current.add(peerId);
+      const entry = peersRef.current.get(peerId);
+      if (entry) entry.muted = true;
+      setRemoteAudioEnabled(peerId, false);
+      syncParticipants();
+      broadcastMute(peerId, true);
+    },
+    [broadcastMute, setRemoteAudioEnabled, syncParticipants, toggleMic, userId],
+  );
 
   const toggleCam = useCallback(() => {
     setCamOff((prev) => {
@@ -1267,7 +1510,7 @@ export function CallProvider({
           return;
         }
         // Preserve the current mute state on the replacement track.
-        newTrack.enabled = oldTrack ? oldTrack.enabled : true;
+        newTrack.enabled = !mutedRef.current;
         for (const entry of peersRef.current.values()) {
           const sender = entry.pc
             .getSenders()
@@ -1308,7 +1551,11 @@ export function CallProvider({
     async (peerId: string, entry: PeerEntry) => {
       const callId = callIdRef.current;
       const roomId = roomIdRef.current;
-      if (!callId || !roomId || entry.pc.signalingState !== "stable") return;
+      if (!callId || !roomId) return;
+      if (entry.pc.signalingState !== "stable") {
+        pendingLocalRenegoRef.current.add(peerId);
+        return;
+      }
       try {
         const offer = await entry.pc.createOffer();
         await entry.pc.setLocalDescription(offer);
@@ -1316,6 +1563,7 @@ export function CallProvider({
         const finalOffer = entry.pc.localDescription ?? offer;
         await send("offer", callId, peerId, roomId, {
           video: true,
+          mutedIds: [...mutedIdsRef.current],
           sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
         });
       } catch (err) {
@@ -1325,43 +1573,49 @@ export function CallProvider({
     [send],
   );
 
+  renegotiateRef.current = renegotiate;
+
   const stopScreenShare = useCallback(async () => {
     const screen = screenStreamRef.current;
     const screenTrack = screen?.getVideoTracks()[0] ?? null;
 
     if (screenTrack) {
       for (const [peerId, entry] of peersRef.current.entries()) {
-        const videoSender = entry.pc
-          .getSenders()
-          .find(
-            (s) => s.track?.id === screenTrack.id || s.track?.kind === "video",
-          );
-        if (!videoSender) continue;
+        try {
+          const videoSender = entry.pc
+            .getSenders()
+            .find(
+              (s) => s.track?.id === screenTrack.id || s.track?.kind === "video",
+            );
+          if (!videoSender) continue;
 
-        if (entry.screenAddedSender) {
-          try {
-            entry.pc.removeTrack(videoSender);
-          } catch {
-            /* ignore */
+          if (entry.screenAddedSender) {
+            try {
+              entry.pc.removeTrack(videoSender);
+            } catch {
+              /* ignore */
+            }
+            entry.screenAddedSender = false;
+            await renegotiate(peerId, entry);
+          } else if (cameraTrackRef.current) {
+            try {
+              await videoSender.replaceTrack(cameraTrackRef.current);
+            } catch {
+              /* ignore */
+            }
+          } else {
+            // Camera was off, so there's no track to restore. Leaving the
+            // sender pointed at the stopped screen track freezes the last
+            // frame on the peer — drop it and renegotiate instead.
+            try {
+              entry.pc.removeTrack(videoSender);
+            } catch {
+              /* ignore */
+            }
+            await renegotiate(peerId, entry);
           }
-          entry.screenAddedSender = false;
-          await renegotiate(peerId, entry);
-        } else if (cameraTrackRef.current) {
-          try {
-            await videoSender.replaceTrack(cameraTrackRef.current);
-          } catch {
-            /* ignore */
-          }
-        } else {
-          // Camera was off, so there's no track to restore. Leaving the
-          // sender pointed at the stopped screen track freezes the last
-          // frame on the peer — drop it and renegotiate instead.
-          try {
-            entry.pc.removeTrack(videoSender);
-          } catch {
-            /* ignore */
-          }
-          await renegotiate(peerId, entry);
+        } catch (err) {
+          console.warn("stop screen share failed", peerId, err);
         }
       }
     }
@@ -1416,28 +1670,40 @@ export function CallProvider({
         void stopScreenShare();
       };
 
-      for (const [peerId, entry] of peersRef.current.entries()) {
-        const videoSender = entry.pc
-          .getSenders()
-          .find((s) => s.track?.kind === "video");
-        if (videoSender) {
-          if (videoSender.track && videoSender.track !== cameraTrackRef.current) {
-            // Already replaced somehow — keep the original for restore.
-          } else if (videoSender.track) {
-            cameraTrackRef.current = videoSender.track;
-          }
-          await videoSender.replaceTrack(screenTrack);
-          entry.screenAddedSender = false;
-        } else {
-          const camStream = localStreamRef.current ?? new MediaStream();
-          entry.pc.addTrack(screenTrack, camStream);
-          entry.screenAddedSender = true;
-          await renegotiate(peerId, entry);
-        }
-      }
-
+      // Swap the local preview immediately so the sharer sees the screen
+      // without toggling the camera. Peer attach is best-effort after.
       setSharing(true);
       refreshLocalPreview(screenTrack);
+
+      for (const [peerId, entry] of peersRef.current.entries()) {
+        try {
+          const videoSender = entry.pc
+            .getSenders()
+            .find((s) => s.track?.kind === "video");
+          if (videoSender) {
+            if (
+              videoSender.track &&
+              videoSender.track !== cameraTrackRef.current &&
+              videoSender.track !== screenTrack
+            ) {
+              // Already replaced somehow — keep the original for restore.
+            } else if (
+              videoSender.track &&
+              videoSender.track !== screenTrack
+            ) {
+              cameraTrackRef.current = videoSender.track;
+            }
+            await videoSender.replaceTrack(screenTrack);
+            entry.screenAddedSender = false;
+          } else {
+            entry.pc.addTrack(screenTrack, screen);
+            entry.screenAddedSender = true;
+            await renegotiate(peerId, entry);
+          }
+        } catch (err) {
+          console.warn("screen share attach failed", peerId, err);
+        }
+      }
     } catch (err) {
       // User cancelled the picker — not an error worth surfacing.
       if (err instanceof DOMException && err.name === "NotAllowedError") return;
@@ -1535,6 +1801,8 @@ export function CallProvider({
       toggleCam,
       toggleNoise,
       toggleScreenShare,
+      muteParticipant,
+      isHost: Boolean(call?.hostId && call.hostId === userId),
       setView,
     }),
     [
@@ -1561,6 +1829,8 @@ export function CallProvider({
       toggleCam,
       toggleNoise,
       toggleScreenShare,
+      muteParticipant,
+      userId,
     ],
   );
 

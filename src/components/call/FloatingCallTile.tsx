@@ -129,6 +129,13 @@ export function FloatingCallTile() {
             Sharing
           </span>
         )}
+        {muted && (
+          <span className="absolute bottom-2 left-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/70">
+            <span className="scale-75">
+              <MicOffIcon />
+            </span>
+          </span>
+        )}
       </button>
 
       <div className="flex items-center gap-2 px-3 py-2.5">

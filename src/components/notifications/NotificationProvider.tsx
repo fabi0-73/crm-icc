@@ -53,7 +53,11 @@ export function NotificationProvider({
           document.hasFocus();
         if (lookingAtRoom) return;
         const preview =
-          msg.kind === "file" ? "Sent an attachment" : msg.body.slice(0, 140);
+          msg.kind === "file"
+            ? msg.metadata?.voice === true || msg.body === "Voice message"
+              ? "Voice message"
+              : "Sent an attachment"
+            : msg.body.slice(0, 140);
         showDesktopNotification("ICC Desk", preview, {
           tag: `msg:${msg.room_id}`,
         });
