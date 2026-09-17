@@ -25,7 +25,7 @@ export function CallButton({
   currentUserRole?: string;
   members: CallMember[];
 }) {
-  const { dial, phase, signalReady } = useCall();
+  const { dial, prepareGroupCall, phase, signalReady, lobby } = useCall();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
 
@@ -40,19 +40,19 @@ export function CallButton({
     typeof window === "undefined" ||
     window.isSecureContext ||
     location.hostname === "localhost";
-  const busy = phase !== "idle";
+  const busy = phase !== "idle" || Boolean(lobby);
   const atCapacity = selected.length + 1 >= MAX_CALL_PARTICIPANTS;
 
   async function start(peers: CallMember[], video: boolean) {
     if (peers.length === 0) return;
     setPickerOpen(false);
     setSelected([]);
-    await dial(
-      roomId,
-      roomName,
-      peers.map((p) => ({ id: p.id, name: p.full_name })),
-      video,
-    );
+    const roster = peers.map((p) => ({ id: p.id, name: p.full_name }));
+    if (video && peers.length > 1) {
+      prepareGroupCall(roomId, roomName, roster);
+      return;
+    }
+    await dial(roomId, roomName, roster, video);
   }
 
   function toggle(id: string) {

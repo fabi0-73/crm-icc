@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { LayoutGrid } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { useCall, type Participant } from "@/components/call/CallProvider";
 import { useDuration } from "@/components/call/useDuration";
@@ -41,6 +42,8 @@ export function FullScreenCall() {
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const duration = useDuration(connectedAt);
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const selfFocus = "__self__";
 
   // remoteHasVideo now comes from the provider, which recomputes it from
   // the remote track's live/mute events (FIX C) so the frame doesn't freeze
@@ -52,6 +55,21 @@ export function FullScreenCall() {
     5,
     Math.max(1, Math.ceil(Math.sqrt(participants.length + 1))),
   );
+  const focusedPeer =
+    focusId && focusId !== selfFocus
+      ? (participants.find((p) => p.id === focusId) ?? null)
+      : null;
+  const focusingSelf = focusId === selfFocus;
+
+  useEffect(() => {
+    if (!focusId) return;
+    if (focusId === selfFocus) {
+      if (!sharing && (camOff || !call?.video)) setFocusId(null);
+      return;
+    }
+    const peer = participants.find((p) => p.id === focusId);
+    if (!peer || !peer.hasVideo) setFocusId(null);
+  }, [focusId, participants, sharing, camOff, call?.video, selfFocus]);
 
   useEffect(() => {
     const el = remoteVideoRef.current;
@@ -112,6 +130,61 @@ export function FullScreenCall() {
 
       <div className="relative flex-1 min-h-0 overflow-hidden bg-ink">
         {group ? (
+          focusId && (focusingSelf || focusedPeer) ? (
+            <div className="flex h-full min-h-0 flex-col gap-2 p-1">
+              <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-ink-soft">
+                {focusingSelf ? (
+                  <SelfPreview
+                    stream={localStream}
+                    camOff={camOff}
+                    sharing={sharing}
+                    muted={muted}
+                  />
+                ) : focusedPeer ? (
+                  <ParticipantTile
+                    participant={focusedPeer}
+                    isHost={isHost}
+                    onHostMute={muteParticipant}
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setFocusId(null)}
+                  className="absolute left-2 top-2 z-10 flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-black/80"
+                  aria-label="Back to grid view"
+                  title="Grid view"
+                >
+                  <LayoutGrid className="size-3.5" />
+                  Grid
+                </button>
+              </div>
+              <div className="flex h-[5.5rem] shrink-0 gap-2 overflow-x-auto">
+                {participants.map((p) => (
+                  <div key={p.id} className="h-full w-28 shrink-0">
+                    <ParticipantTile
+                      participant={p}
+                      isHost={isHost}
+                      onHostMute={muteParticipant}
+                      compact
+                      selected={p.id === focusId}
+                      onSelect={() => setFocusId(p.id)}
+                    />
+                  </div>
+                ))}
+                <div className="h-full w-28 shrink-0">
+                  <SelfPreview
+                    stream={localStream}
+                    camOff={camOff}
+                    sharing={sharing}
+                    muted={muted}
+                    compact
+                    selected={focusingSelf}
+                    onSelect={() => setFocusId(selfFocus)}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
           <div
             className="grid h-full w-full auto-rows-fr gap-1 p-1"
             style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
@@ -122,29 +195,18 @@ export function FullScreenCall() {
                 participant={p}
                 isHost={isHost}
                 onHostMute={muteParticipant}
+                onSelect={p.sharing ? () => setFocusId(p.id) : undefined}
               />
             ))}
-            <div className="relative overflow-hidden rounded-lg bg-ink-soft">
-              <video
-                ref={localVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className={`h-full w-full object-cover ${
-                  sharing ? "object-contain bg-ink" : "-scale-x-100"
-                } ${camOff && !sharing ? "opacity-30" : ""}`}
-              />
-              <span className="absolute bottom-1 left-1 rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white">
-                You
-              </span>
-              {muted && (
-                <div className="absolute bottom-1 right-1">
-                  <MuteBadge />
-                </div>
-              )}
-              {sharing && <SharingBadge />}
-            </div>
+            <SelfPreview
+              stream={localStream}
+              camOff={camOff}
+              sharing={sharing}
+              muted={muted}
+              onSelect={sharing ? () => setFocusId(selfFocus) : undefined}
+            />
           </div>
+          )
         ) : showVideo ? (
           <>
             {/* Muted on purpose: the provider's per-participant <audio>
@@ -312,14 +374,93 @@ function SharingBadge() {
   );
 }
 
+function activateTile(e: React.MouseEvent, onSelect?: () => void) {
+  if (!onSelect) return;
+  if ((e.target as HTMLElement).closest("button")) return;
+  onSelect();
+}
+
+function SelfPreview({
+  stream,
+  camOff,
+  sharing,
+  muted,
+  compact,
+  selected,
+  onSelect,
+}: {
+  stream: MediaStream | null;
+  camOff: boolean;
+  sharing: boolean;
+  muted: boolean;
+  compact?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
+}) {
+  const { selfId } = useCall();
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const showVideo = Boolean(stream && ((!camOff && stream.getVideoTracks().length) || sharing));
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (el && stream) {
+      el.srcObject = stream;
+      void el.play().catch(() => undefined);
+    }
+    return () => {
+      if (el) el.srcObject = null;
+    };
+  }, [stream]);
+
+  return (
+    <div
+      className={`relative h-full overflow-hidden rounded-lg bg-ink-soft ${
+        onSelect ? "cursor-pointer" : ""
+      } ${selected ? "ring-2 ring-brand-400" : ""}`}
+      onClick={(e) => activateTile(e, onSelect)}
+      title={sharing && onSelect && !compact ? "Expand screen share" : undefined}
+    >
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className={`h-full w-full object-contain bg-ink ${
+          sharing ? "" : "-scale-x-100"
+        } ${camOff && !sharing ? "opacity-30" : ""}`}
+      />
+      {(!showVideo || (camOff && !sharing)) && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <Avatar name="You" size={compact ? "sm" : "lg"} userId={selfId} />
+        </div>
+      )}
+      <span className="absolute bottom-1 left-1 rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white">
+        You
+      </span>
+      {muted && (
+        <div className="absolute bottom-1 right-1">
+          <MuteBadge />
+        </div>
+      )}
+      {sharing && <SharingBadge />}
+    </div>
+  );
+}
+
 function ParticipantTile({
   participant,
   isHost,
   onHostMute,
+  compact,
+  selected,
+  onSelect,
 }: {
   participant: Participant;
   isHost: boolean;
   onHostMute: (peerId: string) => void;
+  compact?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -334,7 +475,17 @@ function ParticipantTile({
   }, [participant.stream]);
 
   return (
-    <div className="relative overflow-hidden rounded-lg bg-ink-soft">
+    <div
+      className={`relative h-full overflow-hidden rounded-lg bg-ink-soft ${
+        onSelect ? "cursor-pointer" : ""
+      } ${selected ? "ring-2 ring-brand-400" : ""}`}
+      onClick={(e) => activateTile(e, onSelect)}
+      title={
+        participant.sharing && onSelect && !compact
+          ? "Expand screen share"
+          : undefined
+      }
+    >
       {/* Always mounted so a screen-share track can decode even while
           browsers report it muted until the first frame. Avatar sits on
           top until hasVideo is true. Audio plays through the provider. */}
@@ -349,19 +500,24 @@ function ParticipantTile({
       />
       {!participant.hasVideo && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <Avatar name={participant.name} size="lg" userId={participant.id} />
+          <Avatar
+            name={participant.name}
+            size={compact ? "sm" : "lg"}
+            userId={participant.id}
+          />
         </div>
       )}
       <span className="absolute bottom-1 left-1 max-w-[70%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[11px] text-white">
         {participant.name}
         {!participant.connected && " · connecting…"}
       </span>
+      {participant.sharing && <SharingBadge />}
       {participant.muted && (
         <div className="absolute bottom-1 right-1">
           <MuteBadge />
         </div>
       )}
-      {isHost && !participant.muted && (
+      {isHost && !participant.muted && !compact && (
         <button
           type="button"
           onClick={() => onHostMute(participant.id)}

@@ -38,6 +38,7 @@ import {
   stopTones,
 } from "@/lib/call/tones";
 import { IncomingCallOverlay } from "@/components/call/IncomingCallOverlay";
+import { CallLobby } from "@/components/call/CallLobby";
 import { FloatingCallTile } from "@/components/call/FloatingCallTile";
 import { FullScreenCall } from "@/components/call/FullScreenCall";
 import { postCallEvent } from "@/app/actions/rooms";
@@ -66,6 +67,28 @@ type SignalKind =
   | "mute";
 
 type RosterEntry = { id: string; name: string };
+
+export type GroupLobby = {
+  intent: "outgoing" | "incoming";
+  roomId: string;
+  roomName: string;
+  peers: RosterEntry[];
+  video: true;
+};
+
+function trackLooksLikeShare(track: MediaStreamTrack) {
+  const surface = track.getSettings().displaySurface;
+  if (
+    surface === "monitor" ||
+    surface === "window" ||
+    surface === "browser"
+  ) {
+    return true;
+  }
+  if (track.contentHint === "detail") return true;
+  const label = track.label.toLowerCase();
+  return /screen|window|display|tab/.test(label);
+}
 
 type SignalPayload = {
   fromName?: string;
@@ -120,9 +143,11 @@ export type Participant = {
   hasVideo: boolean;
   connected: boolean;
   muted: boolean;
+  sharing: boolean;
 };
 
 type CallContextValue = {
+  selfId: string;
   phase: CallPhase;
   call: ActiveCall | null;
   incoming: IncomingCall | null;
@@ -139,12 +164,21 @@ type CallContextValue = {
   remoteHasVideo: boolean;
   participants: Participant[];
   connectedAt: number | null;
+  lobby: GroupLobby | null;
   dial: (
     roomId: string,
     roomName: string,
     peers: RosterEntry[],
     video: boolean,
   ) => Promise<void>;
+  prepareGroupCall: (
+    roomId: string,
+    roomName: string,
+    peers: RosterEntry[],
+  ) => void;
+  openIncomingLobby: () => void;
+  confirmLobby: (prefs: { muted: boolean; camOff: boolean }) => Promise<void>;
+  cancelLobby: () => void;
   accept: () => Promise<void>;
   decline: () => void;
   hangup: () => void;
@@ -212,6 +246,7 @@ type PeerEntry = {
   hasVideo: boolean;
   connected: boolean;
   muted: boolean;
+  sharing: boolean;
   pendingIce: RTCIceCandidateInit[];
   remoteSet: boolean;
   /** True once we added a screen track as an extra sender (voice call). */
@@ -243,6 +278,7 @@ export function CallProvider({
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [lobby, setLobby] = useState<GroupLobby | null>(null);
 
   const peersRef = useRef<Map<string, PeerEntry>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -254,8 +290,10 @@ export function CallProvider({
   const rosterRef = useRef<RosterEntry[]>([]);
   const phaseRef = useRef<CallPhase>("idle");
   const incomingRef = useRef<IncomingCall | null>(null);
+  const lobbyRef = useRef<GroupLobby | null>(null);
   const videoCallRef = useRef(false);
   const mutedRef = useRef(false);
+  const camOffRef = useRef(false);
   const mutedIdsRef = useRef<Set<string>>(new Set());
   const pendingRemoteOffersRef = useRef<Map<string, RTCSessionDescriptionInit>>(
     new Map(),
@@ -324,6 +362,7 @@ export function CallProvider({
         hasVideo: p.hasVideo,
         connected: p.connected,
         muted: mutedIdsRef.current.has(id) || p.muted,
+        sharing: p.sharing,
       })),
     );
   }, []);
@@ -455,12 +494,15 @@ export function CallProvider({
       pendingOffersRef.current.clear();
       acceptedRef.current = false;
       mutedRef.current = false;
+      camOffRef.current = false;
       mutedIdsRef.current.clear();
       pendingRemoteOffersRef.current.clear();
       pendingLocalRenegoRef.current.clear();
+      lobbyRef.current = null;
       setPhase("idle");
       setCall(null);
       setIncoming(null);
+      setLobby(null);
       setView("full");
       setMuted(false);
       setCamOff(false);
@@ -572,6 +614,7 @@ export function CallProvider({
         hasVideo: false,
         connected: false,
         muted: mutedIdsRef.current.has(peerId),
+        sharing: false,
         pendingIce: [],
         remoteSet: false,
         screenAddedSender: false,
@@ -646,6 +689,15 @@ export function CallProvider({
             .some(
               (r) => r.track?.kind === "video" && r.track.readyState === "live",
             );
+          live.sharing = live.pc.getReceivers().some(
+            (r) =>
+              r.track?.kind === "video" &&
+              r.track.readyState === "live" &&
+              trackLooksLikeShare(r.track),
+          );
+          if (!live.sharing && live.hasVideo && !videoCallRef.current) {
+            live.sharing = true;
+          }
           live.muted = mutedIdsRef.current.has(peerId);
           syncParticipants();
         };
@@ -761,6 +813,9 @@ export function CallProvider({
     cameraTrackRef.current = stream.getVideoTracks()[0] ?? null;
     stream.getAudioTracks().forEach((t) => {
       t.enabled = !mutedRef.current;
+    });
+    stream.getVideoTracks().forEach((t) => {
+      t.enabled = !camOffRef.current;
     });
     setLocalStream(stream);
     return stream;
@@ -1430,6 +1485,72 @@ export function CallProvider({
     cleanup();
   }, [cleanup, send]);
 
+  const prepareGroupCall = useCallback(
+    (roomId: string, roomName: string, peers: RosterEntry[]) => {
+      if (phaseRef.current !== "idle") return;
+      const next: GroupLobby = {
+        intent: "outgoing",
+        roomId,
+        roomName,
+        peers,
+        video: true,
+      };
+      lobbyRef.current = next;
+      setLobby(next);
+    },
+    [],
+  );
+
+  const openIncomingLobby = useCallback(() => {
+    const inc = incomingRef.current;
+    if (!inc?.video || inc.roster.length <= 2) {
+      void accept();
+      return;
+    }
+    const next: GroupLobby = {
+      intent: "incoming",
+      roomId: inc.roomId,
+      roomName: inc.roomName ?? inc.peerName,
+      peers: inc.roster.filter((p) => p.id !== userId),
+      video: true,
+    };
+    lobbyRef.current = next;
+    setLobby(next);
+  }, [accept, userId]);
+
+  const cancelLobby = useCallback(() => {
+    const L = lobbyRef.current;
+    lobbyRef.current = null;
+    setLobby(null);
+    if (L?.intent === "incoming") decline();
+  }, [decline]);
+
+  const confirmLobby = useCallback(
+    async (prefs: { muted: boolean; camOff: boolean }) => {
+      const L = lobbyRef.current;
+      if (!L) return;
+      mutedRef.current = prefs.muted;
+      camOffRef.current = prefs.camOff;
+      setMuted(prefs.muted);
+      setCamOff(prefs.camOff);
+      lobbyRef.current = null;
+      setLobby(null);
+      if (L.intent === "outgoing") {
+        await dial(L.roomId, L.roomName, L.peers, true);
+      } else {
+        await accept();
+      }
+    },
+    [accept, dial],
+  );
+
+  useEffect(() => {
+    if (lobby?.intent === "incoming" && !incoming) {
+      lobbyRef.current = null;
+      setLobby(null);
+    }
+  }, [lobby, incoming]);
+
   const toggleMic = useCallback(() => {
     const next = !mutedRef.current;
     if (next) {
@@ -1468,6 +1589,7 @@ export function CallProvider({
   const toggleCam = useCallback(() => {
     setCamOff((prev) => {
       const next = !prev;
+      camOffRef.current = next;
       // While screensharing, cam toggle only affects the parked camera track.
       const target =
         cameraTrackRef.current ??
@@ -1778,6 +1900,7 @@ export function CallProvider({
 
   const value = useMemo<CallContextValue>(
     () => ({
+      selfId: userId,
       phase,
       call,
       incoming,
@@ -1793,7 +1916,12 @@ export function CallProvider({
       remoteHasVideo,
       participants,
       connectedAt,
+      lobby,
       dial,
+      prepareGroupCall,
+      openIncomingLobby,
+      confirmLobby,
+      cancelLobby,
       accept,
       decline,
       hangup,
@@ -1821,7 +1949,12 @@ export function CallProvider({
       remoteHasVideo,
       participants,
       connectedAt,
+      lobby,
       dial,
+      prepareGroupCall,
+      openIncomingLobby,
+      confirmLobby,
+      cancelLobby,
       accept,
       decline,
       hangup,
@@ -1845,7 +1978,8 @@ export function CallProvider({
       {participants.map((p) => (
         <PeerAudio key={p.id} stream={p.stream} />
       ))}
-      {incoming && phase === "ringing" && <IncomingCallOverlay />}
+      {incoming && phase === "ringing" && !lobby && <IncomingCallOverlay />}
+      {lobby && <CallLobby />}
       {onCall && (view === "full" ? <FullScreenCall /> : <FloatingCallTile />)}
       {notice && (
         <div
