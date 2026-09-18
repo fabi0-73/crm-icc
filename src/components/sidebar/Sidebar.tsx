@@ -7,6 +7,7 @@ import { signOut } from "@/app/actions/auth";
 import { useRooms } from "@/components/rooms/RoomsProvider";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
 import { Avatar } from "@/components/Avatar";
+import { publicDisplayName } from "@/lib/display-name";
 import { PresenceDot } from "@/components/PresenceDot";
 import { NewGroupButton } from "@/components/NewGroupButton";
 import { NewDmButton } from "@/components/NewDmButton";
@@ -201,7 +202,7 @@ export function Sidebar({ profile }: { profile: Profile }) {
         >
           <span className="relative shrink-0">
             <Avatar
-              name={profile.full_name}
+              name={publicDisplayName(profile)}
               size="sm"
               userId={profile.id}
               className="!h-7 !w-7 !text-[10px]"
@@ -212,7 +213,7 @@ export function Sidebar({ profile }: { profile: Profile }) {
             />
           </span>
           <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-            {profile.full_name}
+            {publicDisplayName(profile)}
           </span>
         </Link>
         <form action={signOut}>

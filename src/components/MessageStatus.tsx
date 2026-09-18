@@ -7,8 +7,9 @@ export type DeliveryStatus = "sent" | "delivered" | "seen";
 /**
  * Tiny read-receipt indicator shown on the current user's own messages.
  *  - sent      — the insert resolved (single check)
- *  - delivered — stored in a room with ≥1 other member (double check)
+ *  - delivered — reached at least one other member's device (double check)
  *  - seen      — every other member has read past it (brand-colored double check)
+ * The state itself is computed by deliveryStatus() in lib/receipts.
  */
 export function MessageStatus({
   status,

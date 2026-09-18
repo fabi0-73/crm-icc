@@ -2,12 +2,13 @@
 
 import { useState } from "react";
 import { Avatar } from "@/components/Avatar";
+import { publicDisplayName } from "@/lib/display-name";
 import { Modal } from "@/components/Modal";
 import { useCall } from "@/components/call/CallProvider";
 import { PhoneIcon, VideoIcon } from "@/components/icons";
 import type { Role, RoomType } from "@/lib/types";
 
-type CallMember = { id: string; full_name: string };
+type CallMember = { id: string; full_name: string; public_name?: string | null };
 
 /** Chat-header call button + member picker. Dialing hands off to the
  *  app-level CallProvider, so the call outlives this room's UI. */
@@ -55,7 +56,12 @@ export function CallButton({
   async function start(peer: CallMember, video: boolean) {
     if (restricted) return;
     setPickerOpen(false);
-    await dial(roomId, roomName, peer, video);
+    await dial(
+      roomId,
+      roomName,
+      { id: peer.id, full_name: publicDisplayName(peer) },
+      video,
+    );
   }
 
   async function startGroup(video: boolean) {
@@ -141,16 +147,16 @@ export function CallButton({
               key={m.id}
               className="flex items-center gap-3 rounded-md px-2 py-2.5 hover:bg-mist"
             >
-              <Avatar name={m.full_name} size="sm" userId={m.id} />
+              <Avatar name={publicDisplayName(m)} size="sm" userId={m.id} />
               <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
-                {m.full_name}
+                {publicDisplayName(m)}
               </span>
               <button
                 type="button"
                 disabled={!signalReady || !secure}
                 onClick={() => void start(m, false)}
                 className="rounded-full bg-brand-600 p-2.5 text-white hover:bg-brand-700 disabled:opacity-40"
-                aria-label={`Voice call ${m.full_name}`}
+                aria-label={`Voice call ${publicDisplayName(m)}`}
                 title="Voice"
               >
                 <PhoneIcon size={16} />
@@ -160,7 +166,7 @@ export function CallButton({
                 disabled={!signalReady || !secure}
                 onClick={() => void start(m, true)}
                 className="rounded-full bg-ink-soft p-2.5 text-white hover:bg-ink disabled:opacity-40"
-                aria-label={`Video call ${m.full_name}`}
+                aria-label={`Video call ${publicDisplayName(m)}`}
                 title="Video"
               >
                 <VideoIcon size={16} />

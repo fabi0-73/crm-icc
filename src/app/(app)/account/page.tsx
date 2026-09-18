@@ -7,12 +7,18 @@ import { ChangePasswordForm } from "@/components/PasswordForms";
 import { DisplayNameForm } from "@/components/DisplayNameForm";
 import { NotificationSettings } from "@/components/NotificationSettings";
 import { ProfilePictureForm } from "@/components/account/ProfilePictureForm";
+import { PublicNameForm } from "@/components/account/PublicNameForm";
+import { publicDisplayName } from "@/lib/display-name";
 
 /** Every role reaches this page — it is the only sign-out and
  *  password-change surface an agent has. */
 export default async function AccountPage() {
   const { user, profile } = await requireProfile();
   const username = emailToUsername(user.email ?? "");
+  const shown = publicDisplayName(profile);
+  // Assistants and agents get a chat-facing name on top of their account
+  // name; admins and managers are always shown by their account name.
+  const hasPublicName = profile.role === "assistant" || profile.role === "agent";
 
   return (
     <div className="h-full overflow-y-auto bg-mist">
@@ -31,8 +37,13 @@ export default async function AccountPage() {
         <div className="rounded-2xl border border-line bg-paper p-4 shadow-xs">
           <div className="mb-3 min-w-0">
             <p className="truncate text-[15px] font-semibold text-ink">
-              {profile.full_name}
+              {shown}
             </p>
+            {shown !== profile.full_name && (
+              <p className="truncate text-[12px] text-muted">
+                Account name: {profile.full_name}
+              </p>
+            )}
             <p className="truncate font-mono text-[13px] text-muted">
               {username}
             </p>
@@ -40,7 +51,7 @@ export default async function AccountPage() {
           </div>
           <ProfilePictureForm
             userId={profile.id}
-            name={profile.full_name}
+            name={shown}
             initialUrl={profile.avatar_url ?? null}
           />
         </div>
@@ -49,10 +60,25 @@ export default async function AccountPage() {
           <h2 className="mb-1 text-[15px] font-semibold text-ink">
             Display name
           </h2>
-          <p className="mb-3 text-[13px] text-muted">
-            Change the name other people see across the app.
-          </p>
-          <DisplayNameForm initialName={profile.full_name} />
+          {hasPublicName ? (
+            <>
+              <p className="mb-3 text-[13px] text-muted">
+                The name people see in chats and calls. Your account name,
+                login and role stay the same.
+              </p>
+              <PublicNameForm
+                fullName={profile.full_name}
+                publicName={profile.public_name ?? null}
+              />
+            </>
+          ) : (
+            <>
+              <p className="mb-3 text-[13px] text-muted">
+                Change the name other people see across the app.
+              </p>
+              <DisplayNameForm initialName={profile.full_name} />
+            </>
+          )}
         </div>
 
         <div className="rounded-2xl border border-line bg-paper p-4 shadow-xs">

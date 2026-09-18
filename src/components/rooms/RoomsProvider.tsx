@@ -84,6 +84,53 @@ export function RoomsProvider({
     );
   }, [supabase]);
 
+  // Delivery receipts: tell the server a message reached this device, so
+  // the sender's tick turns double. One trailing call per room per burst;
+  // deliveredUpTo remembers how far each room has been acknowledged, so the
+  // catch-up below never repeats a call that already landed.
+  const deliveredUpTo = useRef(new Map<string, number>());
+  const deliveredTimers = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
+  const markDelivered = useCallback(
+    (roomId: string, messageAt: string) => {
+      const t = Date.parse(messageAt);
+      if ((deliveredUpTo.current.get(roomId) ?? 0) >= t) return;
+      deliveredUpTo.current.set(roomId, t);
+      const timers = deliveredTimers.current;
+      const pending = timers.get(roomId);
+      if (pending) clearTimeout(pending);
+      timers.set(
+        roomId,
+        setTimeout(() => {
+          timers.delete(roomId);
+          void supabase
+            .rpc("mark_room_delivered", { p_room_id: roomId })
+            .then(({ error }) => {
+              // Forget it so the next message or focus retries.
+              if (error) deliveredUpTo.current.delete(roomId);
+            });
+        }, 400),
+      );
+    },
+    [supabase],
+  );
+
+  useEffect(() => {
+    const timers = deliveredTimers.current;
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  // Catch-up: anything that arrived while this device was offline or the
+  // app was closed shows up as unread in the room list.
+  useEffect(() => {
+    for (const r of rooms) {
+      if (r.unread_count > 0 && r.last_message_at) {
+        markDelivered(r.room_id, r.last_message_at);
+      }
+    }
+  }, [rooms, markDelivered]);
+
   // Live updates from message inserts (RLS-filtered per subscriber).
   useEffect(() => {
     let channel: ReturnType<typeof subscribeToAllMessageInserts> | null = null;
@@ -98,6 +145,11 @@ export function RoomsProvider({
       if (cancelled) return;
       channel = subscribeToAllMessageInserts(supabase, (msg) => {
         if (msg.sender_id === currentUserId) return;
+        // Only rooms this user belongs to: an admin's subscription also sees
+        // rooms they merely oversee, where there is no receipt to give.
+        if (msg.sender_id && roomsRef.current.some((r) => r.room_id === msg.room_id)) {
+          markDelivered(msg.room_id, msg.created_at);
+        }
         // Someone else's message that you are not currently reading:
         // another room, or this room while the tab is hidden/unfocused.
         // System notices ("X joined") stay silent.
@@ -162,21 +214,35 @@ export function RoomsProvider({
       cancelled = true;
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [supabase, currentUserId, refetch]);
+  }, [supabase, currentUserId, refetch, markDelivered]);
 
   // Being added to or removed from a room produces no message the current
   // list would notice, and room_members is not something the message
   // subscription sees. Watch this user's own membership rows and pull the
   // authoritative list when one appears or disappears.
+  //
+  // This user's own delivered stamps land here too, once per incoming
+  // burst. Only a read (on this or another device) changes the badges, so an
+  // UPDATE that leaves last_read_at where it was needs no refetch.
+  const lastReadSeen = useRef(new Map<string, string>());
   useEffect(() => {
     let channel: ReturnType<typeof subscribeToMyMembershipChanges> | null = null;
     let cancelled = false;
     (async () => {
       await ensureRealtimeAuth(supabase);
       if (cancelled) return;
-      channel = subscribeToMyMembershipChanges(supabase, currentUserId, () => {
-        void refetch();
-      });
+      channel = subscribeToMyMembershipChanges(
+        supabase,
+        currentUserId,
+        ({ eventType, row }) => {
+          if (eventType === "UPDATE" && row.room_id) {
+            const readAt = row.last_read_at ?? "";
+            if (lastReadSeen.current.get(row.room_id) === readAt) return;
+            lastReadSeen.current.set(row.room_id, readAt);
+          }
+          void refetch();
+        },
+      );
     })();
     return () => {
       cancelled = true;

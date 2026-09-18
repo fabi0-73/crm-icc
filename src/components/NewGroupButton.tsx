@@ -7,6 +7,7 @@ import { createGroup } from "@/app/actions/rooms";
 import { createClient } from "@/lib/supabase/client";
 import { uploadGroupAvatar } from "@/lib/avatars";
 import { Avatar } from "@/components/Avatar";
+import { publicDisplayName } from "@/lib/display-name";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
 import { PlusIcon } from "@/components/icons";
@@ -24,7 +25,9 @@ export function NewGroupButton({
 }) {
   const { open, openModal, closeModal } = useModal();
   const router = useRouter();
-  const [staff, setStaff] = useState<Pick<Profile, "id" | "full_name" | "role">[]>([]);
+  const [staff, setStaff] = useState<
+    Pick<Profile, "id" | "full_name" | "public_name" | "role">[]
+  >([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -38,7 +41,7 @@ export function NewGroupButton({
     const supabase = createClient();
     void supabase
       .from("profiles")
-      .select("id, full_name, role")
+      .select("id, full_name, public_name, role")
       .eq("is_active", true)
       .in("role", ["admin", "manager", "assistant"])
       .order("full_name")
@@ -189,7 +192,9 @@ export function NewGroupButton({
                       checked={selected.includes(p.id)}
                       onChange={() => toggle(p.id)}
                     />
-                    <span className="flex-1 text-ink">{p.full_name}</span>
+                    <span className="flex-1 text-ink">
+                      {publicDisplayName(p)}
+                    </span>
                     <span className="text-xs capitalize text-muted">
                       {p.role}
                     </span>

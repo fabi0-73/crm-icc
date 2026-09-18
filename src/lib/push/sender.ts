@@ -16,6 +16,7 @@
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import webpush from "web-push";
+import { publicDisplayName } from "@/lib/display-name";
 
 type MessageRow = {
   id: string;
@@ -147,11 +148,19 @@ async function onMessage(
   if (recipients.length === 0) return;
 
   const [{ data: sender }, { data: room }] = await Promise.all([
-    supabase.from("profiles").select("full_name").eq("id", msg.sender_id).maybeSingle(),
+    supabase
+      .from("profiles")
+      .select("full_name, public_name")
+      .eq("id", msg.sender_id)
+      .maybeSingle(),
     supabase.from("rooms").select("name, type").eq("id", msg.room_id).maybeSingle(),
   ]);
 
-  const senderName = (sender as { full_name?: string } | null)?.full_name ?? "Someone";
+  const senderProfile = sender as {
+    full_name: string;
+    public_name: string | null;
+  } | null;
+  const senderName = senderProfile ? publicDisplayName(senderProfile) : "Someone";
   const roomType = (room as { type?: string } | null)?.type;
   const roomName = (room as { name?: string } | null)?.name;
   const isDm = roomType === "dm";

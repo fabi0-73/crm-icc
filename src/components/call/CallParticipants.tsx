@@ -3,11 +3,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { UserMinus, UserPlus, X } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
+import { matchesName, publicDisplayName } from "@/lib/display-name";
 import { Input } from "@/components/uikit/input";
 import { createClient } from "@/lib/supabase/client";
 import { useCall } from "@/components/call/CallProvider";
 
-type Candidate = { id: string; full_name: string; role: string };
+type Candidate = {
+  id: string;
+  full_name: string;
+  public_name: string | null;
+  role: string;
+};
 
 /**
  * Manage who is in the call while it is running.
@@ -44,7 +50,7 @@ export function CallParticipants({ onClose }: { onClose: () => void }) {
       if (ids.length === 0 || cancelled) return;
       const { data: people } = await supabase
         .from("profiles")
-        .select("id, full_name, role")
+        .select("id, full_name, public_name, role")
         .in("id", ids)
         .eq("is_active", true)
         .order("full_name");
@@ -60,7 +66,7 @@ export function CallParticipants({ onClose }: { onClose: () => void }) {
   const canAdd = roster.filter(
     (p) =>
       !inCall.has(p.id) &&
-      (!q || p.full_name.toLowerCase().includes(q)),
+      matchesName(p, q),
   );
 
   async function run(id: string, fn: () => Promise<void>) {
@@ -139,16 +145,16 @@ export function CallParticipants({ onClose }: { onClose: () => void }) {
                   key={p.id}
                   className="flex items-center gap-3 rounded-lg px-2 py-2"
                 >
-                  <Avatar name={p.full_name} size="sm" userId={p.id} />
+                  <Avatar name={publicDisplayName(p)} size="sm" userId={p.id} />
                   <span className="min-w-0 flex-1 truncate text-[14px] text-white/90">
-                    {p.full_name}
+                    {publicDisplayName(p)}
                   </span>
                   <button
                     type="button"
                     disabled={busyId === p.id}
                     onClick={() => void run(p.id, () => addParticipant(p.id))}
                     title="Ring into this call"
-                    aria-label={`Add ${p.full_name} to the call`}
+                    aria-label={`Add ${publicDisplayName(p)} to the call`}
                     className="flex h-8 w-8 items-center justify-center rounded-full text-brand-200 hover:bg-brand-500/25 disabled:opacity-40"
                   >
                     <UserPlus className="size-4" />

@@ -8,6 +8,7 @@ import { KeyboardInsets } from "@/components/mobile/KeyboardInsets";
 import { PushRegistrar } from "@/components/PushRegistrar";
 import { NotificationPrompt } from "@/components/NotificationPrompt";
 import { requireProfile } from "@/lib/auth";
+import { publicDisplayName } from "@/lib/display-name";
 import { sitePath } from "@/lib/site-url";
 import type { MyRoom } from "@/lib/types";
 
@@ -43,7 +44,7 @@ export default async function AppLayout({
     >
       <CallProvider
         userId={profile.id}
-        userName={profile.full_name}
+        userName={publicDisplayName(profile)}
         userRole={profile.role}
       >
         <PresenceProvider userId={profile.id}>

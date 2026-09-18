@@ -17,6 +17,7 @@ import {
 } from "@/components/uikit/sheet";
 import { Modal, useModal } from "@/components/Modal";
 import { Avatar } from "@/components/Avatar";
+import { publicDisplayName } from "@/lib/display-name";
 import { MuteToggle } from "@/components/MuteToggle";
 import { PresenceDot } from "@/components/PresenceDot";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
@@ -37,7 +38,7 @@ import {
 } from "@/app/actions/rooms";
 import type { Profile, RoomMemberRole, RoomMemberView, RoomType } from "@/lib/types";
 
-type Candidate = Pick<Profile, "id" | "full_name" | "role">;
+type Candidate = Pick<Profile, "id" | "full_name" | "public_name" | "role">;
 
 export function GroupDetails({
   roomId,
@@ -362,6 +363,7 @@ function MemberItem({
   onMessage?: () => void;
 }) {
   const online = useIsOnline(member.id);
+  const shownName = publicDisplayName(member);
   const isAdmin = member.room_role === "admin";
   const rowBusy =
     busy === `remove:${member.id}` || busy === `role:${member.id}`;
@@ -369,7 +371,7 @@ function MemberItem({
   return (
     <li className="flex items-center gap-3 rounded-xl px-2.5 py-2.5 hover:bg-mist">
       <span className="relative shrink-0">
-        <Avatar name={member.full_name} size="sm" userId={member.id} />
+        <Avatar name={shownName} size="sm" userId={member.id} />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
@@ -377,7 +379,7 @@ function MemberItem({
       </span>
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1.5 truncate text-sm font-medium text-ink">
-          {member.full_name}
+          {shownName}
           {self && <span className="text-[12px] text-muted">(you)</span>}
           {isAdmin && (
             <span className="inline-flex items-center gap-0.5 rounded-full bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
@@ -417,7 +419,7 @@ function MemberItem({
             onClick={onRemove}
             disabled={rowBusy}
             className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-red-50 hover:text-red-600 disabled:opacity-40 dark:hover:bg-red-950/40 dark:hover:text-red-400"
-            aria-label={`Remove ${member.full_name}`}
+            aria-label={`Remove ${shownName}`}
             title="Remove from group"
           >
             <UserMinus className="size-4" />
@@ -448,7 +450,7 @@ function AddMembersModal({
     const supabase = createClient();
     void supabase
       .from("profiles")
-      .select("id, full_name, role")
+      .select("id, full_name, public_name, role")
       .eq("is_active", true)
       .in("role", ["admin", "manager", "assistant"])
       .order("full_name")
@@ -504,7 +506,7 @@ function AddMembersModal({
                   checked={selected.includes(p.id)}
                   onChange={() => toggle(p.id)}
                 />
-                <span className="flex-1 text-ink">{p.full_name}</span>
+                <span className="flex-1 text-ink">{publicDisplayName(p)}</span>
                 <span className="text-xs capitalize text-muted">{p.role}</span>
               </label>
             </li>

@@ -1,6 +1,7 @@
 "use client";
 
 import { Avatar } from "@/components/Avatar";
+import { publicDisplayName } from "@/lib/display-name";
 import type { RoomMemberView } from "@/lib/types";
 
 /**
@@ -39,14 +40,14 @@ export function MentionPopup({
           }`}
         >
           <Avatar
-            name={m.full_name}
+            name={publicDisplayName(m)}
             size="sm"
             userId={m.id}
             className="!h-7 !w-7 !text-[10px]"
           />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[14px] font-medium text-ink">
-              {m.full_name}
+              {publicDisplayName(m)}
             </span>
             <span className="block text-[11px] capitalize text-muted">
               {m.role}

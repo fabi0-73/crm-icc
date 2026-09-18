@@ -577,10 +577,11 @@ export async function deleteUserAccount(
 
 
 /**
- * Admin renames a staff member (assistant/manager/admin). Updates the
- * profile display name and the auth metadata so it shows everywhere.
- * Agents are renamed from the Agents area (their name also drives the
- * workspace), so this refuses agent targets.
+ * Admin renames any account. Updates the profile name and the auth
+ * metadata so it shows everywhere; for an agent it also renames the agent
+ * record and titles their workspace to match. (Assistants and agents
+ * choose their chat-facing name themselves — see updateMyPublicName —
+ * while the account name stays with the admins.)
  */
 export async function renameUser(
   _prev: ActionState,
@@ -604,9 +605,6 @@ export async function renameUser(
     .select("role")
     .eq("id", userId)
     .maybeSingle<{ role: Role }>();
-  if (target?.role === "agent") {
-    return { error: "Rename agents from the Agents section." };
-  }
 
   const { error } = await service
     .from("profiles")
@@ -617,25 +615,39 @@ export async function renameUser(
     user_metadata: { full_name: fullName },
   });
 
+  if (target?.role === "agent") {
+    // The agent's name also names their workspace room.
+    const { data: agent } = await service
+      .from("agents")
+      .select("id")
+      .eq("user_id", userId)
+      .maybeSingle<{ id: string }>();
+    if (agent) {
+      await service.from("agents").update({ display_name: fullName }).eq("id", agent.id);
+      await service
+        .from("rooms")
+        .update({ name: fullName })
+        .eq("agent_id", agent.id)
+        .eq("type", "agent_workspace");
+    }
+    revalidatePath("/agents");
+  }
+
   revalidatePath("/admin/users");
   return { success: "Name updated." };
 }
 
 /**
- * A user edits their own public display name. For an agent this is the
- * agent's display name (which also titles their workspace); for everyone
- * else it is the profile name. Kept in sync with the auth metadata.
+ * An admin or manager renames their own account. Kept in sync with the
+ * auth metadata. Assistants and agents don't rename the account — they set
+ * a chat-facing name (updateMyPublicName) so admin screens keep the real
+ * one; an admin renames their accounts with renameUser.
  */
 export async function updateMyName(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const { user, profile } = await requireRole([
-    "admin",
-    "manager",
-    "assistant",
-    "agent",
-  ]);
+  const { user } = await requireRole(["admin", "manager"]);
   const fullName = String(formData.get("full_name") ?? "").trim();
   if (!fullName) return { error: "Name cannot be empty." };
 
@@ -654,23 +666,6 @@ export async function updateMyName(
   await service.auth.admin.updateUserById(user.id, {
     user_metadata: { full_name: fullName },
   });
-
-  if (profile.role === "agent") {
-    // The agent's public name also names their workspace room.
-    const { data: agent } = await service
-      .from("agents")
-      .select("id")
-      .eq("user_id", user.id)
-      .maybeSingle<{ id: string }>();
-    if (agent) {
-      await service.from("agents").update({ display_name: fullName }).eq("id", agent.id);
-      await service
-        .from("rooms")
-        .update({ name: fullName })
-        .eq("agent_id", agent.id)
-        .eq("type", "agent_workspace");
-    }
-  }
 
   revalidatePath("/account");
   return { success: "Name updated." };

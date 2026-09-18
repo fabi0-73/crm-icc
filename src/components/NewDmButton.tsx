@@ -8,12 +8,13 @@ import { Modal, useModal } from "@/components/Modal";
 import { openDm } from "@/app/actions/rooms";
 import { createClient } from "@/lib/supabase/client";
 import { Avatar } from "@/components/Avatar";
+import { matchesName, publicDisplayName } from "@/lib/display-name";
 import { PresenceDot } from "@/components/PresenceDot";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
 import { ComposeIcon } from "@/components/icons";
 import type { Profile } from "@/lib/types";
 
-type StaffRow = Pick<Profile, "id" | "full_name" | "role">;
+type StaffRow = Pick<Profile, "id" | "full_name" | "public_name" | "role">;
 
 function PersonRow({
   person,
@@ -33,14 +34,14 @@ function PersonRow({
       className="flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left hover:bg-mist disabled:opacity-50"
     >
       <span className="relative shrink-0">
-        <Avatar name={person.full_name} size="sm" userId={person.id} />
+        <Avatar name={publicDisplayName(person)} size="sm" userId={person.id} />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
         />
       </span>
       <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
-        {person.full_name}
+        {publicDisplayName(person)}
       </span>
       <span className="text-xs capitalize text-muted">{person.role}</span>
     </button>
@@ -69,9 +70,7 @@ export function NewDmButton({
     const q = query.trim().toLowerCase();
     if (!q) return staff;
     return staff.filter(
-      (p) =>
-        p.full_name.toLowerCase().includes(q) ||
-        p.role.toLowerCase().includes(q),
+      (p) => matchesName(p, q) || p.role.toLowerCase().includes(q),
     );
   }, [staff, query]);
 
@@ -96,7 +95,7 @@ export function NewDmButton({
             : ["admin", "manager", "assistant"];
       const { data } = await supabase
         .from("profiles")
-        .select("id, full_name, role")
+        .select("id, full_name, public_name, role")
         .eq("is_active", true)
         .in("role", allowed)
         .neq("id", user.id)

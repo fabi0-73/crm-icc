@@ -6,6 +6,7 @@ import { Hash, MessageSquareText, Search, UserRound } from "lucide-react";
 import { Modal } from "@/components/Modal";
 import { Input } from "@/components/uikit/input";
 import { Avatar } from "@/components/Avatar";
+import { publicDisplayName } from "@/lib/display-name";
 import { createClient } from "@/lib/supabase/client";
 import { useRooms } from "@/components/rooms/RoomsProvider";
 import { openDm } from "@/app/actions/rooms";
@@ -19,7 +20,7 @@ const MAX_MESSAGES = 20;
 const MAX_PEOPLE = 8;
 const MAX_ROOMS = 8;
 
-type PersonHit = Pick<Profile, "id" | "full_name" | "role">;
+type PersonHit = Pick<Profile, "id" | "full_name" | "public_name" | "role">;
 
 type MessageHit = {
   id: string;
@@ -133,14 +134,17 @@ export function GlobalSearch() {
               ? ["assistant"]
               : ["admin", "manager", "assistant"];
 
+        // Either name matches. Quoted so commas or brackets in what was
+        // typed can't break PostgREST's or() syntax.
+        const pattern = `"%${q.replace(/["\\]/g, "\\$&")}%"`;
         const [peopleRes, msgRes] = await Promise.all([
           supabase
             .from("profiles")
-            .select("id, full_name, role")
+            .select("id, full_name, public_name, role")
             .eq("is_active", true)
             .in("role", allowed)
             .neq("id", user.id)
-            .ilike("full_name", `%${q}%`)
+            .or(`full_name.ilike.${pattern},public_name.ilike.${pattern}`)
             .order("full_name")
             .limit(MAX_PEOPLE),
           supabase
@@ -170,8 +174,17 @@ export function GlobalSearch() {
         const roomIds = [...new Set(rawMsgs.map((m) => m.room_id))];
         const [sendersRes, roomsRes] = await Promise.all([
           senderIds.length
-            ? supabase.from("profiles").select("id, full_name").in("id", senderIds)
-            : Promise.resolve({ data: [] as { id: string; full_name: string }[] }),
+            ? supabase
+                .from("profiles")
+                .select("id, full_name, public_name")
+                .in("id", senderIds)
+            : Promise.resolve({
+                data: [] as {
+                  id: string;
+                  full_name: string;
+                  public_name: string | null;
+                }[],
+              }),
           roomIds.length
             ? supabase.from("rooms").select("id, name, type").in("id", roomIds)
             : Promise.resolve({ data: [] as { id: string; name: string; type: string }[] }),
@@ -179,10 +192,13 @@ export function GlobalSearch() {
         if (runId.current !== mine) return;
 
         const nameById = new Map(
-          ((sendersRes.data ?? []) as { id: string; full_name: string }[]).map((p) => [
-            p.id,
-            p.full_name,
-          ]),
+          (
+            (sendersRes.data ?? []) as {
+              id: string;
+              full_name: string;
+              public_name: string | null;
+            }[]
+          ).map((p) => [p.id, publicDisplayName(p)]),
         );
         const roomById = new Map(
           ((roomsRes.data ?? []) as { id: string; name: string; type: string }[]).map((r) => [
@@ -323,9 +339,9 @@ export function GlobalSearch() {
                     onClick={() => void openPerson(p.id)}
                     className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-mist"
                   >
-                    <Avatar name={p.full_name} size="sm" userId={p.id} />
+                    <Avatar name={publicDisplayName(p)} size="sm" userId={p.id} />
                     <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">
-                      {p.full_name}
+                      {publicDisplayName(p)}
                     </span>
                     <span className="shrink-0 text-[11px] capitalize text-muted">
                       {p.role}

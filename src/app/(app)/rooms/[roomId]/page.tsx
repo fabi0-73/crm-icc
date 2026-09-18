@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { publicDisplayName } from "@/lib/display-name";
 import { requireProfile } from "@/lib/auth";
 import { ChatRoom } from "@/components/ChatRoom";
 import { JoinRoomPrompt } from "@/components/JoinRoomPrompt";
@@ -68,7 +69,7 @@ export default async function RoomPage({
 
   const { data: memberRows } = await supabase
     .from("room_members")
-    .select("user_id, role, last_read_at")
+    .select("user_id, role, last_read_at, last_delivered_at")
     .eq("room_id", roomId);
 
   const roleById = new Map<string, RoomMemberRole>(
@@ -82,10 +83,16 @@ export default async function RoomPage({
       (m as { last_read_at: string | null }).last_read_at ?? null,
     ]),
   );
+  const deliveredAtById = new Map<string, string | null>(
+    (memberRows ?? []).map((m) => [
+      m.user_id,
+      (m as { last_delivered_at: string | null }).last_delivered_at ?? null,
+    ]),
+  );
   const memberIds = [...roleById.keys()];
   const { data: memberProfiles } = await supabase
     .from("profiles")
-    .select("id, full_name, role, is_active, avatar_url")
+    .select("id, full_name, public_name, role, is_active, avatar_url")
     .in(
       "id",
       memberIds.length ? memberIds : ["00000000-0000-0000-0000-000000000000"],
@@ -104,7 +111,9 @@ export default async function RoomPage({
     is_active: p.is_active,
     room_role: roleById.get(p.id) ?? "member",
     last_read_at: readAtById.get(p.id) ?? null,
+    last_delivered_at: deliveredAtById.get(p.id) ?? null,
     avatar_url: (p as { avatar_url: string | null }).avatar_url ?? null,
+    public_name: (p as { public_name: string | null }).public_name ?? null,
   }));
   const dmOther =
     room.type === "dm"
@@ -118,7 +127,7 @@ export default async function RoomPage({
       // reused instance would interleave the previous room's messages.
       key={room.id}
       roomId={room.id}
-      roomName={dmOther ? dmOther.full_name : room.name}
+      roomName={dmOther ? publicDisplayName(dmOther) : room.name}
       roomType={room.type}
       roomAvatarUrl={room.avatar_url}
       roomBackgroundUrl={room.type === "group" ? room.background_url : null}

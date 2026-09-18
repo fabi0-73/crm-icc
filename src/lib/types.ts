@@ -8,6 +8,8 @@ export type Profile = {
   created_at: string;
   /** Profile picture (public URL); null until the person uploads one. */
   avatar_url?: string | null;
+  /** Chat-facing alias (assistants and agents); see lib/display-name. */
+  public_name?: string | null;
 };
 
 export type Agent = {
@@ -50,6 +52,7 @@ export type RoomMember = {
   user_id: string;
   can_view_history_from: string | null;
   last_read_at: string;
+  last_delivered_at: string;
   added_at: string;
   added_by: string;
   role: RoomMemberRole;
@@ -66,8 +69,12 @@ export type RoomMemberView = {
   room_role: RoomMemberRole;
   /** When they last read the room — drives per-message seen state. */
   last_read_at?: string | null;
+  /** When a message in this room last reached one of their devices. */
+  last_delivered_at?: string | null;
   /** Profile picture (public URL); null until the person uploads one. */
   avatar_url?: string | null;
+  /** Chat-facing alias; show publicDisplayName(member), not full_name. */
+  public_name?: string | null;
 };
 
 export type MessageKind = "text" | "file" | "system";

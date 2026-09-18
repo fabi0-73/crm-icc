@@ -26,6 +26,7 @@ import {
   ensureRealtimeAuth,
   fetchMessagesBefore,
   fetchMessagesSince,
+  fetchPinnedMessages,
   fetchRoomMembers,
   sendTyping,
   subscribeToRoomMembers,
@@ -48,7 +49,9 @@ import {
 import { Avatar } from "@/components/Avatar";
 import { MentionPopup } from "@/components/MentionPopup";
 import { MessageActions } from "@/components/MessageActions";
-import { MessageStatus, type DeliveryStatus } from "@/components/MessageStatus";
+import { MessageStatus } from "@/components/MessageStatus";
+import { deliveryStatus } from "@/lib/receipts";
+import { matchesName, publicDisplayName } from "@/lib/display-name";
 import { MuteToggle } from "@/components/MuteToggle";
 import {
   StagedAttachments,
@@ -202,6 +205,8 @@ export function ChatRoom({
   const searchParams = useSearchParams();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [members, setMembers] = useState<RoomMemberView[]>(initialMembers);
+  const membersRef = useRef(members);
+  membersRef.current = members;
   const [myRole, setMyRole] = useState<RoomMemberRole>(myRoomRole);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
@@ -236,6 +241,10 @@ export function ChatRoom({
   /** Messages that arrived while the reader was scrolled away from the
    *  bottom, so the jump button can say how many they haven't seen. */
   const [unseenBelow, setUnseenBelow] = useState(0);
+  // Pins outside the loaded window (see pinnedMessages) and whether the
+  // banner is showing all of them.
+  const [remotePins, setRemotePins] = useState<Message[]>([]);
+  const [showAllPins, setShowAllPins] = useState(false);
 
   const streamRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -288,14 +297,39 @@ export function ChatRoom({
     }
   }, [supabase, roomId, currentUserId, roomType, router, readOnly]);
 
+  // DMs subscribe too: their membership never changes, but each side's
+  // read and delivered stamps do, and those drive the ticks.
   useEffect(() => {
-    if (roomType === "dm") return; // dm membership is fixed
     let channel: ReturnType<typeof subscribeToRoomMembers> | null = null;
     let cancelled = false;
     (async () => {
       await ensureRealtimeAuth(supabase);
       if (cancelled) return;
-      channel = subscribeToRoomMembers(supabase, roomId, () => {
+      channel = subscribeToRoomMembers(supabase, roomId, ({ eventType, row }) => {
+        // Reads, deliveries and role changes arrive as UPDATEs carrying the
+        // whole row: patch that member in place. Every message in the room
+        // produces one per recipient, so re-reading the roster each time
+        // would be a query storm in a busy group.
+        if (eventType === "UPDATE" && row.user_id) {
+          const known = membersRef.current.some((m) => m.id === row.user_id);
+          if (known) {
+            setMembers((prev) =>
+              prev.map((m) =>
+                m.id === row.user_id
+                  ? {
+                      ...m,
+                      room_role: row.role ?? m.room_role,
+                      last_read_at: row.last_read_at ?? m.last_read_at,
+                      last_delivered_at:
+                        row.last_delivered_at ?? m.last_delivered_at,
+                    }
+                  : m,
+              ),
+            );
+            if (row.user_id === currentUserId && row.role) setMyRole(row.role);
+            return;
+          }
+        }
         void refreshMembers();
       });
     })();
@@ -303,7 +337,7 @@ export function ChatRoom({
       cancelled = true;
       if (channel) void supabase.removeChannel(channel);
     };
-  }, [supabase, roomId, roomType, refreshMembers]);
+  }, [supabase, roomId, currentUserId, refreshMembers]);
 
   useEffect(() => setBackgroundUrl(roomBackgroundUrl), [roomBackgroundUrl]);
 
@@ -341,7 +375,16 @@ export function ChatRoom({
 
   const memberMap = useMemo(() => {
     const m = new Map<string, string>();
-    members.forEach((p) => m.set(p.id, p.full_name));
+    members.forEach((p) => m.set(p.id, publicDisplayName(p)));
+    return m;
+  }, [members]);
+  // Every name a member can be @mentioned by: mentions typed before someone
+  // set a public name use their account name, and should still highlight.
+  const mentionMap = useMemo(() => {
+    const m = new Map<string, string[]>();
+    members.forEach((p) =>
+      m.set(p.id, Array.from(new Set([publicDisplayName(p), p.full_name]))),
+    );
     return m;
   }, [members]);
 
@@ -462,6 +505,11 @@ export function ChatRoom({
   // (re)joins, it pulls what it may have missed before marking the room
   // read. The same routine self-heals a tab whose socket dropped.
   const reconcile = useCallback(async () => {
+    // Pins made while this tab was away arrive with no message insert, so
+    // the pin list is re-read on the same schedule.
+    void fetchPinnedMessages(supabase, roomId)
+      .then(setRemotePins)
+      .catch(() => {});
     try {
       // Page forward until caught up: a snapshot from a long-idle tab can
       // be more than one fetch behind.
@@ -682,7 +730,7 @@ export function ChatRoom({
     const q = mention.query.toLowerCase();
     return members
       .filter((m) => m.id !== currentUserId)
-      .filter((m) => m.full_name.toLowerCase().includes(q))
+      .filter((m) => matchesName(m, q))
       .slice(0, 6);
   }, [mention, members, currentUserId]);
 
@@ -694,9 +742,10 @@ export function ChatRoom({
     if (!mention) return;
     const before = body.slice(0, mention.start);
     const after = body.slice(mention.start + 1 + mention.query.length);
-    const token = `@${member.full_name} `;
+    const name = publicDisplayName(member);
+    const token = `@${name} `;
     const next = before + token + after;
-    recordedMentionsRef.current.set(member.id, member.full_name);
+    recordedMentionsRef.current.set(member.id, name);
     setBody(next);
     setMention(null);
     const caret = (before + token).length;
@@ -1008,15 +1057,18 @@ export function ChatRoom({
     if (replyTo?.id === msg.id) setReplyTo(null);
   }
 
-  // Pinned messages among those loaded, newest pin first. Rides the same
-  // realtime UPDATE stream as edits, so a pin appears for everyone at once.
-  const pinnedMessages = useMemo(
-    () =>
-      messages
-        .filter((m) => m.pinned_at && !m.deleted_at)
-        .sort((a, b) => (b.pinned_at ?? "").localeCompare(a.pinned_at ?? "")),
-    [messages],
-  );
+  // Pinned messages, newest pin first: every pin in the room, not just the
+  // ones in the loaded window. The loaded copy of a message wins over the
+  // fetched one, so pins and unpins riding the realtime UPDATE stream (the
+  // same path as edits) show for everyone at once.
+  const pinnedMessages = useMemo(() => {
+    const byId = new Map<string, Message>();
+    remotePins.forEach((m) => byId.set(m.id, m));
+    messages.forEach((m) => byId.set(m.id, m));
+    return [...byId.values()]
+      .filter((m) => m.pinned_at && !m.deleted_at)
+      .sort((a, b) => (b.pinned_at ?? "").localeCompare(a.pinned_at ?? ""));
+  }, [messages, remotePins]);
 
   // Arriving from a search result: ?m=<id> asks us to reveal that message.
   // It may be outside the loaded window, in which case jumpToMessage says so
@@ -1162,8 +1214,8 @@ export function ChatRoom({
         <div className="shrink-0 border-b border-amber-200/70 bg-amber-50/80 dark:border-amber-900/50 dark:bg-amber-950/40">
           <div className="flex items-start gap-2 px-3 py-2">
             <Pin className="mt-0.5 size-[15px] shrink-0 text-amber-700 dark:text-amber-300" />
-            <ul className="min-w-0 flex-1 space-y-1">
-              {pinnedMessages.slice(0, 3).map((m) => (
+            <ul className="max-h-48 min-w-0 flex-1 space-y-1 overflow-y-auto">
+              {(showAllPins ? pinnedMessages : pinnedMessages.slice(0, 3)).map((m) => (
                 <li key={m.id} className="flex items-center gap-2">
                   <button
                     type="button"
@@ -1191,8 +1243,16 @@ export function ChatRoom({
                 </li>
               ))}
               {pinnedMessages.length > 3 && (
-                <li className="text-[11px] text-amber-800 dark:text-amber-300">
-                  +{pinnedMessages.length - 3} more pinned
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setShowAllPins((v) => !v)}
+                    className="text-[11px] font-medium text-amber-800 hover:underline dark:text-amber-300"
+                  >
+                    {showAllPins
+                      ? "Show fewer"
+                      : `+${pinnedMessages.length - 3} more pinned`}
+                  </button>
                 </li>
               )}
             </ul>
@@ -1288,7 +1348,7 @@ export function ChatRoom({
                                 }
                                 repliedName={repliedName(msg, msgById, memberMap)}
                                 mentionsMe={mentionsUser(msg, currentUserId)}
-                                memberMap={memberMap}
+                                mentionMap={mentionMap}
                                 onJumpToReply={
                                   msg.reply_to
                                     ? () => jumpToMessage(msg.reply_to!)
@@ -1325,7 +1385,7 @@ export function ChatRoom({
                         {!last.deleted_at && (
                           <MessageStatus
                             status={deliveryStatus(
-                              last,
+                              last.created_at,
                               members,
                               currentUserId,
                             )}
@@ -1380,7 +1440,7 @@ export function ChatRoom({
                               }
                               repliedName={repliedName(msg, msgById, memberMap)}
                               mentionsMe={mentionsUser(msg, currentUserId)}
-                              memberMap={memberMap}
+                              mentionMap={mentionMap}
                               onJumpToReply={
                                 msg.reply_to
                                   ? () => jumpToMessage(msg.reply_to!)
@@ -1726,26 +1786,6 @@ function mentionsUser(msg: Message, userId: string): boolean {
   return Array.isArray(ids) && ids.includes(userId);
 }
 
-/**
- * #9 delivery state for one of the current user's own messages, derived
- * from the live roster. No other member → "sent"; otherwise "seen" once
- * everyone else has read past it (their last_read_at ≥ created_at), else
- * "delivered".
- */
-function deliveryStatus(
-  msg: Message,
-  members: RoomMemberView[],
-  currentUserId: string,
-): DeliveryStatus {
-  const others = members.filter((m) => m.id !== currentUserId);
-  if (others.length === 0) return "sent";
-  const created = new Date(msg.created_at).getTime();
-  const allSeen = others.every(
-    (m) => m.last_read_at != null && new Date(m.last_read_at).getTime() >= created,
-  );
-  return allSeen ? "seen" : "delivered";
-}
-
 /** Display name of the author of the message `msg` replies to. */
 function repliedName(
   msg: Message,
@@ -1769,11 +1809,6 @@ function messageSnippet(msg: Message): string {
 }
 
 /**
- * Render a message body with any @mentions highlighted. Mentions are the
- * literal "@Full Name" strings whose ids are in metadata.mentions; longest
- * names match first so "@Anna Maria" wins over "@Anna".
- */
-/**
  * Message body → React nodes: light formatting (**bold**, *italic*,
  * __underline__, bullet and numbered lists), @mention highlighting and
  * clickable links. The parsing lives in lib/chat/rich-text so this component
@@ -1782,15 +1817,18 @@ function messageSnippet(msg: Message): string {
 function renderBody(
   body: string,
   msg: Message,
-  memberMap: Map<string, string> | undefined,
+  mentionMap: Map<string, string[]> | undefined,
   mine: boolean,
 ): React.ReactNode {
+  // Mentions are the literal "@Name" strings of the ids listed in
+  // metadata.mentions — either of a member's names — and the renderer
+  // matches longest first, so "@Anna Maria" wins over "@Anna".
   const ids = (msg.metadata as { mentions?: unknown } | null)?.mentions;
   const mentionNames =
-    memberMap && Array.isArray(ids)
-      ? ids
-          .map((id) => (typeof id === "string" ? memberMap.get(id) : undefined))
-          .filter((n): n is string => Boolean(n))
+    mentionMap && Array.isArray(ids)
+      ? ids.flatMap((id) =>
+          typeof id === "string" ? (mentionMap.get(id) ?? []) : [],
+        )
       : [];
   return renderRichText(body, { mentionNames, mine });
 }
@@ -1874,7 +1912,7 @@ function Bubble({
   repliedMsg = null,
   repliedName: repliedAuthor = "Message",
   mentionsMe = false,
-  memberMap,
+  mentionMap,
   onJumpToReply,
 }: {
   msg: Message;
@@ -1885,7 +1923,7 @@ function Bubble({
   repliedMsg?: Message | null;
   repliedName?: string;
   mentionsMe?: boolean;
-  memberMap?: Map<string, string>;
+  mentionMap?: Map<string, string[]>;
   onJumpToReply?: () => void;
 }) {
   // Soft-deleted messages collapse to a muted tombstone — no body,
@@ -1979,7 +2017,7 @@ function Bubble({
   if (attachments.length > 0) {
     const captionBlock = caption ? (
       <p className="mt-1 whitespace-pre-wrap break-words px-1 text-[14px] text-ink">
-        {renderBody(caption, msg, memberMap, false)}
+        {renderBody(caption, msg, mentionMap, false)}
         {edited}
         {pinMark}
       </p>
@@ -2041,7 +2079,7 @@ function Bubble({
       {replyQuote}
       <div className={`px-3.5 py-2 ${shape} ${surface}`}>
         <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
-          {renderBody(msg.body, msg, memberMap, mine)}
+          {renderBody(msg.body, msg, mentionMap, mine)}
           {edited}
           {pinMark}
         </p>
@@ -2215,14 +2253,15 @@ function MemberRow({
   member,
   self,
 }: {
-  member: Pick<RoomMemberView, "id" | "full_name" | "role">;
+  member: Pick<RoomMemberView, "id" | "full_name" | "public_name" | "role">;
   self?: boolean;
 }) {
   const online = useIsOnline(member.id);
+  const name = publicDisplayName(member);
   return (
     <>
       <span className="relative shrink-0">
-        <Avatar name={member.full_name} size="sm" userId={member.id} />
+        <Avatar name={name} size="sm" userId={member.id} />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
@@ -2230,7 +2269,7 @@ function MemberRow({
       </span>
       <div className="min-w-0">
         <p className="truncate text-sm font-medium text-ink">
-          {member.full_name}
+          {name}
           {self && <span className="ml-1.5 text-[12px] text-muted">(you)</span>}
         </p>
         <p className="text-xs capitalize text-muted">{member.role}</p>

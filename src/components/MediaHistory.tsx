@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileText, Image as ImageIcon, Paperclip, Search } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Avatar } from "@/components/Avatar";
+import { publicDisplayName } from "@/lib/display-name";
 import { Input } from "@/components/uikit/input";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import {
@@ -77,7 +78,7 @@ export function MediaHistory({
   const attempted = useRef<Set<string>>(new Set());
 
   const nameById = useMemo(
-    () => new Map(members.map((m) => [m.id, m.full_name])),
+    () => new Map(members.map((m) => [m.id, publicDisplayName(m)])),
     [members],
   );
 

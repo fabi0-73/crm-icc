@@ -16,7 +16,7 @@ export const getCurrentProfile = cache(async () => {
   if (!user) return null;
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, full_name, role, is_active, created_at, avatar_url")
+    .select("id, full_name, role, is_active, created_at, avatar_url, public_name")
     .eq("id", user.id)
     .maybeSingle();
   if (!profile || !profile.is_active) return null;

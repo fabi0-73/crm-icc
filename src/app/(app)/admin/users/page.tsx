@@ -35,7 +35,7 @@ export default async function UsersPage() {
   const [{ data: users, error }, usernames] = await Promise.all([
     supabase
       .from("profiles")
-      .select("id, full_name, role, is_active, created_at")
+      .select("id, full_name, public_name, role, is_active, created_at")
       .order("full_name"),
     loadUsernames(),
   ]);
@@ -58,7 +58,15 @@ export default async function UsersPage() {
         <TBody>
           {(users ?? []).map((u) => (
             <tr key={u.id}>
-              <Td className="font-medium text-ink">{u.full_name}</Td>
+              <Td className="font-medium text-ink">
+                {u.full_name}
+                {/* The chat-facing name an assistant or agent picked. */}
+                {u.public_name?.trim() && u.public_name.trim() !== u.full_name && (
+                  <span className="block text-xs font-normal text-muted">
+                    Shows as {u.public_name.trim()}
+                  </span>
+                )}
+              </Td>
               <Td className="font-mono text-xs text-muted">
                 {usernames.get(u.id) ?? "—"}
               </Td>
@@ -85,9 +93,7 @@ export default async function UsersPage() {
                     ) : (
                       <>
                         <ResetPasswordButton userId={u.id} name={u.full_name} />
-                        {u.role !== "agent" && (
-                          <RenameUserButton userId={u.id} name={u.full_name} />
-                        )}
+                        <RenameUserButton userId={u.id} name={u.full_name} />
                       </>
                     )}
                     {/* Agent accounts are archived from the Agents page —

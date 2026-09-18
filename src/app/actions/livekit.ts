@@ -2,6 +2,7 @@
 
 import { AccessToken, RoomServiceClient } from "livekit-server-sdk";
 import { requireProfile, requireRole } from "@/lib/auth";
+import { publicDisplayName } from "@/lib/display-name";
 import { createServiceClient } from "@/lib/supabase/server";
 
 /**
@@ -74,7 +75,7 @@ export async function createCallToken(
 
     const at = new AccessToken(apiKey, apiSecret, {
       identity: user.id,
-      name: profile.full_name,
+      name: publicDisplayName(profile),
       // Comfortably longer than any call, short enough to not linger.
       ttl: "4h",
     });

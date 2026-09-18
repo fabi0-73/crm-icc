@@ -15,6 +15,7 @@ import { signOut } from "@/app/actions/auth";
 import { useRooms } from "@/components/rooms/RoomsProvider";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
 import { Avatar } from "@/components/Avatar";
+import { publicDisplayName } from "@/lib/display-name";
 import { PresenceDot } from "@/components/PresenceDot";
 import {
   Drawer,
@@ -140,7 +141,7 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
 
           <TabButton active={youOpen} label="You" onClick={() => setYouOpen(true)}>
             <Avatar
-              name={profile.full_name}
+              name={publicDisplayName(profile)}
               size="sm"
               userId={profile.id}
               className="!h-6 !w-6 !text-[9px]"
@@ -162,7 +163,7 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
               className="-mx-2 flex items-center gap-3 rounded-2xl px-2 py-3 active:bg-mist"
             >
               <span className="relative shrink-0">
-                <Avatar name={profile.full_name} userId={profile.id} />
+                <Avatar name={publicDisplayName(profile)} userId={profile.id} />
                 <PresenceDot
                   online={selfOnline}
                   className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
@@ -170,7 +171,7 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[15px] font-semibold text-ink">
-                  {profile.full_name}
+                  {publicDisplayName(profile)}
                 </p>
                 <p className="text-[13px] text-muted">
                   Account &amp; password

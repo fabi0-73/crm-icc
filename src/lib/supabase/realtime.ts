@@ -1,5 +1,10 @@
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
-import type { Message, RoomMemberRole, RoomMemberView } from "@/lib/types";
+import type {
+  Message,
+  RoomMember,
+  RoomMemberRole,
+  RoomMemberView,
+} from "@/lib/types";
 
 type MessageHandler = (message: Message) => void;
 
@@ -67,17 +72,37 @@ export function sendTyping(channel: RealtimeChannel, userId: string) {
   });
 }
 
+/** One room_members change as realtime delivers it. `row` is the new row
+ *  for INSERT/UPDATE; for DELETE it carries only the key columns. */
+export type MembershipChange = {
+  eventType: "INSERT" | "UPDATE" | "DELETE";
+  row: Partial<RoomMember>;
+};
+
+function toMembershipChange(payload: {
+  eventType: string;
+  new: unknown;
+  old: unknown;
+}): MembershipChange {
+  const eventType = payload.eventType as MembershipChange["eventType"];
+  const row = (eventType === "DELETE" ? payload.old : payload.new) as
+    | Partial<RoomMember>
+    | null;
+  return { eventType, row: row ?? {} };
+}
+
 /**
  * Watch the membership of one room. Fires on INSERT/UPDATE/DELETE of
  * room_members for this room so the roster (and each viewer's own
- * standing) updates live — someone added, removed, promoted, or leaving
- * lands without a refresh. The callback just says "something changed";
- * the caller re-reads the authoritative roster.
+ * standing) updates live — someone added, removed, promoted, leaving, or
+ * reading/receiving messages lands without a refresh. UPDATEs carry the
+ * whole row, so the caller can patch read/delivered state in place instead
+ * of re-reading the roster for every tick.
  */
 export function subscribeToRoomMembers(
   supabase: SupabaseClient,
   roomId: string,
-  onChange: () => void,
+  onChange: (change: MembershipChange) => void,
 ): RealtimeChannel {
   return supabase
     .channel(`room_members:${roomId}`)
@@ -89,7 +114,7 @@ export function subscribeToRoomMembers(
         table: "room_members",
         filter: `room_id=eq.${roomId}`,
       },
-      () => onChange(),
+      (payload) => onChange(toMembershipChange(payload)),
     )
     .subscribe();
 }
@@ -103,7 +128,7 @@ export function subscribeToRoomMembers(
 export function subscribeToMyMembershipChanges(
   supabase: SupabaseClient,
   userId: string,
-  onChange: () => void,
+  onChange: (change: MembershipChange) => void,
 ): RealtimeChannel {
   return supabase
     .channel(`my_memberships:${userId}`)
@@ -115,7 +140,7 @@ export function subscribeToMyMembershipChanges(
         table: "room_members",
         filter: `user_id=eq.${userId}`,
       },
-      () => onChange(),
+      (payload) => onChange(toMembershipChange(payload)),
     )
     .subscribe();
 }
@@ -203,7 +228,7 @@ export async function fetchRoomMembers(
   const { data, error } = await supabase
     .from("room_members")
     .select(
-      "role, last_read_at, profiles!inner(id, full_name, role, is_active, avatar_url)",
+      "role, last_read_at, last_delivered_at, profiles!inner(id, full_name, public_name, role, is_active, avatar_url)",
     )
     .eq("room_id", roomId);
   if (error) throw error;
@@ -211,9 +236,11 @@ export async function fetchRoomMembers(
   type Row = {
     role: RoomMemberRole;
     last_read_at: string | null;
+    last_delivered_at: string | null;
     profiles: {
       id: string;
       full_name: string;
+      public_name: string | null;
       role: RoomMemberView["role"];
       is_active: boolean | null;
       avatar_url: string | null;
@@ -231,8 +258,32 @@ export async function fetchRoomMembers(
       is_active: r.profiles.is_active,
       room_role: r.role,
       last_read_at: r.last_read_at,
+      last_delivered_at: r.last_delivered_at,
       avatar_url: r.profiles.avatar_url,
+      public_name: r.profiles.public_name,
     }));
+}
+
+/**
+ * Every pinned, undeleted message in a room, newest pin first — the pinned
+ * banner needs pins older than the loaded window too. An ordinary query on
+ * purpose: messages_select still applies each member's history cutoff, so
+ * a pin from before someone joined stays hidden from them.
+ */
+export async function fetchPinnedMessages(
+  supabase: SupabaseClient,
+  roomId: string,
+): Promise<Message[]> {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("*")
+    .eq("room_id", roomId)
+    .not("pinned_at", "is", null)
+    .is("deleted_at", null)
+    .order("pinned_at", { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return (data ?? []) as Message[];
 }
 
 /** Older page for "load earlier messages" (exclusive of `before`). */
