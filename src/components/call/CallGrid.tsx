@@ -1,36 +1,55 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { LayoutGrid } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LayoutGrid, MonitorUp } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { useCall, type GroupParticipant } from "@/components/call/CallProvider";
 import { MicOffIcon } from "@/components/icons";
 
 const SELF_FOCUS = "__self__";
+/** Focus value for the wall of every shared screen. */
+const SCREENS = "__screens__";
 
 /**
  * GROUP CALLS: a responsive grid of remote participant tiles plus the local
- * self-view. A screen share someone starts opens in a large focus stage by
- * itself (text is unreadable in a grid tile); a filmstrip + Grid control
- * switch views without stopping the share.
+ * self-view. Any number of people may share their screens at once:
+ * - the first share opens in a large focus stage by itself (text is
+ *   unreadable in a grid tile) — later ones never pull the viewer away;
+ * - with two or more, "All screens" puts them side by side;
+ * - clicking any shared screen enlarges it; a filmstrip + Grid control switch
+ *   views without stopping anyone's share.
  */
 export function CallGrid() {
   const { groupPeers, localStream, camOff, sharing, call, muted, setGroupLayout } =
     useCall();
   const [focusId, setFocusId] = useState<string | null>(null);
 
-  // Open a share as soon as it starts — once per share, so choosing "Grid"
-  // sticks, and never over a share the viewer is already watching.
+  // Shared screens first — in the grid and the filmstrip — so a share is
+  // never scrolled out of sight; otherwise the call's own order.
+  const ordered = useMemo(
+    () => [
+      ...groupPeers.filter((p) => p.sharing),
+      ...groupPeers.filter((p) => !p.sharing),
+    ],
+    [groupPeers],
+  );
+  const sharers = useMemo(() => ordered.filter((p) => p.sharing), [ordered]);
+
+  // Open a share by itself only when screen sharing BEGINS (none was on).
+  // With concurrent shares, a viewer who is watching one share — or chose
+  // the grid — is not pulled away each time someone else starts.
   const sharingSeen = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const now = new Set(groupPeers.filter((p) => p.sharing).map((p) => p.id));
+    const now = new Set(sharers.map((p) => p.id));
+    const hadAny = sharingSeen.current.size > 0;
     const started = [...now].find((id) => !sharingSeen.current.has(id));
     sharingSeen.current = now;
-    if (started) setFocusId((current) => current ?? started);
-  }, [groupPeers]);
+    if (started && !hadAny) setFocusId((current) => current ?? started);
+  }, [sharers]);
 
-  // Tiles scrolled out of view (a 40-person grid, the filmstrip) fetch no
-  // video at all. Unknown counts as visible, so nothing blinks out on mount.
+  // Tiles scrolled out of view (a 40-person grid, the filmstrip, a big screen
+  // wall) fetch no video at all. Unknown counts as visible, so nothing blinks
+  // out on mount.
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   const reportVisibility = useCallback((id: string, visible: boolean) => {
     setHidden((prev) => {
@@ -46,38 +65,95 @@ export function CallGrid() {
   useEffect(() => {
     const hiddenIds = [...hidden];
     setGroupLayout(
-      focusId
-        ? {
-            layout: "focus",
-            focusId: focusId === SELF_FOCUS ? null : focusId,
-            hidden: hiddenIds,
-          }
-        : { layout: "grid", hidden: hiddenIds },
+      focusId === SCREENS
+        ? { layout: "screens", hidden: hiddenIds }
+        : focusId
+          ? {
+              layout: "focus",
+              focusId: focusId === SELF_FOCUS ? null : focusId,
+              hidden: hiddenIds,
+            }
+          : { layout: "grid", hidden: hiddenIds },
     );
   }, [focusId, hidden, setGroupLayout]);
 
-  const focusedPeer =
-    focusId && focusId !== SELF_FOCUS
-      ? (groupPeers.find((p) => p.id === focusId) ?? null)
-      : null;
-  const focusingSelf = focusId === SELF_FOCUS;
-
-  // The focus stage is for screen shares: back to the grid when it ends.
+  // Views exist for shares: when the one on screen ends, move to another
+  // share that is still running, else back to the grid.
   useEffect(() => {
     if (!focusId) return;
+    if (focusId === SCREENS) {
+      if (sharers.length < 2) setFocusId(sharers[0]?.id ?? null);
+      return;
+    }
     if (focusId === SELF_FOCUS) {
-      if (!sharing) setFocusId(null);
+      if (!sharing) setFocusId(sharers[0]?.id ?? null);
       return;
     }
     const peer = groupPeers.find((p) => p.id === focusId);
-    if (!peer || !peer.hasVideo || !peer.sharing) setFocusId(null);
-  }, [focusId, groupPeers, sharing]);
+    if (!peer || !peer.hasVideo || !peer.sharing) {
+      setFocusId(sharers.find((p) => p.id !== focusId)?.id ?? null);
+    }
+  }, [focusId, groupPeers, sharers, sharing]);
 
-  const total = groupPeers.length + 1;
-  const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(total))));
-  const dense = total > 12;
+  const focusedPeer =
+    focusId && focusId !== SELF_FOCUS && focusId !== SCREENS
+      ? (groupPeers.find((p) => p.id === focusId) ?? null)
+      : null;
+  const focusingSelf = focusId === SELF_FOCUS;
   const remoteFit = "object-contain";
+  const allScreens =
+    sharers.length >= 2 ? (
+      <ViewButton
+        onClick={() => setFocusId(SCREENS)}
+        label={`All screens (${sharers.length})`}
+        icon={<MonitorUp className="size-3.5" />}
+      />
+    ) : null;
 
+  // ── Every shared screen side by side ────────────────────────────────
+  if (focusId === SCREENS && sharers.length >= 2) {
+    const n = sharers.length;
+    const wallCols = Math.min(4, Math.ceil(Math.sqrt(n)));
+    const wallRows = Math.ceil(n / wallCols);
+    const wallDense = n > 12;
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-2 p-2 sm:p-3">
+        <div className="flex shrink-0 items-center gap-2">
+          <ViewButton
+            onClick={() => setFocusId(null)}
+            label="Grid"
+            icon={<LayoutGrid className="size-3.5" />}
+          />
+          <span className="text-[12px] text-white/60">
+            {n} screens shared · click one to enlarge it
+          </span>
+        </div>
+        <div
+          className={`grid min-h-0 flex-1 gap-2 ${
+            wallDense ? "content-start overflow-y-auto" : ""
+          }`}
+          style={{
+            gridTemplateColumns: `repeat(${wallCols}, minmax(0, 1fr))`,
+            ...(wallDense
+              ? { gridAutoRows: "minmax(160px, 1fr)" }
+              : { gridTemplateRows: `repeat(${wallRows}, minmax(0, 1fr))` }),
+          }}
+        >
+          {sharers.map((peer) => (
+            <RemoteTile
+              key={peer.id}
+              peer={peer}
+              fitClass={remoteFit}
+              onSelect={() => setFocusId(peer.id)}
+              onVisibility={reportVisibility}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ── One share (or your own) large, everyone in a filmstrip ─────────
   if (focusId && (focusingSelf || focusedPeer)) {
     return (
       <div className="flex h-full min-h-0 flex-col gap-2 p-2 sm:p-3">
@@ -91,28 +167,26 @@ export function CallGrid() {
               muted={muted}
             />
           ) : focusedPeer ? (
-            <RemoteTile peer={focusedPeer} fitClass={remoteFit} />
+            <RemoteTile peer={focusedPeer} fitClass={remoteFit} stage />
           ) : null}
-          <button
-            type="button"
-            onClick={() => setFocusId(null)}
-            className="absolute left-2 top-2 z-10 flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-black/80"
-            aria-label="Back to grid view"
-            title="Grid view"
-          >
-            <LayoutGrid className="size-3.5" />
-            Grid
-          </button>
+          <div className="absolute left-2 top-2 z-10 flex gap-2">
+            <ViewButton
+              onClick={() => setFocusId(null)}
+              label="Grid"
+              icon={<LayoutGrid className="size-3.5" />}
+            />
+            {allScreens}
+          </div>
         </div>
         <div className="flex h-[5.5rem] shrink-0 gap-2 overflow-x-auto pb-0.5">
-          {groupPeers.map((peer) => (
+          {ordered.map((peer) => (
             <div key={peer.id} className="h-full w-28 shrink-0">
               <RemoteTile
                 peer={peer}
                 fitClass={remoteFit}
                 compact
                 selected={peer.id === focusId}
-                onSelect={() => setFocusId(peer.id)}
+                onSelect={peer.sharing ? () => setFocusId(peer.id) : undefined}
                 onVisibility={reportVisibility}
               />
             </div>
@@ -126,7 +200,7 @@ export function CallGrid() {
               muted={muted}
               compact
               selected={focusingSelf}
-              onSelect={() => setFocusId(SELF_FOCUS)}
+              onSelect={sharing ? () => setFocusId(SELF_FOCUS) : undefined}
             />
           </div>
         </div>
@@ -134,34 +208,67 @@ export function CallGrid() {
     );
   }
 
+  // ── Everyone ───────────────────────────────────────────────────────
+  const total = groupPeers.length + 1;
+  const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(total))));
+  const dense = total > 12;
   return (
-    <div
-      className={`grid h-full w-full gap-2 p-2 sm:gap-3 sm:p-3 ${
-        dense ? "content-start overflow-y-auto" : "content-center"
-      }`}
-      style={{
-        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-        gridAutoRows: dense ? "minmax(120px, 1fr)" : undefined,
-      }}
-    >
-      {groupPeers.map((peer) => (
-        <RemoteTile
-          key={peer.id}
-          peer={peer}
-          fitClass={remoteFit}
-          onSelect={peer.sharing ? () => setFocusId(peer.id) : undefined}
-          onVisibility={reportVisibility}
+    <div className="relative h-full w-full">
+      {allScreens && (
+        <div className="absolute left-1/2 top-2 z-10 -translate-x-1/2">
+          {allScreens}
+        </div>
+      )}
+      <div
+        className={`grid h-full w-full gap-2 p-2 sm:gap-3 sm:p-3 ${
+          dense ? "content-start overflow-y-auto" : "content-center"
+        } ${allScreens ? "pt-12 sm:pt-12" : ""}`}
+        style={{
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+          gridAutoRows: dense ? "minmax(120px, 1fr)" : undefined,
+        }}
+      >
+        {ordered.map((peer) => (
+          <RemoteTile
+            key={peer.id}
+            peer={peer}
+            fitClass={remoteFit}
+            onSelect={peer.sharing ? () => setFocusId(peer.id) : undefined}
+            onVisibility={reportVisibility}
+          />
+        ))}
+        <SelfTile
+          stream={localStream}
+          camOff={camOff}
+          sharing={sharing}
+          video={Boolean(call?.video)}
+          muted={muted}
+          onSelect={sharing ? () => setFocusId(SELF_FOCUS) : undefined}
         />
-      ))}
-      <SelfTile
-        stream={localStream}
-        camOff={camOff}
-        sharing={sharing}
-        video={Boolean(call?.video)}
-        muted={muted}
-        onSelect={sharing ? () => setFocusId(SELF_FOCUS) : undefined}
-      />
+      </div>
     </div>
+  );
+}
+
+/** The dark pill buttons that switch call views. */
+function ViewButton({
+  onClick,
+  label,
+  icon,
+}: {
+  onClick: () => void;
+  label: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-black/80"
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 
@@ -221,6 +328,7 @@ function RemoteTile({
   peer,
   fitClass,
   compact,
+  stage,
   selected,
   onSelect,
   onVisibility,
@@ -228,6 +336,8 @@ function RemoteTile({
   peer: GroupParticipant;
   fitClass: string;
   compact?: boolean;
+  /** The big focus stage: the view buttons sit where the badge would. */
+  stage?: boolean;
   selected?: boolean;
   onSelect?: () => void;
   /** Report whether this tile is on screen (it may be scrolled away). */
@@ -307,7 +417,7 @@ function RemoteTile({
       <span className="absolute bottom-1.5 left-1.5 max-w-[70%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white">
         {peer.name}
       </span>
-      {peer.sharing && (
+      {peer.sharing && !stage && (
         <span className="absolute left-1.5 top-1.5 rounded bg-brand-500/90 px-1.5 py-0.5 text-[10px] font-medium">
           Sharing
         </span>

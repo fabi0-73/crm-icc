@@ -2123,20 +2123,14 @@ export function CallProvider({
 
   // GROUP CALLS: screen share is one call on the LiveKit participant — the SFU
   // republishes it to everyone, so there is no per-peer renegotiation to do.
-  // One shared screen at a time: a second share is unreadable next to the
-  // first, and every extra share is another full-size stream for all ~40
-  // viewers (big meetings used to crash when many people shared at once).
+  // Any number of people may share at once: each share is published in three
+  // layers and every viewer fetches only the one it displays (planGroupVideo),
+  // so 40 concurrent shares cost a viewer 360p/5 fps thumbnails, not 40
+  // full-size streams.
   const toggleScreenShare = useCallback(async () => {
     if (groupRef.current) {
       const handle = lkRef.current;
       if (!handle) return;
-      if (!sharing) {
-        const presenter = groupPeers.find((p) => p.sharing);
-        if (presenter) {
-          showNotice(`${presenter.name} is already sharing — one screen at a time.`);
-          return;
-        }
-      }
       const on = await handle.setScreenShare(!sharing);
       setSharing(on);
       return;
@@ -2146,7 +2140,7 @@ export function CallProvider({
     } else {
       await startScreenShare();
     }
-  }, [sharing, groupPeers, showNotice, startScreenShare, stopScreenShare]);
+  }, [sharing, startScreenShare, stopScreenShare]);
 
   // One global signaling channel for the whole session.
   useEffect(() => {

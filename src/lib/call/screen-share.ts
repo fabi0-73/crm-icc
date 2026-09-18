@@ -243,6 +243,8 @@ export type GroupView =
   | { layout: "grid"; hidden?: string[] }
   /** focusId null = the viewer is looking at their own share. */
   | { layout: "focus"; focusId: string | null; hidden?: string[] }
+  /** Every shared screen side by side (several people sharing at once). */
+  | { layout: "screens"; hidden?: string[] }
   /** Minimized: the floating tile shows one participant. */
   | { layout: "mini"; shownId: string | null };
 
@@ -262,6 +264,10 @@ export function planGroupVideo(
   const plan = new Map<string, { camera: LayerChoice; screen: LayerChoice }>();
   const tiles = peers.length + 1; // + the viewer's own tile
   const size: LayerChoice = tiles <= 2 ? "high" : tiles <= 4 ? "medium" : "low";
+  // Screen wall: two screens side by side are still read, 3–4 fit 720p, and
+  // a wall of 40 concurrent shares is an overview at the 360p/5 fps layer.
+  const sharers = peers.filter((p) => p.sharing).length;
+  const wall: LayerChoice = sharers <= 2 ? "high" : sharers <= 4 ? "medium" : "low";
   const hidden = new Set(view.layout === "mini" ? [] : (view.hidden ?? []));
 
   for (const peer of peers) {
@@ -274,6 +280,8 @@ export function planGroupVideo(
       shown = "off"; // scrolled out of view
     } else if (view.layout === "focus") {
       shown = "low"; // filmstrip thumbnail
+    } else if (view.layout === "screens") {
+      shown = peer.sharing ? wall : "off"; // cameras aren't on the wall
     } else {
       // Grid tile. A screen in a tile is unreadable at any size, so it gets
       // no more than a camera would (the focus stage is where it's read).
