@@ -2121,14 +2121,22 @@ export function CallProvider({
     }
   }, [refreshLocalPreview, send, showNotice, stopScreenShare]);
 
-  // GROUP CALLS: screen share is applied to EVERY mesh peer. Every participant
-  // may share; only one shared screen at a time is expected.
   // GROUP CALLS: screen share is one call on the LiveKit participant — the SFU
   // republishes it to everyone, so there is no per-peer renegotiation to do.
+  // One shared screen at a time: a second share is unreadable next to the
+  // first, and every extra share is another full-size stream for all ~40
+  // viewers (big meetings used to crash when many people shared at once).
   const toggleScreenShare = useCallback(async () => {
     if (groupRef.current) {
       const handle = lkRef.current;
       if (!handle) return;
+      if (!sharing) {
+        const presenter = groupPeers.find((p) => p.sharing);
+        if (presenter) {
+          showNotice(`${presenter.name} is already sharing — one screen at a time.`);
+          return;
+        }
+      }
       const on = await handle.setScreenShare(!sharing);
       setSharing(on);
       return;
@@ -2138,7 +2146,7 @@ export function CallProvider({
     } else {
       await startScreenShare();
     }
-  }, [sharing, startScreenShare, stopScreenShare]);
+  }, [sharing, groupPeers, showNotice, startScreenShare, stopScreenShare]);
 
   // One global signaling channel for the whole session.
   useEffect(() => {

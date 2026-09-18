@@ -237,11 +237,12 @@ export function watchScreenShareEncoder(
 
 export type LayerChoice = "off" | "low" | "medium" | "high";
 
-/** What the viewer's screen currently shows (reported by the call UI). */
+/** What the viewer's screen currently shows (reported by the call UI).
+ *  `hidden`: tiles scrolled out of view (a big grid, the filmstrip). */
 export type GroupView =
-  | { layout: "grid" }
+  | { layout: "grid"; hidden?: string[] }
   /** focusId null = the viewer is looking at their own share. */
-  | { layout: "focus"; focusId: string | null }
+  | { layout: "focus"; focusId: string | null; hidden?: string[] }
   /** Minimized: the floating tile shows one participant. */
   | { layout: "mini"; shownId: string | null };
 
@@ -249,9 +250,10 @@ export type GroupView =
  * Per remote participant, the camera and screen-share layer this viewer
  * needs. A presenter's camera is never on screen while they share (their
  * tile shows the screen), so it is switched off; so is anything the viewer
- * can't see. Only what is shown large gets the top layer — every viewer asking
- * for everyone's top layer is what crowded shares out on ordinary connections
- * and ran up LiveKit's per-GB data.
+ * can't see, including tiles scrolled out of view. Only what is shown large
+ * gets the top layer — every viewer asking for everyone's top layer is what
+ * crowded shares out, froze browsers in 40-person calls (39 HD decodes and
+ * ~66 Mbps each) and ran up LiveKit's per-GB data.
  */
 export function planGroupVideo(
   peers: { id: string; sharing: boolean }[],
@@ -259,17 +261,23 @@ export function planGroupVideo(
 ): Map<string, { camera: LayerChoice; screen: LayerChoice }> {
   const plan = new Map<string, { camera: LayerChoice; screen: LayerChoice }>();
   const tiles = peers.length + 1; // + the viewer's own tile
-  const gridCamera: LayerChoice = tiles <= 2 ? "high" : tiles <= 4 ? "medium" : "low";
-  const gridScreen: LayerChoice = tiles <= 2 ? "high" : "medium";
+  const size: LayerChoice = tiles <= 2 ? "high" : tiles <= 4 ? "medium" : "low";
+  const hidden = new Set(view.layout === "mini" ? [] : (view.hidden ?? []));
 
   for (const peer of peers) {
     let shown: LayerChoice;
     if (view.layout === "mini") {
       shown = peer.id === view.shownId ? "low" : "off";
+    } else if (view.layout === "focus" && peer.id === view.focusId) {
+      shown = "high"; // the big stage
+    } else if (hidden.has(peer.id)) {
+      shown = "off"; // scrolled out of view
     } else if (view.layout === "focus") {
-      shown = peer.id === view.focusId ? "high" : "low"; // others: filmstrip
+      shown = "low"; // filmstrip thumbnail
     } else {
-      shown = peer.sharing ? gridScreen : gridCamera;
+      // Grid tile. A screen in a tile is unreadable at any size, so it gets
+      // no more than a camera would (the focus stage is where it's read).
+      shown = size;
     }
     plan.set(
       peer.id,

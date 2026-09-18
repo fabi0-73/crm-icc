@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LayoutGrid } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { useCall, type GroupParticipant } from "@/components/call/CallProvider";
@@ -29,14 +29,32 @@ export function CallGrid() {
     if (started) setFocusId((current) => current ?? started);
   }, [groupPeers]);
 
+  // Tiles scrolled out of view (a 40-person grid, the filmstrip) fetch no
+  // video at all. Unknown counts as visible, so nothing blinks out on mount.
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  const reportVisibility = useCallback((id: string, visible: boolean) => {
+    setHidden((prev) => {
+      if (prev.has(id) === !visible) return prev;
+      const next = new Set(prev);
+      if (visible) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   // Every video is fetched at the size it is shown (see planGroupVideo).
   useEffect(() => {
+    const hiddenIds = [...hidden];
     setGroupLayout(
       focusId
-        ? { layout: "focus", focusId: focusId === SELF_FOCUS ? null : focusId }
-        : { layout: "grid" },
+        ? {
+            layout: "focus",
+            focusId: focusId === SELF_FOCUS ? null : focusId,
+            hidden: hiddenIds,
+          }
+        : { layout: "grid", hidden: hiddenIds },
     );
-  }, [focusId, setGroupLayout]);
+  }, [focusId, hidden, setGroupLayout]);
 
   const focusedPeer =
     focusId && focusId !== SELF_FOCUS
@@ -95,6 +113,7 @@ export function CallGrid() {
                 compact
                 selected={peer.id === focusId}
                 onSelect={() => setFocusId(peer.id)}
+                onVisibility={reportVisibility}
               />
             </div>
           ))}
@@ -131,6 +150,7 @@ export function CallGrid() {
           peer={peer}
           fitClass={remoteFit}
           onSelect={peer.sharing ? () => setFocusId(peer.id) : undefined}
+          onVisibility={reportVisibility}
         />
       ))}
       <SelfTile
@@ -203,15 +223,35 @@ function RemoteTile({
   compact,
   selected,
   onSelect,
+  onVisibility,
 }: {
   peer: GroupParticipant;
   fitClass: string;
   compact?: boolean;
   selected?: boolean;
   onSelect?: () => void;
+  /** Report whether this tile is on screen (it may be scrolled away). */
+  onVisibility?: (id: string, visible: boolean) => void;
 }) {
   const { canManageCall, muteParticipant } = useCall();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const tileRef = useRef<HTMLDivElement>(null);
+
+  const peerId = peer.id;
+  useEffect(() => {
+    const el = tileRef.current;
+    if (!el || !onVisibility || typeof IntersectionObserver === "undefined") return;
+    // A small margin fetches a tile just before it scrolls into view.
+    const io = new IntersectionObserver(
+      ([entry]) => onVisibility(peerId, entry.isIntersecting),
+      { rootMargin: "120px" },
+    );
+    io.observe(el);
+    return () => {
+      io.disconnect();
+      onVisibility(peerId, true); // forget it; a remounted tile reports again
+    };
+  }, [peerId, onVisibility]);
 
   useEffect(() => {
     const el = videoRef.current;
@@ -226,6 +266,7 @@ function RemoteTile({
 
   return (
     <div
+      ref={tileRef}
       className={`relative flex h-full min-h-0 items-center justify-center overflow-hidden rounded-xl bg-ink-soft ${
         onSelect ? "cursor-pointer" : ""
       } ${selected ? "ring-2 ring-brand-400" : ""}`}
