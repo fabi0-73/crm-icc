@@ -94,37 +94,72 @@ export function startPushSender(): void {
    *  replacement so we never invent one for a call they were never rung for. */
   const wasNotified = (key: string): boolean => notifiedInvites.has(key);
 
-  supabase
-    .channel("push-sender")
-    .on(
-      "postgres_changes",
-      { event: "INSERT", schema: "public", table: "messages" },
-      (payload) => {
-        void onMessage(supabase, payload.new as MessageRow).catch((e) =>
-          console.warn("[push] message handler failed:", e?.message ?? e),
+  // supabase-js does NOT reliably retry a channel whose join was refused:
+  // after the 2026-09-18 server reboot this process started before the
+  // database stack, got one CHANNEL_ERROR, and stayed unsubscribed — no
+  // pushes — until it was restarted. So a failed or closed channel is torn
+  // down and subscribed again, backing off up to a minute.
+  let attempt = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  // Each channel gets a generation number; statuses from a channel that has
+  // already been replaced (its own CLOSED when removed, for one) are ignored,
+  // so a retry can never spawn a second, duplicate subscription.
+  let generation = 0;
+
+  const subscribe = () => {
+    retryTimer = null;
+    const mine = ++generation;
+    const channel = supabase
+      .channel("push-sender")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "messages" },
+        (payload) => {
+          void onMessage(supabase, payload.new as MessageRow).catch((e) =>
+            console.warn("[push] message handler failed:", e?.message ?? e),
+          );
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "call_signals" },
+        (payload) => {
+          void onCallSignal(
+            supabase,
+            payload.new as SignalRow,
+            alreadyNotified,
+            wasNotified,
+          ).catch((e) => console.warn("[push] call handler failed:", e?.message ?? e));
+        },
+      )
+      .subscribe((status) => {
+        if (mine !== generation) return;
+        if (status === "SUBSCRIBED") {
+          // supabase-js sometimes does recover on its own (socket drops);
+          // then a pending retry would only cause a needless gap.
+          if (retryTimer) clearTimeout(retryTimer);
+          retryTimer = null;
+          attempt = 0;
+          console.log("[push] sender subscribed to messages + call_signals");
+          return;
+        }
+        if (status !== "CHANNEL_ERROR" && status !== "TIMED_OUT" && status !== "CLOSED") {
+          return;
+        }
+        if (retryTimer) return; // one retry per failure, however it's reported
+        attempt += 1;
+        const delay = Math.min(60_000, 2_000 * 2 ** (attempt - 1));
+        console.warn(
+          `[push] realtime channel ${status}; resubscribing in ${delay / 1000}s (attempt ${attempt})`,
         );
-      },
-    )
-    .on(
-      "postgres_changes",
-      { event: "INSERT", schema: "public", table: "call_signals" },
-      (payload) => {
-        void onCallSignal(
-          supabase,
-          payload.new as SignalRow,
-          alreadyNotified,
-          wasNotified,
-        ).catch((e) => console.warn("[push] call handler failed:", e?.message ?? e));
-      },
-    )
-    .subscribe((status) => {
-      if (status === "SUBSCRIBED") {
-        console.log("[push] sender subscribed to messages + call_signals");
-      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        // supabase-js retries the connection on its own; just surface it.
-        console.warn("[push] realtime channel status:", status);
-      }
-    });
+        retryTimer = setTimeout(() => {
+          generation += 1; // retire this channel before removing it
+          void supabase.removeChannel(channel).finally(subscribe);
+        }, delay);
+      });
+  };
+
+  subscribe();
 }
 
 /** New chat message → push everyone in the room except the sender. */
