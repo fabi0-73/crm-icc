@@ -14,7 +14,11 @@
  * the VAPID env is present.
  */
 
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  createClient,
+  type RealtimeChannel,
+  type SupabaseClient,
+} from "@supabase/supabase-js";
 import webpush from "web-push";
 import { publicDisplayName } from "@/lib/display-name";
 
@@ -94,72 +98,140 @@ export function startPushSender(): void {
    *  replacement so we never invent one for a call they were never rung for. */
   const wasNotified = (key: string): boolean => notifiedInvites.has(key);
 
-  // supabase-js does NOT reliably retry a channel whose join was refused:
-  // after the 2026-09-18 server reboot this process started before the
-  // database stack, got one CHANNEL_ERROR, and stayed unsubscribed — no
-  // pushes — until it was restarted. So a failed or closed channel is torn
-  // down and subscribed again, backing off up to a minute.
-  let attempt = 0;
-  let retryTimer: ReturnType<typeof setTimeout> | null = null;
-  // Each channel gets a generation number; statuses from a channel that has
-  // already been replaced (its own CLOSED when removed, for one) are ignored,
-  // so a retry can never spawn a second, duplicate subscription.
-  let generation = 0;
+  // `supabase` above stays for the database lookups and cleanup; the realtime
+  // subscription gets its own disposable clients (see keepSubscribed).
+  keepSubscribed({
+    makeClient: () =>
+      createClient(url, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      }),
+    topic: "push-sender",
+    onSubscribed: "sender subscribed to messages + call_signals",
+    attach: (channel, live) =>
+      channel
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "messages" },
+          (payload) => {
+            if (!live()) return;
+            void onMessage(supabase, payload.new as MessageRow).catch((e) =>
+              console.warn("[push] message handler failed:", e?.message ?? e),
+            );
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "call_signals" },
+          (payload) => {
+            if (!live()) return;
+            void onCallSignal(
+              supabase,
+              payload.new as SignalRow,
+              alreadyNotified,
+              wasNotified,
+            ).catch((e) => console.warn("[push] call handler failed:", e?.message ?? e));
+          },
+        ),
+  });
+}
 
-  const subscribe = () => {
-    retryTimer = null;
-    const mine = ++generation;
-    const channel = supabase
-      .channel("push-sender")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
-        (payload) => {
-          void onMessage(supabase, payload.new as MessageRow).catch((e) =>
-            console.warn("[push] message handler failed:", e?.message ?? e),
-          );
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "call_signals" },
-        (payload) => {
-          void onCallSignal(
-            supabase,
-            payload.new as SignalRow,
-            alreadyNotified,
-            wasNotified,
-          ).catch((e) => console.warn("[push] call handler failed:", e?.message ?? e));
-        },
-      )
-      .subscribe((status) => {
-        if (mine !== generation) return;
-        if (status === "SUBSCRIBED") {
-          // supabase-js sometimes does recover on its own (socket drops);
-          // then a pending retry would only cause a needless gap.
-          if (retryTimer) clearTimeout(retryTimer);
-          retryTimer = null;
-          attempt = 0;
-          console.log("[push] sender subscribed to messages + call_signals");
-          return;
-        }
-        if (status !== "CHANNEL_ERROR" && status !== "TIMED_OUT" && status !== "CLOSED") {
-          return;
-        }
-        if (retryTimer) return; // one retry per failure, however it's reported
-        attempt += 1;
-        const delay = Math.min(60_000, 2_000 * 2 ** (attempt - 1));
-        console.warn(
-          `[push] realtime channel ${status}; resubscribing in ${delay / 1000}s (attempt ${attempt})`,
-        );
-        retryTimer = setTimeout(() => {
-          generation += 1; // retire this channel before removing it
-          void supabase.removeChannel(channel).finally(subscribe);
-        }, delay);
-      });
+/**
+ * Keep one realtime channel subscribed through any outage, on a fresh client
+ * every time it fails.
+ *
+ * Why a whole new client: in realtime-js 2.110, removeChannel() only drops a
+ * channel when the server acknowledges the unsubscribe — which a dead socket
+ * never does — and client.channel(topic) hands back the channel already
+ * registered under that topic. Retrying on the same client therefore reused
+ * the dead channel forever and stacked another copy of its handlers each time
+ * (so a recovery would have sent duplicate pushes). That is what left push
+ * down after a realtime restart on 2026-09-18; the reboot earlier that night
+ * had shown the other half — a join refused at startup is never retried.
+ *
+ * Every attempt gets a generation number. Statuses and events from a client
+ * that has been replaced are ignored (`live()` is false), so an old socket can
+ * neither schedule a retry nor deliver a second copy of an event.
+ */
+export function keepSubscribed(opts: {
+  makeClient: () => SupabaseClient;
+  topic: string;
+  /** Logged (after "[push] ") each time the channel is subscribed. */
+  onSubscribed: string;
+  /** Add listeners to a fresh channel; handlers should check `live()`. */
+  attach: (channel: RealtimeChannel, live: () => boolean) => RealtimeChannel;
+}): { current: () => SupabaseClient | null; stop: () => void } {
+  let client: SupabaseClient | null = null;
+  let generation = 0;
+  let subscribed = false;
+  let attempt = 0;
+  let resetTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const retire = () => {
+    const old = client;
+    client = null;
+    if (!old) return;
+    // Never awaited: on a dead socket these only settle after their timeouts.
+    void old.removeAllChannels().catch(() => {});
+    void Promise.resolve(old.realtime.disconnect()).catch(() => {});
   };
 
-  subscribe();
+  const scheduleReset = (why: string) => {
+    if (resetTimer) return; // one reset per failure, however it's reported
+    attempt += 1;
+    const delay = Math.min(30_000, 2_000 * 2 ** (attempt - 1));
+    console.warn(
+      `[push] realtime ${why}; reconnecting in ${delay / 1000}s (attempt ${attempt})`,
+    );
+    resetTimer = setTimeout(connect, delay);
+  };
+
+  function connect() {
+    resetTimer = null;
+    // Advance the generation BEFORE retiring the old client: removing its
+    // channel reports CLOSED, which must already count as stale.
+    const mine = ++generation;
+    retire();
+    const live = () => mine === generation;
+    subscribed = false;
+    const fresh = opts.makeClient();
+    client = fresh;
+    opts.attach(fresh.channel(opts.topic), live).subscribe((status) => {
+      if (!live()) return;
+      if (status === "SUBSCRIBED") {
+        // The library does recover some socket drops by itself; then a
+        // pending reset would only cause a needless gap.
+        if (resetTimer) clearTimeout(resetTimer);
+        resetTimer = null;
+        subscribed = true;
+        attempt = 0;
+        console.log(`[push] ${opts.onSubscribed}`);
+        return;
+      }
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+        subscribed = false;
+        scheduleReset(status);
+      }
+    });
+  }
+
+  // Safety net for a connection that goes quiet without reporting anything.
+  const watchdog = setInterval(() => {
+    if (!subscribed && !resetTimer) scheduleReset("not subscribed (watchdog)");
+  }, 60_000);
+  watchdog.unref?.();
+
+  connect();
+
+  return {
+    current: () => client,
+    stop: () => {
+      clearInterval(watchdog);
+      if (resetTimer) clearTimeout(resetTimer);
+      resetTimer = null;
+      generation += 1;
+      retire();
+    },
+  };
 }
 
 /** New chat message → push everyone in the room except the sender. */
