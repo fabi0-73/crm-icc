@@ -25,6 +25,15 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { ensureRealtimeAuth } from "@/lib/supabase/realtime";
 import { iceServers, waitForIceGathering } from "@/lib/call/webrtc";
+import {
+  SCREEN_SHARE_PROFILE,
+  applyScreenShareParams,
+  displayMediaOptions,
+  restoreSenderParams,
+  watchScreenShareEncoder,
+  type GroupView,
+  type SavedSenderParams,
+} from "@/lib/call/screen-share";
 // Types only — the LiveKit SDK itself is imported lazily inside joinLiveKit so
 // its ~140 kB never loads for the many sessions that never place a call.
 import type {
@@ -160,6 +169,9 @@ type CallContextValue = {
   connectedAt: number | null;
   /** GROUP CALLS: remote participants for the grid ([] for a 1:1 call). */
   groupPeers: GroupParticipant[];
+  /** GROUP CALLS: the grid reports whether it shows the grid or a focused
+   *  share, so each video is fetched at the size it is displayed. */
+  setGroupLayout: (layout: GroupView) => void;
   /** True when this user may add/remove people in the active call. */
   canManageCall: boolean;
   /** GROUP CALLS: ring someone into the call already in progress. */
@@ -309,6 +321,13 @@ export function CallProvider({
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
   /** True when screen was added as a new sender (voice call); false when replaceTrack. */
   const screenAddedSenderRef = useRef(false);
+  // 1:1 screen share: the camera sender's settings before screen settings
+  // replaced them (restored on stop), and the AV1 CPU watchdog's stop.
+  const screenParamsRef = useRef<{
+    sender: RTCRtpSender;
+    saved: SavedSenderParams;
+  } | null>(null);
+  const stopEncoderWatchRef = useRef<(() => void) | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const callIdRef = useRef<string | null>(null);
   const roomIdRef = useRef<string | null>(null);
@@ -344,6 +363,19 @@ export function CallProvider({
   // GROUP CALLS: the live LiveKit room for the active group call. A call is
   // either 1:1 (pcRef, peer-to-peer) or a group (lkRef, SFU), never both.
   const lkRef = useRef<CallRoomHandle | null>(null);
+
+  // GROUP CALLS: tell the SFU what this screen shows, so every video arrives
+  // at the size it is displayed — a focused share at full quality, small
+  // tiles small, hidden video not at all. Full view: the grid reports grid or
+  // focus. Minimized: the floating tile shows the first participant only.
+  const [gridLayout, setGroupLayout] = useState<GroupView>({ layout: "grid" });
+  const firstPeerId = groupPeers[0]?.id ?? null;
+  useEffect(() => {
+    lkRef.current?.setView(
+      view === "full" ? gridLayout : { layout: "mini", shownId: firstPeerId },
+    );
+    // groupPeers.length: re-apply once the call's first participants arrive.
+  }, [view, gridLayout, firstPeerId, groupPeers.length]);
   /** True once at least one other person has been in this group call, so an
    *  empty room means "everyone left" rather than "nobody has joined yet". */
   const hadPeersRef = useRef(false);
@@ -511,6 +543,9 @@ export function CallProvider({
       screenStreamRef.current = null;
       cameraTrackRef.current = null;
       screenAddedSenderRef.current = false;
+      stopEncoderWatchRef.current?.();
+      stopEncoderWatchRef.current = null;
+      screenParamsRef.current = null;
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
       callIdRef.current = null;
@@ -1210,6 +1245,25 @@ export function CallProvider({
             await pc.setRemoteDescription(p.sdp);
             await loadMissedIce(row.call_id);
             await flushIce();
+            // Voice call + screen share: the screen's sender was added with
+            // this offer, so its codecs only exist now — apply the screen
+            // settings (see startScreenShare). It is removed on stop, so
+            // there is nothing to restore.
+            const screenTrack = screenStreamRef.current?.getVideoTracks()[0];
+            const screenSender =
+              screenAddedSenderRef.current && screenTrack
+                ? pc.getSenders().find((x) => x.track === screenTrack)
+                : undefined;
+            if (screenSender) {
+              const applied = await applyScreenShareParams(
+                screenSender,
+                SCREEN_SHARE_PROFILE.p2pMaxBitrate,
+              );
+              stopEncoderWatchRef.current ??= watchScreenShareEncoder(
+                screenSender,
+                applied?.codec,
+              );
+            }
           }
           if (phaseRef.current !== "in-call") {
             setPhase("connecting");
@@ -1904,6 +1958,10 @@ export function CallProvider({
     const pc = pcRef.current;
     const screen = screenStreamRef.current;
     const screenTrack = screen?.getVideoTracks()[0] ?? null;
+    stopEncoderWatchRef.current?.();
+    stopEncoderWatchRef.current = null;
+    const screenParams = screenParamsRef.current;
+    screenParamsRef.current = null;
 
     if (pc && screenTrack) {
       const videoSender = pc
@@ -1936,6 +1994,11 @@ export function CallProvider({
         }
       } else if (videoSender) {
         if (cameraTrackRef.current) {
+          // replaceTrack keeps the sender's settings: without this the camera
+          // would carry on at 15 fps / screen bitrate / maybe AV1.
+          if (screenParams?.sender === videoSender) {
+            await restoreSenderParams(videoSender, screenParams.saved);
+          }
           try {
             await videoSender.replaceTrack(cameraTrackRef.current);
           } catch {
@@ -1995,14 +2058,11 @@ export function CallProvider({
     if (!pc || !peerIdRef.current || !callIdRef.current || !roomIdRef.current) return;
 
     try {
-      const screen = await navigator.mediaDevices.getDisplayMedia({
-        // #7: hint whole-monitor capture so the browser offers "Entire
-        // Screen" (incl. other tabs + the taskbar), not just a window/tab.
-        // The browser still shows its own picker — this only makes the
-        // full-screen option available; we can't preselect it.
-        video: { displaySurface: "monitor" },
-        audio: false,
-      });
+      // Capped at 2560×1440 / 15 fps (lib/call/screen-share explains why)
+      // and still hinting "Entire Screen" in the browser's own picker.
+      const screen = await navigator.mediaDevices.getDisplayMedia(
+        displayMediaOptions(),
+      );
       const screenTrack = screen.getVideoTracks()[0];
       if (!screenTrack) {
         screen.getTracks().forEach((t) => t.stop());
@@ -2029,7 +2089,18 @@ export function CallProvider({
         } else if (videoSender.track) {
           cameraTrackRef.current = videoSender.track;
         }
+        // Screen settings BEFORE the swap, so the first screen keyframe is
+        // already encoded with them.
+        const saved = await applyScreenShareParams(
+          videoSender,
+          SCREEN_SHARE_PROFILE.p2pMaxBitrate,
+        );
+        if (saved) screenParamsRef.current = { sender: videoSender, saved };
         await videoSender.replaceTrack(screenTrack);
+        stopEncoderWatchRef.current = watchScreenShareEncoder(
+          videoSender,
+          saved?.codec,
+        );
         screenAddedSenderRef.current = false;
       } else {
         pc.addTrack(screenTrack, screen);
@@ -2174,6 +2245,7 @@ export function CallProvider({
       toggleNoise,
       toggleScreenShare,
       setView,
+      setGroupLayout,
     }),
     [
       userId,

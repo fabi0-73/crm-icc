@@ -10,12 +10,33 @@ const SELF_FOCUS = "__self__";
 
 /**
  * GROUP CALLS: a responsive grid of remote participant tiles plus the local
- * self-view. Clicking an active screen-share tile expands it into a focus
- * stage; a filmstrip + Grid control switch views without stopping the share.
+ * self-view. A screen share someone starts opens in a large focus stage by
+ * itself (text is unreadable in a grid tile); a filmstrip + Grid control
+ * switch views without stopping the share.
  */
 export function CallGrid() {
-  const { groupPeers, localStream, camOff, sharing, call, muted } = useCall();
+  const { groupPeers, localStream, camOff, sharing, call, muted, setGroupLayout } =
+    useCall();
   const [focusId, setFocusId] = useState<string | null>(null);
+
+  // Open a share as soon as it starts — once per share, so choosing "Grid"
+  // sticks, and never over a share the viewer is already watching.
+  const sharingSeen = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const now = new Set(groupPeers.filter((p) => p.sharing).map((p) => p.id));
+    const started = [...now].find((id) => !sharingSeen.current.has(id));
+    sharingSeen.current = now;
+    if (started) setFocusId((current) => current ?? started);
+  }, [groupPeers]);
+
+  // Every video is fetched at the size it is shown (see planGroupVideo).
+  useEffect(() => {
+    setGroupLayout(
+      focusId
+        ? { layout: "focus", focusId: focusId === SELF_FOCUS ? null : focusId }
+        : { layout: "grid" },
+    );
+  }, [focusId, setGroupLayout]);
 
   const focusedPeer =
     focusId && focusId !== SELF_FOCUS
@@ -23,15 +44,16 @@ export function CallGrid() {
       : null;
   const focusingSelf = focusId === SELF_FOCUS;
 
+  // The focus stage is for screen shares: back to the grid when it ends.
   useEffect(() => {
     if (!focusId) return;
     if (focusId === SELF_FOCUS) {
-      if (!sharing && (camOff || !call?.video)) setFocusId(null);
+      if (!sharing) setFocusId(null);
       return;
     }
     const peer = groupPeers.find((p) => p.id === focusId);
-    if (!peer || !peer.hasVideo) setFocusId(null);
-  }, [focusId, groupPeers, sharing, camOff, call?.video]);
+    if (!peer || !peer.hasVideo || !peer.sharing) setFocusId(null);
+  }, [focusId, groupPeers, sharing]);
 
   const total = groupPeers.length + 1;
   const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(total))));

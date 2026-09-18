@@ -19,7 +19,23 @@
  * re-bound on every track change.
  */
 
-import { Room, RoomEvent, Track, type RemoteParticipant } from "livekit-client";
+import {
+  Room,
+  RoomEvent,
+  Track,
+  VideoPreset,
+  VideoQuality,
+  type RemoteParticipant,
+  type ScreenShareCaptureOptions,
+  type TrackPublishOptions,
+} from "livekit-client";
+import {
+  SCREEN_SHARE_PROFILE,
+  capsBreakCapture,
+  planGroupVideo,
+  type GroupView,
+  type LayerChoice,
+} from "@/lib/call/screen-share";
 
 export type LiveKitParticipant = {
   id: string;
@@ -36,6 +52,9 @@ export type CallRoomHandle = {
   setCamera: (on: boolean) => Promise<void>;
   /** Returns the resulting state (false if the user cancelled the picker). */
   setScreenShare: (on: boolean) => Promise<boolean>;
+  /** What the viewer's screen shows, so each video is fetched at the size
+   *  it is displayed (see planGroupVideo). */
+  setView: (view: GroupView) => void;
   disconnect: () => Promise<void>;
 };
 
@@ -130,6 +149,59 @@ function publicationsOf(p: RemoteParticipant): Pub[] {
 }
 
 /**
+ * Screen-share capture: the shared profile, as LiveKit options. "detail"
+ * tells the encoder this is text/UI, not motion.
+ */
+export function screenShareCaptureOptions(): ScreenShareCaptureOptions {
+  const p = SCREEN_SHARE_PROFILE;
+  return {
+    ...(capsBreakCapture()
+      ? {}
+      : {
+          resolution: {
+            width: p.maxWidth,
+            height: p.maxHeight,
+            frameRate: p.maxFramerate,
+          },
+        }),
+    contentHint: "detail",
+    audio: false,
+    selfBrowserSurface: "exclude",
+    surfaceSwitching: "include",
+  };
+}
+
+/**
+ * Screen-share publishing. Three layers so every viewer gets what their
+ * view needs: full size for the big focus view, 720p for grid tiles, 360p at
+ * 5 fps for thumbnails and a minimized call. VP8 on purpose: livekit-client
+ * forces VP9/AV1 into an SVC mode that overrides the "detail" content hint
+ * and drops the smaller layers, and every browser can encode and decode VP8.
+ */
+export function screenSharePublishOptions(): TrackPublishOptions {
+  const p = SCREEN_SHARE_PROFILE;
+  return {
+    videoCodec: "vp8",
+    simulcast: true,
+    screenShareEncoding: {
+      maxBitrate: p.sfuMaxBitrate,
+      maxFramerate: p.maxFramerate,
+    },
+    screenShareSimulcastLayers: [
+      new VideoPreset(640, 360, 300_000, 5),
+      new VideoPreset(1280, 720, 1_000_000, p.maxFramerate),
+    ],
+    degradationPreference: "maintain-resolution",
+  };
+}
+
+const QUALITY: Record<Exclude<LayerChoice, "off">, VideoQuality> = {
+  low: VideoQuality.LOW,
+  medium: VideoQuality.MEDIUM,
+  high: VideoQuality.HIGH,
+};
+
+/**
  * Join a call's LiveKit room and keep `onUpdate` fed with the current
  * participants and local preview stream.
  */
@@ -157,9 +229,14 @@ export async function connectCallRoom(opts: {
   } = opts;
 
   const room = new Room({
-    // Only send/receive what each tile actually needs — this is what keeps a
-    // 10-person call sane on ordinary connections.
-    adaptiveStream: true,
+    // adaptiveStream sizes each subscription from elements passed to
+    // track.attach(). We render raw MediaStreams instead, so it never saw an
+    // element: every viewer asked for every top layer, and after any
+    // congestion pause it switched the video off for good (livekit-client
+    // 2.22 RemoteVideoTrack.setStreamState → no visible element → disabled).
+    // Layers are chosen explicitly instead — see applyVideoPlan.
+    adaptiveStream: false,
+    // Publishers stop encoding layers nobody is subscribed to.
     dynacast: true,
     videoCaptureDefaults: {
       // Match the 1:1 path: a 16:9 source so widescreen tiles don't have to
@@ -171,6 +248,30 @@ export async function connectCallRoom(opts: {
 
   const remoteStreams = new Map<string, MediaStream>();
   const localCache = new Map<string, MediaStream>();
+  let view: GroupView = { layout: "grid" };
+  let lastPeers: { id: string; sharing: boolean }[] = [];
+
+  /** Ask the SFU for exactly the layer each video is displayed at. The
+   *  setters are no-ops when nothing changed, so this runs on every update. */
+  const applyVideoPlan = (peers: { id: string; sharing: boolean }[]) => {
+    lastPeers = peers;
+    const plan = planGroupVideo(peers, view);
+    room.remoteParticipants.forEach((participant) => {
+      const choice = plan.get(participant.identity);
+      if (!choice) return;
+      participant.videoTrackPublications.forEach((pub) => {
+        if (!pub.isSubscribed) return;
+        const layer =
+          pub.source === Track.Source.ScreenShare ? choice.screen : choice.camera;
+        if (layer === "off") {
+          pub.setEnabled(false);
+          return;
+        }
+        pub.setEnabled(true);
+        pub.setVideoQuality(QUALITY[layer]);
+      });
+    });
+  };
 
   const emit = () => {
     const participants: LiveKitParticipant[] = [];
@@ -208,6 +309,8 @@ export async function connectCallRoom(opts: {
       });
     });
     const local = syncStream("self", localPubs, localCache);
+
+    applyVideoPlan(participants);
 
     onUpdate({
       participants,
@@ -271,7 +374,11 @@ export async function connectCallRoom(opts: {
     },
     async setScreenShare(on: boolean) {
       try {
-        await room.localParticipant.setScreenShareEnabled(on);
+        await room.localParticipant.setScreenShareEnabled(
+          on,
+          screenShareCaptureOptions(),
+          screenSharePublishOptions(),
+        );
         emit();
         return on;
       } catch {
@@ -279,6 +386,12 @@ export async function connectCallRoom(opts: {
         emit();
         return false;
       }
+    },
+    setView(next: GroupView) {
+      view = next;
+      // Not emit(): that would feed React new state, and the caller runs
+      // from a React effect.
+      applyVideoPlan(lastPeers);
     },
     async disconnect() {
       try {
