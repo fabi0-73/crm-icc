@@ -52,7 +52,7 @@ import { MessageActions } from "@/components/MessageActions";
 import { MessageStatus } from "@/components/MessageStatus";
 import { deliveryStatus } from "@/lib/receipts";
 import { matchesName, publicDisplayName } from "@/lib/display-name";
-import { MuteToggle } from "@/components/MuteToggle";
+import { MuteToggle, PersonMuteButton } from "@/components/MuteToggle";
 import {
   StagedAttachments,
   type StagedItem,
@@ -1718,6 +1718,13 @@ export function ChatRoom({
                     className="flex items-center gap-3 rounded-xl px-2.5 py-2.5 hover:bg-mist"
                   >
                     <MemberRow member={m} self={m.id === currentUserId} />
+                    {m.id !== currentUserId && (
+                      <PersonMuteButton
+                        userId={m.id}
+                        name={publicDisplayName(m)}
+                        className="ml-auto"
+                      />
+                    )}
                   </li>
                 ))}
               </ul>

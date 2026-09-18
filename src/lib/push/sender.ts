@@ -142,9 +142,22 @@ async function onMessage(
     .select("user_id")
     .eq("room_id", msg.room_id);
 
-  const recipients = (members ?? [])
+  const everyone = (members ?? [])
     .map((m: { user_id: string }) => m.user_id)
     .filter((id: string) => id && id !== msg.sender_id);
+  if (everyone.length === 0) return;
+
+  // Skip whoever muted this conversation or this sender (notification_mutes;
+  // the in-app sound and pop-up honour the same rows). Calls are unaffected.
+  const { data: mutes } = await supabase
+    .from("notification_mutes")
+    .select("user_id")
+    .in("user_id", everyone)
+    .or(`room_id.eq.${msg.room_id},muted_user_id.eq.${msg.sender_id}`);
+  const muted = new Set(
+    (mutes ?? []).map((m: { user_id: string }) => m.user_id),
+  );
+  const recipients = everyone.filter((id: string) => !muted.has(id));
   if (recipients.length === 0) return;
 
   const [{ data: sender }, { data: room }] = await Promise.all([

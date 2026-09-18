@@ -18,7 +18,7 @@ import {
 import { Modal, useModal } from "@/components/Modal";
 import { Avatar } from "@/components/Avatar";
 import { publicDisplayName } from "@/lib/display-name";
-import { MuteToggle } from "@/components/MuteToggle";
+import { MuteToggle, PersonMuteButton } from "@/components/MuteToggle";
 import { PresenceDot } from "@/components/PresenceDot";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
 import { Button } from "@/components/ui/Button";
@@ -206,7 +206,7 @@ export function GroupDetails({
           )}
         </div>
 
-        {/* Per-conversation mute (device-local) */}
+        {/* Per-conversation mute (server-side: every device, and push) */}
         <div className="border-b border-line px-2 py-2">
           <MuteToggle roomId={roomId} />
         </div>
@@ -392,6 +392,8 @@ function MemberItem({
           {member.is_active === false && " · deactivated"}
         </p>
       </div>
+
+      {!self && <PersonMuteButton userId={member.id} name={shownName} />}
 
       {onMessage && !self && (
         <button

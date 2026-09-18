@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Hash, MessagesSquare, Search, Telescope } from "lucide-react";
+import { BellOff, Hash, MessagesSquare, Search, Telescope } from "lucide-react";
 import { OPEN_SEARCH_EVENT } from "@/components/GlobalSearch";
 import { useRooms } from "@/components/rooms/RoomsProvider";
 import { useIsOnline } from "@/components/presence/PresenceProvider";
@@ -11,6 +11,7 @@ import { PresenceDot } from "@/components/PresenceDot";
 import { NewDmButton } from "@/components/NewDmButton";
 import { NewGroupButton } from "@/components/NewGroupButton";
 import { Input } from "@/components/uikit/input";
+import { useRoomMuted } from "@/lib/mutes";
 import type { MyRoom } from "@/lib/types";
 
 type Filter = "all" | "unread" | "channels" | "dms";
@@ -50,6 +51,7 @@ function preview(room: MyRoom) {
 function ChatRow({ room }: { room: MyRoom }) {
   const online = useIsOnline(room.dm_other_user_id);
   const unread = room.unread_count > 0;
+  const muted = useRoomMuted(room.room_id);
 
   return (
     <Link
@@ -110,8 +112,21 @@ function ChatRow({ room }: { room: MyRoom }) {
           >
             {preview(room)}
           </p>
+          {muted && (
+            <BellOff
+              className="size-3.5 shrink-0 text-muted"
+              aria-label="Muted"
+            />
+          )}
           {unread && (
-            <span className="shrink-0 min-w-[1.25rem] rounded-full bg-brand-grad px-1.5 py-0.5 text-center text-[11px] font-bold leading-none text-white shadow-bubble">
+            // A muted chat still counts unread, just without the loud badge.
+            <span
+              className={`shrink-0 min-w-[1.25rem] rounded-full px-1.5 py-0.5 text-center text-[11px] font-bold leading-none ${
+                muted
+                  ? "bg-line text-muted"
+                  : "bg-brand-grad text-white shadow-bubble"
+              }`}
+            >
               {room.unread_count > 99 ? "99+" : room.unread_count}
             </span>
           )}

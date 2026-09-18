@@ -18,59 +18,11 @@ export type NotifyPrefs = {
 };
 
 const KEY = "icc.notify.prefs.v1";
-const MUTED_KEY = "icc.notify.muted-rooms.v1";
 const EVENT = "icc-notify-prefs-change";
 const DEFAULTS: NotifyPrefs = { messages: true, mentions: true, calls: true };
 
-/**
- * Per-conversation mute: a set of room ids the user has silenced. This is
- * targeted muting (a noisy group, one person's DM) and is independent of
- * the global sound switches above — muting one room never mutes the rest.
- */
-function readMutedRooms(): Set<string> {
-  if (typeof window === "undefined") return new Set();
-  try {
-    const raw = window.localStorage.getItem(MUTED_KEY);
-    if (!raw) return new Set();
-    const arr = JSON.parse(raw) as string[];
-    return new Set(Array.isArray(arr) ? arr : []);
-  } catch {
-    return new Set();
-  }
-}
-
-export function isRoomMuted(roomId: string): boolean {
-  return readMutedRooms().has(roomId);
-}
-
-export function setRoomMuted(roomId: string, muted: boolean) {
-  if (typeof window === "undefined") return;
-  const set = readMutedRooms();
-  if (muted) set.add(roomId);
-  else set.delete(roomId);
-  try {
-    window.localStorage.setItem(MUTED_KEY, JSON.stringify([...set]));
-  } catch {
-    /* ignore */
-  }
-  window.dispatchEvent(new CustomEvent(EVENT));
-}
-
-/** Live boolean for whether a specific room is muted. */
-export function useRoomMuted(roomId: string): boolean {
-  const [muted, setMuted] = useState(false);
-  useEffect(() => {
-    const update = () => setMuted(isRoomMuted(roomId));
-    update();
-    window.addEventListener(EVENT, update);
-    window.addEventListener("storage", update);
-    return () => {
-      window.removeEventListener(EVENT, update);
-      window.removeEventListener("storage", update);
-    };
-  }, [roomId]);
-  return muted;
-}
+// Muting one conversation or one person is not a device preference — it
+// lives on the server so it follows the person everywhere; see lib/mutes.
 
 export function readNotifyPrefs(): NotifyPrefs {
   if (typeof window === "undefined") return DEFAULTS;

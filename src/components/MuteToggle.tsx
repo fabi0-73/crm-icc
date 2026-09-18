@@ -1,12 +1,12 @@
 "use client";
 
 import { Bell, BellOff } from "lucide-react";
-import { setRoomMuted, useRoomMuted } from "@/lib/notify-prefs";
+import { setRoomMuted, setUserMuted, useRoomMuted, useUserMuted } from "@/lib/mutes";
 
 /**
- * Per-conversation "Mute notifications" switch. Reads and writes the
- * device-local mute set in @/lib/notify-prefs; the message/sound layer
- * consults that same set, so flipping this silences just this room.
+ * Per-conversation "Mute notifications" switch. The mute is stored on the
+ * server (lib/mutes), so it silences this chat on every device and stops
+ * its push notifications too. Calls still ring.
  */
 export function MuteToggle({ roomId }: { roomId: string }) {
   const muted = useRoomMuted(roomId);
@@ -16,7 +16,7 @@ export function MuteToggle({ roomId }: { roomId: string }) {
       type="button"
       role="switch"
       aria-checked={muted}
-      onClick={() => setRoomMuted(roomId, !muted)}
+      onClick={() => void setRoomMuted(roomId, !muted)}
       className="flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left hover:bg-mist"
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary text-muted">
@@ -27,7 +27,9 @@ export function MuteToggle({ roomId }: { roomId: string }) {
           Mute notifications
         </span>
         <span className="block text-[12px] text-muted">
-          {muted ? "Muted on this device" : "You'll be notified"}
+          {muted
+            ? "Muted on all your devices · calls still ring"
+            : "You'll be notified"}
         </span>
       </span>
       <span
@@ -42,6 +44,39 @@ export function MuteToggle({ roomId }: { roomId: string }) {
           }`}
         />
       </span>
+    </button>
+  );
+}
+
+/**
+ * Mute one person everywhere — their messages in every group and DM stop
+ * making a sound or sending a notification. They are not told.
+ */
+export function PersonMuteButton({
+  userId,
+  name,
+  className = "",
+}: {
+  userId: string;
+  name: string;
+  className?: string;
+}) {
+  const muted = useUserMuted(userId);
+  const label = muted
+    ? `Unmute notifications from ${name}`
+    : `Mute notifications from ${name}`;
+  return (
+    <button
+      type="button"
+      onClick={() => void setUserMuted(userId, !muted)}
+      aria-pressed={muted}
+      aria-label={label}
+      title={label}
+      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-mist ${
+        muted ? "text-brand-600 dark:text-brand-300" : "text-muted hover:text-ink"
+      } ${className}`}
+    >
+      {muted ? <BellOff className="size-4" /> : <Bell className="size-4" />}
     </button>
   );
 }

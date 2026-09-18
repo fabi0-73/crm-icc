@@ -12,7 +12,8 @@ import { PresenceDot } from "@/components/PresenceDot";
 import { NewGroupButton } from "@/components/NewGroupButton";
 import { NewDmButton } from "@/components/NewDmButton";
 import { HashIcon, SignOutIcon } from "@/components/icons";
-import { Search } from "lucide-react";
+import { BellOff, Search } from "lucide-react";
+import { useRoomMuted } from "@/lib/mutes";
 import { OPEN_SEARCH_EVENT } from "@/components/GlobalSearch";
 import type { MyRoom, Profile } from "@/lib/types";
 
@@ -22,12 +23,24 @@ export const NAV: { href: string; label: string; roles: Profile["role"][] }[] = 
   { href: "/admin/audit", label: "Audit", roles: ["admin", "manager"] },
 ];
 
-function UnreadBadge({ count, active }: { count: number; active: boolean }) {
+function UnreadBadge({
+  count,
+  active,
+  muted,
+}: {
+  count: number;
+  active: boolean;
+  muted: boolean;
+}) {
   if (count <= 0) return null;
   return (
     <span
-      className={`ml-auto min-w-[1.1rem] shrink-0 rounded-full px-1.5 text-center text-[11px] font-semibold leading-[1.1rem] ${
-        active ? "bg-white text-brand-700" : "bg-brand-500 text-white"
+      className={`min-w-[1.1rem] shrink-0 rounded-full px-1.5 text-center text-[11px] font-semibold leading-[1.1rem] ${
+        active
+          ? "bg-white text-brand-700"
+          : muted
+            ? "bg-white/15 text-white/70"
+            : "bg-brand-500 text-white"
       }`}
     >
       {count > 99 ? "99+" : count}
@@ -37,7 +50,9 @@ function UnreadBadge({ count, active }: { count: number; active: boolean }) {
 
 function RoomRow({ room, active }: { room: MyRoom; active: boolean }) {
   const online = useIsOnline(room.dm_other_user_id);
-  const unread = room.unread_count > 0;
+  const muted = useRoomMuted(room.room_id);
+  // A muted chat still counts unread, just without drawing attention.
+  const unread = room.unread_count > 0 && !muted;
   return (
     <Link
       href={`/rooms/${room.room_id}`}
@@ -73,7 +88,12 @@ function RoomRow({ room, active }: { room: MyRoom; active: boolean }) {
       <span className={`truncate ${unread && !active ? "font-semibold text-white" : ""}`}>
         {room.display_name}
       </span>
-      <UnreadBadge count={room.unread_count} active={active} />
+      <span className="ml-auto flex shrink-0 items-center gap-1">
+        {muted && (
+          <BellOff className="size-3 opacity-50" aria-label="Muted" />
+        )}
+        <UnreadBadge count={room.unread_count} active={active} muted={muted} />
+      </span>
     </Link>
   );
 }

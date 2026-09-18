@@ -25,7 +25,8 @@ import {
   subscribeToMyMembershipChanges,
 } from "@/lib/supabase/realtime";
 import { installAutoResume, playMessageChime } from "@/lib/call/tones";
-import { readNotifyPrefs, isRoomMuted } from "@/lib/notify-prefs";
+import { readNotifyPrefs } from "@/lib/notify-prefs";
+import { isRoomMuted, isUserMuted, loadMutes } from "@/lib/mutes";
 import { notify } from "@/lib/notify";
 import { setTabBadge } from "@/lib/tab-badge";
 import type { MyRoom } from "@/lib/types";
@@ -157,7 +158,11 @@ export function RoomsProvider({
           msg.room_id !== activeRef.current ||
           document.visibilityState !== "visible" ||
           !document.hasFocus();
-        if (msg.kind !== "system" && notLooking && !isRoomMuted(msg.room_id)) {
+        // A muted conversation, or a muted person anywhere, stays silent.
+        const muted =
+          isRoomMuted(msg.room_id) ||
+          Boolean(msg.sender_id && isUserMuted(msg.sender_id));
+        if (msg.kind !== "system" && notLooking && !muted) {
           const prefs = readNotifyPrefs();
           const mentions = (msg.metadata as { mentions?: string[] } | null)
             ?.mentions;
@@ -268,9 +273,19 @@ export function RoomsProvider({
     });
   }, [pathname, refetch]);
 
-  // Long-lived tabs self-heal on focus (mirrors ChatRoom's pattern).
+  // Mutes are per person and shared across devices; load them once here,
+  // the one provider every signed-in screen sits under.
   useEffect(() => {
-    const onFocus = () => void refetch();
+    void loadMutes();
+  }, []);
+
+  // Long-lived tabs self-heal on focus (mirrors ChatRoom's pattern), which
+  // also picks up mutes changed on another device.
+  useEffect(() => {
+    const onFocus = () => {
+      void refetch();
+      void loadMutes();
+    };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [refetch]);
