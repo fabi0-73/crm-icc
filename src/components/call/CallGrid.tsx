@@ -1,29 +1,97 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { LayoutGrid } from "lucide-react";
 import { Avatar } from "@/components/Avatar";
 import { useCall, type GroupParticipant } from "@/components/call/CallProvider";
+import { MicOffIcon } from "@/components/icons";
+
+const SELF_FOCUS = "__self__";
 
 /**
  * GROUP CALLS: a responsive grid of remote participant tiles plus the local
- * self-view. One <video> per remote stream (unmuted — this is where each
- * peer's audio plays, since the group path has no single audio sink), with an
- * Avatar fallback when their camera/screen is off. Kept deliberately simple:
- * a CSS grid that reflows from 1 to 6+ tiles.
+ * self-view. Clicking an active screen-share tile expands it into a focus
+ * stage; a filmstrip + Grid control switch views without stopping the share.
  */
 export function CallGrid() {
-  const { groupPeers, localStream, camOff, sharing, call } = useCall();
+  const { groupPeers, localStream, camOff, sharing, call, muted } = useCall();
+  const [focusId, setFocusId] = useState<string | null>(null);
 
-  const total = groupPeers.length + 1; // + self
-  // Square-ish layout: 2 cols for a pair, 3 for six, 4 for twelve, and so on.
-  // The old fixed 3 columns turned a 20-person call into 7 rows of slivers.
+  const focusedPeer =
+    focusId && focusId !== SELF_FOCUS
+      ? (groupPeers.find((p) => p.id === focusId) ?? null)
+      : null;
+  const focusingSelf = focusId === SELF_FOCUS;
+
+  useEffect(() => {
+    if (!focusId) return;
+    if (focusId === SELF_FOCUS) {
+      if (!sharing && (camOff || !call?.video)) setFocusId(null);
+      return;
+    }
+    const peer = groupPeers.find((p) => p.id === focusId);
+    if (!peer || !peer.hasVideo) setFocusId(null);
+  }, [focusId, groupPeers, sharing, camOff, call?.video]);
+
+  const total = groupPeers.length + 1;
   const cols = Math.max(1, Math.min(6, Math.ceil(Math.sqrt(total))));
-  // Past a roomful, tiles get a floor and the grid scrolls instead of
-  // shrinking every tile into nothing.
   const dense = total > 12;
-  // Never crop a shared screen. Cameras are letterboxed rather than
-  // cropped — filling the tile zooms into the middle of the frame.
   const remoteFit = "object-contain";
+
+  if (focusId && (focusingSelf || focusedPeer)) {
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-2 p-2 sm:p-3">
+        <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl bg-ink">
+          {focusingSelf ? (
+            <SelfTile
+              stream={localStream}
+              camOff={camOff}
+              sharing={sharing}
+              video={Boolean(call?.video)}
+              muted={muted}
+            />
+          ) : focusedPeer ? (
+            <RemoteTile peer={focusedPeer} fitClass={remoteFit} />
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setFocusId(null)}
+            className="absolute left-2 top-2 z-10 flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-black/80"
+            aria-label="Back to grid view"
+            title="Grid view"
+          >
+            <LayoutGrid className="size-3.5" />
+            Grid
+          </button>
+        </div>
+        <div className="flex h-[5.5rem] shrink-0 gap-2 overflow-x-auto pb-0.5">
+          {groupPeers.map((peer) => (
+            <div key={peer.id} className="h-full w-28 shrink-0">
+              <RemoteTile
+                peer={peer}
+                fitClass={remoteFit}
+                compact
+                selected={peer.id === focusId}
+                onSelect={() => setFocusId(peer.id)}
+              />
+            </div>
+          ))}
+          <div className="h-full w-28 shrink-0">
+            <SelfTile
+              stream={localStream}
+              camOff={camOff}
+              sharing={sharing}
+              video={Boolean(call?.video)}
+              muted={muted}
+              compact
+              selected={focusingSelf}
+              onSelect={() => setFocusId(SELF_FOCUS)}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -36,13 +104,20 @@ export function CallGrid() {
       }}
     >
       {groupPeers.map((peer) => (
-        <RemoteTile key={peer.id} peer={peer} fitClass={remoteFit} />
+        <RemoteTile
+          key={peer.id}
+          peer={peer}
+          fitClass={remoteFit}
+          onSelect={peer.sharing ? () => setFocusId(peer.id) : undefined}
+        />
       ))}
       <SelfTile
         stream={localStream}
         camOff={camOff}
         sharing={sharing}
         video={Boolean(call?.video)}
+        muted={muted}
+        onSelect={sharing ? () => setFocusId(SELF_FOCUS) : undefined}
       />
     </div>
   );
@@ -80,13 +155,40 @@ function PeerAudio({ stream }: { stream: MediaStream }) {
   return <audio ref={ref} autoPlay className="hidden" />;
 }
 
+function MuteBadge() {
+  return (
+    <span
+      className="flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white"
+      title="Muted"
+      aria-label="Muted"
+    >
+      <span className="scale-75">
+        <MicOffIcon />
+      </span>
+    </span>
+  );
+}
+
+function activateTile(e: React.MouseEvent, onSelect?: () => void) {
+  if (!onSelect) return;
+  if ((e.target as HTMLElement).closest("button")) return;
+  onSelect();
+}
+
 function RemoteTile({
   peer,
   fitClass,
+  compact,
+  selected,
+  onSelect,
 }: {
   peer: GroupParticipant;
   fitClass: string;
+  compact?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
+  const { canManageCall, muteParticipant } = useCall();
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -101,7 +203,29 @@ function RemoteTile({
   }, [peer.stream]);
 
   return (
-    <div className="relative flex min-h-0 items-center justify-center overflow-hidden rounded-xl bg-ink-soft">
+    <div
+      className={`relative flex h-full min-h-0 items-center justify-center overflow-hidden rounded-xl bg-ink-soft ${
+        onSelect ? "cursor-pointer" : ""
+      } ${selected ? "ring-2 ring-brand-400" : ""}`}
+      onClick={(e) => activateTile(e, onSelect)}
+      role={onSelect ? "button" : undefined}
+      tabIndex={onSelect ? 0 : undefined}
+      onKeyDown={
+        onSelect
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect();
+              }
+            }
+          : undefined
+      }
+      title={
+        peer.sharing && onSelect && !compact
+          ? "Expand screen share"
+          : undefined
+      }
+    >
       {/* Muted: audio for each peer plays through the persistent PeerAudioSinks
           in the provider, so it survives minimize (the grid unmounts when the
           call is minimized). This mirrors the 1:1 single-audio-sink design. */}
@@ -114,12 +238,35 @@ function RemoteTile({
       />
       {!peer.hasVideo && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <Avatar name={peer.name} size="lg" />
+          <Avatar name={peer.name} size={compact ? "sm" : "lg"} userId={peer.id} />
         </div>
       )}
-      <span className="absolute bottom-1.5 left-1.5 max-w-[85%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white">
+      <span className="absolute bottom-1.5 left-1.5 max-w-[70%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white">
         {peer.name}
       </span>
+      {peer.sharing && (
+        <span className="absolute left-1.5 top-1.5 rounded bg-brand-500/90 px-1.5 py-0.5 text-[10px] font-medium">
+          Sharing
+        </span>
+      )}
+      {peer.muted && (
+        <div className="absolute bottom-1.5 right-1.5">
+          <MuteBadge />
+        </div>
+      )}
+      {canManageCall && !peer.muted && !compact && (
+        <button
+          type="button"
+          onClick={() => void muteParticipant(peer.id)}
+          className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white hover:bg-black/80"
+          aria-label={`Mute ${peer.name}`}
+          title={`Mute ${peer.name}`}
+        >
+          <span className="scale-75">
+            <MicOffIcon />
+          </span>
+        </button>
+      )}
     </div>
   );
 }
@@ -129,12 +276,21 @@ function SelfTile({
   camOff,
   sharing,
   video,
+  muted,
+  compact,
+  selected,
+  onSelect,
 }: {
   stream: MediaStream | null;
   camOff: boolean;
   sharing: boolean;
   video: boolean;
+  muted: boolean;
+  compact?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
+  const { selfId } = useCall();
   const videoRef = useRef<HTMLVideoElement>(null);
   const showVideo = (video && !camOff) || sharing;
 
@@ -150,7 +306,25 @@ function SelfTile({
   }, [stream]);
 
   return (
-    <div className="relative flex min-h-0 items-center justify-center overflow-hidden rounded-xl bg-ink-soft ring-1 ring-white/15">
+    <div
+      className={`relative flex h-full min-h-0 items-center justify-center overflow-hidden rounded-xl bg-ink-soft ring-1 ring-white/15 ${
+        onSelect ? "cursor-pointer" : ""
+      } ${selected ? "ring-2 ring-brand-400" : ""}`}
+      onClick={(e) => activateTile(e, onSelect)}
+      role={onSelect ? "button" : undefined}
+      tabIndex={onSelect ? 0 : undefined}
+      onKeyDown={
+        onSelect
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect();
+              }
+            }
+          : undefined
+      }
+      title={sharing && onSelect && !compact ? "Expand screen share" : undefined}
+    >
       {/* Muted: never play our own audio back to us. Mirror the camera the way
           every video app does, but never a shared screen (its text would flip). */}
       <video
@@ -164,12 +338,22 @@ function SelfTile({
       />
       {!showVideo && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <Avatar name="You" size="lg" />
+          <Avatar name="You" size={compact ? "sm" : "lg"} userId={selfId} />
         </div>
       )}
       <span className="absolute bottom-1.5 left-1.5 rounded bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white">
         You
       </span>
+      {sharing && (
+        <span className="absolute left-1.5 top-1.5 rounded bg-brand-500/90 px-1.5 py-0.5 text-[10px] font-medium">
+          Sharing
+        </span>
+      )}
+      {muted && (
+        <div className="absolute bottom-1.5 right-1.5">
+          <MuteBadge />
+        </div>
+      )}
     </div>
   );
 }

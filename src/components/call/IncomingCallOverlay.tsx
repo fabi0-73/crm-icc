@@ -6,7 +6,7 @@ import { HangUpIcon, PhoneIcon } from "@/components/icons";
 
 /** Full-screen incoming-call prompt. Rings on every page of the app. */
 export function IncomingCallOverlay() {
-  const { incoming, accept, decline } = useCall();
+  const { incoming, accept, decline, openIncomingLobby } = useCall();
   if (!incoming) return null;
 
   return (
@@ -18,6 +18,7 @@ export function IncomingCallOverlay() {
           <Avatar
             name={incoming.peerName}
             size="lg"
+            userId={incoming.peerId}
             className="!h-24 !w-24 !text-2xl relative"
           />
         </div>
@@ -43,7 +44,10 @@ export function IncomingCallOverlay() {
           <div className="flex flex-col items-center gap-1.5">
             <button
               type="button"
-              onClick={() => void accept()}
+              onClick={() => {
+                if (incoming.group && incoming.video) openIncomingLobby();
+                else void accept();
+              }}
               className="flex h-14 w-14 items-center justify-center rounded-full bg-brand-500 text-white shadow-lg transition-transform hover:scale-105 active:scale-95"
               aria-label="Accept call"
             >

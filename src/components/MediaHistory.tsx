@@ -343,7 +343,7 @@ function MediaRow({
     category === "image" ? ImageIcon : category === "document" ? FileText : Paperclip;
 
   const icon = (
-    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700">
+    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
       <Icon className="size-[18px]" />
     </span>
   );

@@ -30,7 +30,7 @@ export function CallButton({
    *  When omitted, no restriction is applied. */
   currentUserRole?: Role;
 }) {
-  const { dial, startGroupCall, phase, signalReady } = useCall();
+  const { dial, startGroupCall, prepareGroupCall, phase, signalReady, lobby } = useCall();
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const others = members.filter((m) => m.id !== currentUserId);
@@ -40,7 +40,7 @@ export function CallButton({
     typeof window === "undefined" ||
     window.isSecureContext ||
     location.hostname === "localhost";
-  const busy = phase !== "idle";
+  const busy = phase !== "idle" || Boolean(lobby);
 
   // #9/#10: in a NON-dm room only admins/managers may START a call. We only
   // restrict when we positively know the room is a group/workspace AND the
@@ -61,6 +61,14 @@ export function CallButton({
   async function startGroup(video: boolean) {
     if (restricted) return;
     setPickerOpen(false);
+    if (video) {
+      prepareGroupCall(
+        roomId,
+        roomName,
+        others.map((m) => m.id),
+      );
+      return;
+    }
     await startGroupCall(
       roomId,
       roomName,
@@ -133,7 +141,7 @@ export function CallButton({
               key={m.id}
               className="flex items-center gap-3 rounded-md px-2 py-2.5 hover:bg-mist"
             >
-              <Avatar name={m.full_name} size="sm" />
+              <Avatar name={m.full_name} size="sm" userId={m.id} />
               <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
                 {m.full_name}
               </span>

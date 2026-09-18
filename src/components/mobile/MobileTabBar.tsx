@@ -142,6 +142,7 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
             <Avatar
               name={profile.full_name}
               size="sm"
+              userId={profile.id}
               className="!h-6 !w-6 !text-[9px]"
             />
           </TabButton>
@@ -161,7 +162,7 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
               className="-mx-2 flex items-center gap-3 rounded-2xl px-2 py-3 active:bg-mist"
             >
               <span className="relative shrink-0">
-                <Avatar name={profile.full_name} />
+                <Avatar name={profile.full_name} userId={profile.id} />
                 <PresenceDot
                   online={selfOnline}
                   className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"

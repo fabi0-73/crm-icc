@@ -33,6 +33,7 @@ import type {
 } from "@/lib/call/livekit-room";
 import {
   createCallToken,
+  muteCallParticipant,
   removeCallParticipant,
 } from "@/app/actions/livekit";
 import {
@@ -44,6 +45,7 @@ import {
 import { readNotifyPrefs } from "@/lib/notify-prefs";
 import { dismissNotifications, notify } from "@/lib/notify";
 import { IncomingCallOverlay } from "@/components/call/IncomingCallOverlay";
+import { CallLobby } from "@/components/call/CallLobby";
 import { FloatingCallTile } from "@/components/call/FloatingCallTile";
 import { FullScreenCall } from "@/components/call/FullScreenCall";
 import { PeerAudioSinks } from "@/components/call/CallGrid";
@@ -120,15 +122,28 @@ export type ActiveCall = {
 
 export type IncomingCall = ActiveCall & { roomName: string | null };
 
+/** Preview before a group video call actually joins LiveKit. */
+export type GroupLobby = {
+  intent: "outgoing" | "incoming";
+  roomId: string;
+  roomName: string;
+  memberIds: string[];
+  video: true;
+};
+
 /** GROUP CALLS: one remote participant, mirrored into state for the grid UI. */
 export type GroupParticipant = {
   id: string;
   name: string;
   stream: MediaStream;
   hasVideo: boolean;
+  muted: boolean;
+  sharing: boolean;
 };
 
 type CallContextValue = {
+  /** The signed-in user's id, so call tiles can show their own photo. */
+  selfId: string;
   phase: CallPhase;
   call: ActiveCall | null;
   incoming: IncomingCall | null;
@@ -151,6 +166,8 @@ type CallContextValue = {
   addParticipant: (userId: string) => Promise<void>;
   /** GROUP CALLS: evict someone from the call in progress. */
   removeParticipant: (userId: string) => Promise<void>;
+  /** GROUP CALLS: force-mute someone else's microphone. */
+  muteParticipant: (userId: string) => Promise<void>;
   /** A group call this device just left and can still rejoin, if any. */
   rejoinable: { callId: string; roomId: string; roomName: string; video: boolean } | null;
   rejoinCall: () => Promise<void>;
@@ -168,6 +185,17 @@ type CallContextValue = {
     memberIds: string[],
     video: boolean,
   ) => Promise<void>;
+  /** Group video only: open the pre-join lobby instead of connecting. */
+  prepareGroupCall: (
+    roomId: string,
+    roomName: string,
+    memberIds: string[],
+  ) => void;
+  /** Incoming group video: Accept opens the lobby instead of joining. */
+  openIncomingLobby: () => void;
+  lobby: GroupLobby | null;
+  confirmLobby: (prefs: { muted: boolean; camOff: boolean }) => Promise<void>;
+  cancelLobby: () => void;
   accept: () => Promise<void>;
   decline: () => void;
   hangup: () => void;
@@ -273,6 +301,7 @@ export function CallProvider({
     roomName: string;
     video: boolean;
   } | null>(null);
+  const [lobby, setLobby] = useState<GroupLobby | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -286,6 +315,9 @@ export function CallProvider({
   const peerIdRef = useRef<string | null>(null);
   const phaseRef = useRef<CallPhase>("idle");
   const incomingRef = useRef<IncomingCall | null>(null);
+  const lobbyRef = useRef<GroupLobby | null>(null);
+  /** Mic/camera chosen in the lobby; consumed once by joinLiveKit. */
+  const joinPrefsRef = useRef<{ mic: boolean; camera: boolean } | null>(null);
   /** Mirror of `call` for callbacks that must not depend on it. */
   const callRef = useRef<ActiveCall | null>(null);
   const pendingOfferRef = useRef<{ callId: string; from: string; payload: SignalPayload } | null>(null);
@@ -492,6 +524,9 @@ export function CallProvider({
       setPhase("idle");
       setCall(null);
       setIncoming(null);
+      setLobby(null);
+      lobbyRef.current = null;
+      joinPrefsRef.current = null;
       setView("full");
       setMuted(false);
       setCamOff(false);
@@ -831,6 +866,7 @@ export function CallProvider({
     (payload: {
       participants: LiveKitParticipant[];
       localStream: MediaStream | null;
+      localSharing: boolean;
     }) => {
       setGroupPeers(
         payload.participants.map((p) => ({
@@ -838,9 +874,12 @@ export function CallProvider({
           name: p.name,
           stream: p.stream,
           hasVideo: p.hasVideo,
+          muted: p.muted,
+          sharing: p.sharing,
         })),
       );
       setLocalStream(payload.localStream);
+      setSharing(payload.localSharing);
       if (payload.participants.length > 0) {
         hadPeersRef.current = true;
         if (emptyTimerRef.current) {
@@ -893,11 +932,16 @@ export function CallProvider({
       }
       const { connectCallRoom } = await import("@/lib/call/livekit-room");
       if (callGenRef.current !== gen) return false;
+      const prefs = joinPrefsRef.current ?? { mic: true, camera: video };
+      joinPrefsRef.current = null;
       const handle = await connectCallRoom({
         url: res.url,
         token: res.token,
         video,
+        micEnabled: prefs.mic,
+        cameraEnabled: video && prefs.camera,
         onUpdate: applyLiveKitUpdate,
+        onLocalMic: (isMuted) => setMuted(isMuted),
         onDisconnected: () => {
           // cleanup() nulls lkRef before disconnecting, so this only fires for
           // an unexpected drop — never as an echo of our own teardown.
@@ -1287,6 +1331,19 @@ export function CallProvider({
     [canManageCall, send, showNotice],
   );
 
+  /** Force-mute someone mid-call. LiveKit must do this server-side. */
+  const muteParticipant = useCallback(
+    async (targetId: string) => {
+      if (!canManageCall) return;
+      const callId = callIdRef.current;
+      const roomId = roomIdRef.current;
+      if (!groupRef.current || !callId || !roomId) return;
+      const res = await muteCallParticipant(roomId, callId, targetId);
+      if (res.error) showNotice(res.error);
+    },
+    [canManageCall, showNotice],
+  );
+
   /** Rejoin the group call this device just left. */
   const rejoinCall = useCallback(async () => {
     const target = rejoinable;
@@ -1671,22 +1728,87 @@ export function CallProvider({
     cleanup();
   }, [cleanup, send]);
 
-  const toggleMic = useCallback(() => {
-    setMuted((prev) => {
-      const next = !prev;
-      // GROUP CALLS: LiveKit publishes its own capture — localStreamRef is
-      // null there, so muting MUST go through the room or the microphone
-      // keeps broadcasting while the UI claims it is muted.
-      if (groupRef.current) {
-        void lkRef.current?.setMic(!next);
+  const prepareGroupCall = useCallback(
+    (roomId: string, roomName: string, memberIds: string[]) => {
+      if (phaseRef.current !== "idle") return;
+      const next: GroupLobby = {
+        intent: "outgoing",
+        roomId,
+        roomName,
+        memberIds,
+        video: true,
+      };
+      lobbyRef.current = next;
+      setLobby(next);
+    },
+    [],
+  );
+
+  const openIncomingLobby = useCallback(() => {
+    const inc = incomingRef.current;
+    if (!inc?.group || !inc.video) {
+      void accept();
+      return;
+    }
+    const next: GroupLobby = {
+      intent: "incoming",
+      roomId: inc.roomId,
+      roomName: inc.roomName ?? inc.peerName,
+      memberIds: inc.memberIds ?? [],
+      video: true,
+    };
+    lobbyRef.current = next;
+    setLobby(next);
+  }, [accept]);
+
+  const cancelLobby = useCallback(() => {
+    const L = lobbyRef.current;
+    lobbyRef.current = null;
+    joinPrefsRef.current = null;
+    setLobby(null);
+    if (L?.intent === "incoming") decline();
+  }, [decline]);
+
+  const confirmLobby = useCallback(
+    async (prefs: { muted: boolean; camOff: boolean }) => {
+      const L = lobbyRef.current;
+      if (!L) return;
+      joinPrefsRef.current = { mic: !prefs.muted, camera: !prefs.camOff };
+      setMuted(prefs.muted);
+      setCamOff(prefs.camOff);
+      lobbyRef.current = null;
+      setLobby(null);
+      if (L.intent === "outgoing") {
+        await startGroupCall(L.roomId, L.roomName, L.memberIds, true);
       } else {
-        localStreamRef.current?.getAudioTracks().forEach((t) => {
-          t.enabled = !next;
-        });
+        await accept();
       }
-      return next;
-    });
-  }, []);
+    },
+    [accept, startGroupCall],
+  );
+
+  useEffect(() => {
+    if (lobby?.intent === "incoming" && !incoming) {
+      lobbyRef.current = null;
+      joinPrefsRef.current = null;
+      setLobby(null);
+    }
+  }, [lobby, incoming]);
+
+  const toggleMic = useCallback(() => {
+    const next = !muted;
+    setMuted(next);
+    // GROUP CALLS: LiveKit publishes its own capture — localStreamRef is
+    // null there, so muting MUST go through the room or the microphone
+    // keeps broadcasting while the UI claims it is muted.
+    if (groupRef.current) {
+      void lkRef.current?.setMic(!next);
+    } else {
+      localStreamRef.current?.getAudioTracks().forEach((t) => {
+        t.enabled = !next;
+      });
+    }
+  }, [muted]);
 
   const toggleCam = useCallback(() => {
     setCamOff((prev) => {
@@ -1897,6 +2019,9 @@ export function CallProvider({
         void stopScreenShare();
       };
 
+      setSharing(true);
+      refreshLocalPreview(screenTrack);
+
       const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
       if (videoSender) {
         if (videoSender.track && videoSender.track !== cameraTrackRef.current) {
@@ -1907,8 +2032,7 @@ export function CallProvider({
         await videoSender.replaceTrack(screenTrack);
         screenAddedSenderRef.current = false;
       } else {
-        const camStream = localStreamRef.current ?? new MediaStream();
-        pc.addTrack(screenTrack, camStream);
+        pc.addTrack(screenTrack, screen);
         screenAddedSenderRef.current = true;
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -1919,9 +2043,6 @@ export function CallProvider({
           sdp: { type: finalOffer.type, sdp: finalOffer.sdp },
         });
       }
-
-      setSharing(true);
-      refreshLocalPreview(screenTrack);
     } catch (err) {
       // User cancelled the picker — not an error worth surfacing.
       if (err instanceof DOMException && err.name === "NotAllowedError") return;
@@ -2015,6 +2136,7 @@ export function CallProvider({
 
   const value = useMemo<CallContextValue>(
     () => ({
+      selfId: userId,
       phase,
       call,
       incoming,
@@ -2033,11 +2155,17 @@ export function CallProvider({
       canManageCall,
       addParticipant,
       removeParticipant,
+      muteParticipant,
       rejoinable,
       rejoinCall,
       dismissRejoin,
       dial,
       startGroupCall,
+      prepareGroupCall,
+      openIncomingLobby,
+      lobby,
+      confirmLobby,
+      cancelLobby,
       accept,
       decline,
       hangup,
@@ -2048,6 +2176,7 @@ export function CallProvider({
       setView,
     }),
     [
+      userId,
       phase,
       call,
       incoming,
@@ -2066,11 +2195,17 @@ export function CallProvider({
       canManageCall,
       addParticipant,
       removeParticipant,
+      muteParticipant,
       rejoinable,
       rejoinCall,
       dismissRejoin,
       dial,
       startGroupCall,
+      prepareGroupCall,
+      openIncomingLobby,
+      lobby,
+      confirmLobby,
+      cancelLobby,
       accept,
       decline,
       hangup,
@@ -2091,7 +2226,8 @@ export function CallProvider({
       <audio ref={remoteAudioRef} autoPlay className="hidden" />
       {/* GROUP CALLS: persistent per-peer audio sinks, same rationale. */}
       <PeerAudioSinks />
-      {incoming && phase === "ringing" && <IncomingCallOverlay />}
+      {incoming && phase === "ringing" && !lobby && <IncomingCallOverlay />}
+      {lobby && <CallLobby />}
       {onCall && (view === "full" ? <FullScreenCall /> : <FloatingCallTile />)}
       {notice && (
         <div

@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { SidebarShell } from "@/components/sidebar/SidebarShell";
 import { CallProvider } from "@/components/call/CallProvider";
 import { PresenceProvider } from "@/components/presence/PresenceProvider";
+import { ProfileAvatarsProvider } from "@/components/presence/ProfileAvatarsProvider";
 import { KeyboardInsets } from "@/components/mobile/KeyboardInsets";
 import { PushRegistrar } from "@/components/PushRegistrar";
 import { NotificationPrompt } from "@/components/NotificationPrompt";
@@ -37,19 +38,26 @@ export default async function AppLayout({
   // membership-keyed, so it simply returns the rooms the agent belongs to).
   const { data } = await supabase.rpc("get_my_rooms");
   return (
-    <CallProvider
-      userId={profile.id}
-      userName={profile.full_name}
-      userRole={profile.role}
+    <ProfileAvatarsProvider
+      initial={{ [profile.id]: profile.avatar_url ?? null }}
     >
-      <PresenceProvider userId={profile.id}>
-        <KeyboardInsets />
-        <PushRegistrar />
-        <NotificationPrompt />
-        <SidebarShell profile={profile} initialRooms={(data ?? []) as MyRoom[]}>
-          {children}
-        </SidebarShell>
-      </PresenceProvider>
-    </CallProvider>
+      <CallProvider
+        userId={profile.id}
+        userName={profile.full_name}
+        userRole={profile.role}
+      >
+        <PresenceProvider userId={profile.id}>
+          <KeyboardInsets />
+          <PushRegistrar />
+          <NotificationPrompt />
+          <SidebarShell
+            profile={profile}
+            initialRooms={(data ?? []) as MyRoom[]}
+          >
+            {children}
+          </SidebarShell>
+        </PresenceProvider>
+      </CallProvider>
+    </ProfileAvatarsProvider>
   );
 }

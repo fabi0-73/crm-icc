@@ -60,6 +60,7 @@ function ChatRow({ room }: { room: MyRoom }) {
         <span className="relative shrink-0">
           <Avatar
             name={room.display_name}
+            userId={room.dm_other_user_id}
             className="ring-1 ring-black/5"
           />
           <PresenceDot
@@ -74,7 +75,7 @@ function ChatRow({ room }: { room: MyRoom }) {
           className="ring-1 ring-black/5"
         />
       ) : (
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-50 to-brand-100 text-brand-700 ring-1 ring-brand-200/60">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-50 to-brand-100 text-brand-700 ring-1 ring-brand-200/60 dark:from-brand-900/50 dark:to-brand-950 dark:text-brand-300 dark:ring-brand-800">
           <Hash className="size-5" strokeWidth={2.2} />
         </span>
       )}
@@ -91,7 +92,7 @@ function ChatRow({ room }: { room: MyRoom }) {
           <span
             suppressHydrationWarning
             className={`shrink-0 text-[12px] tabular-nums ${
-              unread ? "font-semibold text-brand-600" : "text-muted"
+              unread ? "font-semibold text-brand-600 dark:text-brand-300" : "text-muted"
             }`}
           >
             {formatTime(room.last_message_at)}

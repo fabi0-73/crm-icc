@@ -18,13 +18,14 @@ export default async function RoomPage({
 
   const { data: room } = await supabase
     .from("rooms")
-    .select("id, name, type, avatar_url, created_by")
+    .select("id, name, type, avatar_url, background_url, created_by")
     .eq("id", roomId)
     .maybeSingle<{
       id: string;
       name: string;
       type: RoomType;
       avatar_url: string | null;
+      background_url: string | null;
       created_by: string;
     }>();
 
@@ -84,7 +85,7 @@ export default async function RoomPage({
   const memberIds = [...roleById.keys()];
   const { data: memberProfiles } = await supabase
     .from("profiles")
-    .select("id, full_name, role, is_active")
+    .select("id, full_name, role, is_active, avatar_url")
     .in(
       "id",
       memberIds.length ? memberIds : ["00000000-0000-0000-0000-000000000000"],
@@ -103,6 +104,7 @@ export default async function RoomPage({
     is_active: p.is_active,
     room_role: roleById.get(p.id) ?? "member",
     last_read_at: readAtById.get(p.id) ?? null,
+    avatar_url: (p as { avatar_url: string | null }).avatar_url ?? null,
   }));
   const dmOther =
     room.type === "dm"
@@ -119,6 +121,7 @@ export default async function RoomPage({
       roomName={dmOther ? dmOther.full_name : room.name}
       roomType={room.type}
       roomAvatarUrl={room.avatar_url}
+      roomBackgroundUrl={room.type === "group" ? room.background_url : null}
       roomCreatedBy={room.created_by}
       dmOtherUserId={dmOther?.id ?? null}
       currentUserId={user.id}

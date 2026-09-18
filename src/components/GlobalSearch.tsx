@@ -292,9 +292,13 @@ export function GlobalSearch() {
                     className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-mist"
                   >
                     {r.type === "dm" ? (
-                      <Avatar name={r.display_name} size="sm" />
+                      <Avatar
+                        name={r.display_name}
+                        size="sm"
+                        userId={r.dm_other_user_id}
+                      />
                     ) : (
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
                         <Hash className="size-4" />
                       </span>
                     )}
@@ -319,7 +323,7 @@ export function GlobalSearch() {
                     onClick={() => void openPerson(p.id)}
                     className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-mist"
                   >
-                    <Avatar name={p.full_name} size="sm" />
+                    <Avatar name={p.full_name} size="sm" userId={p.id} />
                     <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">
                       {p.full_name}
                     </span>

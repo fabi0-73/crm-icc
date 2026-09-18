@@ -146,6 +146,15 @@ export function FullScreenCall() {
                 sharing ? "" : "-scale-x-100"
               } ${camOff && !sharing ? "opacity-30" : ""}`}
             />
+            {muted && (
+              <span
+                className="absolute bottom-4 left-4 flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white"
+                title="Muted"
+                aria-label="Muted"
+              >
+                <MicOffIcon />
+              </span>
+            )}
           </>
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-4">
@@ -153,9 +162,23 @@ export function FullScreenCall() {
               {phase !== "in-call" && (
                 <span className="absolute -inset-2 animate-ping rounded-full bg-brand-400/30 motion-reduce:hidden" />
               )}
-              <Avatar name={call.peerName} size="lg" className="!h-24 !w-24 !text-2xl relative" />
+              <Avatar
+                name={call.peerName}
+                size="lg"
+                userId={call.peerId}
+                className="!h-24 !w-24 !text-2xl relative"
+              />
             </div>
             <p className="text-white/70 tabular-nums">{subtitle}</p>
+            {muted && (
+              <span
+                className="mt-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white"
+                title="Muted"
+                aria-label="Muted"
+              >
+                <MicOffIcon />
+              </span>
+            )}
           </div>
         )}
       </div>

@@ -39,6 +39,12 @@ import {
   setMessagePinned,
 } from "@/app/actions/rooms";
 import { CallButton } from "@/components/call/CallButton";
+import { useCall } from "@/components/call/CallProvider";
+import { VoiceRecorder } from "@/components/chat/VoiceRecorder";
+import {
+  VoiceMessageBubble,
+  isVoiceMessage,
+} from "@/components/chat/VoiceMessageBubble";
 import { Avatar } from "@/components/Avatar";
 import { MentionPopup } from "@/components/MentionPopup";
 import { MessageActions } from "@/components/MessageActions";
@@ -154,6 +160,7 @@ export function ChatRoom({
   roomName,
   roomType = "group",
   roomAvatarUrl = null,
+  roomBackgroundUrl = null,
   roomCreatedBy = null,
   dmOtherUserId = null,
   currentUserId,
@@ -169,6 +176,8 @@ export function ChatRoom({
   roomName: string;
   roomType?: RoomType;
   roomAvatarUrl?: string | null;
+  /** Group wallpaper behind the message stream; null for DMs. */
+  roomBackgroundUrl?: string | null;
   /** Who created the room — used to gate group deletion (creator or admin). */
   roomCreatedBy?: string | null;
   dmOtherUserId?: string | null;
@@ -188,6 +197,7 @@ export function ChatRoom({
   readOnly?: boolean;
 }) {
   const supabase = useMemo(() => createClient(), []);
+  const { phase: callPhase } = useCall();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
@@ -195,12 +205,17 @@ export function ChatRoom({
   const [myRole, setMyRole] = useState<RoomMemberRole>(myRoomRole);
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showMembers, setShowMembers] = useState(false);
   /** Which pane of the details sheet is showing (roster vs shared media). */
   const [detailsTab, setDetailsTab] = useState<"members" | "media">("members");
   const [typers, setTypers] = useState<Record<string, number>>({});
   const [older, setOlder] = useState({ has: hasOlder, loading: false });
+  /** Group wallpaper, kept live so every member sees a change at once. */
+  const [backgroundUrl, setBackgroundUrl] = useState<string | null>(
+    roomBackgroundUrl,
+  );
 
   // #8 attachment staging — one OR MORE picked-but-unsent files, each with
   // its own preview object URL. A mirror ref lets unmount revoke them all.
@@ -289,6 +304,40 @@ export function ChatRoom({
       if (channel) void supabase.removeChannel(channel);
     };
   }, [supabase, roomId, roomType, refreshMembers]);
+
+  useEffect(() => setBackgroundUrl(roomBackgroundUrl), [roomBackgroundUrl]);
+
+  // The wallpaper is a room-wide setting, so watch the row itself: an
+  // admin changing it lands for every member without a refresh.
+  useEffect(() => {
+    if (roomType !== "group") return;
+    let channel: RealtimeChannel | null = null;
+    let cancelled = false;
+    (async () => {
+      await ensureRealtimeAuth(supabase);
+      if (cancelled) return;
+      channel = supabase
+        .channel(`room_background:${roomId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "rooms",
+            filter: `id=eq.${roomId}`,
+          },
+          (payload) => {
+            const row = payload.new as { background_url?: string | null };
+            setBackgroundUrl(row.background_url ?? null);
+          },
+        )
+        .subscribe();
+    })();
+    return () => {
+      cancelled = true;
+      if (channel) void supabase.removeChannel(channel);
+    };
+  }, [supabase, roomId, roomType]);
 
   const memberMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -762,7 +811,7 @@ export function ChatRoom({
   // ── send (text / staged file share the composer) ────────────
   function submit(e: React.FormEvent | React.KeyboardEvent) {
     e.preventDefault();
-    if (sending) return;
+    if (sending || voiceBusy) return;
     if (staged.length > 0) void sendStaged();
     else void sendText();
   }
@@ -872,6 +921,50 @@ export function ChatRoom({
     setBody("");
     setReplyTo(null);
     requestAnimationFrame(autoresize);
+    if (data) mergeMessage(data as Message);
+    await markRoomRead(roomId).catch(() => {});
+  }
+
+  async function sendVoice(file: File, duration: number) {
+    const blocked = rejectFile(file);
+    if (blocked) {
+      setError(blocked);
+      throw new Error(blocked);
+    }
+    setSending(true);
+    setError(null);
+
+    const path = `${roomId}/${crypto.randomUUID()}/${safeKeyName(file.name)}`;
+    const { error: uploadError } = await supabase.storage
+      .from("attachments")
+      .upload(path, file, { contentType: file.type, upsert: false });
+    if (uploadError) {
+      setSending(false);
+      setError(uploadError.message);
+      throw new Error(uploadError.message);
+    }
+
+    const { data, error: insertError } = await supabase
+      .from("messages")
+      .insert({
+        room_id: roomId,
+        sender_id: currentUserId,
+        kind: "file",
+        body: "Voice message",
+        attachment_path: path,
+        attachment_name: file.name,
+        attachment_size: file.size,
+        attachment_mime: file.type || "audio/webm",
+        metadata: { voice: true, duration },
+      })
+      .select("*")
+      .single();
+
+    setSending(false);
+    if (insertError) {
+      setError(insertError.message);
+      throw new Error(insertError.message);
+    }
     if (data) mergeMessage(data as Message);
     await markRoomRead(roomId).catch(() => {});
   }
@@ -1010,7 +1103,7 @@ export function ChatRoom({
 
         {roomType === "dm" ? (
           <span className="relative ml-1 shrink-0 sm:ml-0">
-            <Avatar name={roomName} size="sm" />
+            <Avatar name={roomName} size="sm" userId={dmOtherUserId} />
             <PresenceDot
               online={dmOtherOnline}
               className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
@@ -1021,7 +1114,7 @@ export function ChatRoom({
             <Avatar name={roomName} size="sm" src={roomAvatarUrl} />
           </span>
         ) : (
-          <span className="ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700 sm:ml-0">
+          <span className="ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-300 sm:ml-0">
             <Hash className="size-[18px]" strokeWidth={2.2} />
           </span>
         )}
@@ -1031,7 +1124,7 @@ export function ChatRoom({
             {roomName}
           </h1>
           {typingLabel ? (
-            <p className="truncate text-[12px] font-medium text-brand-600">
+            <p className="truncate text-[12px] font-medium text-brand-600 dark:text-brand-300">
               {typingLabel}
             </p>
           ) : roomType === "dm" ? (
@@ -1066,9 +1159,9 @@ export function ChatRoom({
 
       {/* ── Pinned messages ────────────────────────────────────── */}
       {pinnedMessages.length > 0 && (
-        <div className="shrink-0 border-b border-amber-200/70 bg-amber-50/80">
+        <div className="shrink-0 border-b border-amber-200/70 bg-amber-50/80 dark:border-amber-900/50 dark:bg-amber-950/40">
           <div className="flex items-start gap-2 px-3 py-2">
-            <Pin className="mt-0.5 size-[15px] shrink-0 text-amber-700" />
+            <Pin className="mt-0.5 size-[15px] shrink-0 text-amber-700 dark:text-amber-300" />
             <ul className="min-w-0 flex-1 space-y-1">
               {pinnedMessages.slice(0, 3).map((m) => (
                 <li key={m.id} className="flex items-center gap-2">
@@ -1090,7 +1183,7 @@ export function ChatRoom({
                     <button
                       type="button"
                       onClick={() => void togglePin(m)}
-                      className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100"
+                      className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100 dark:text-amber-300 dark:hover:bg-amber-900/40"
                     >
                       Unpin
                     </button>
@@ -1098,7 +1191,7 @@ export function ChatRoom({
                 </li>
               ))}
               {pinnedMessages.length > 3 && (
-                <li className="text-[11px] text-amber-800">
+                <li className="text-[11px] text-amber-800 dark:text-amber-300">
                   +{pinnedMessages.length - 3} more pinned
                 </li>
               )}
@@ -1109,10 +1202,26 @@ export function ChatRoom({
 
       {/* ── Message stream ─────────────────────────────────────── */}
       <div className="relative min-h-0 flex-1">
+        {backgroundUrl && (
+          <>
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 bg-cover bg-center"
+              style={{
+                backgroundImage: `url("${backgroundUrl.replace(/"/g, "%22")}")`,
+              }}
+            />
+            {/* Scrim: message bubbles must stay legible over any photo. */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 bg-mist/80 dark:bg-mist/85"
+            />
+          </>
+        )}
         <div
           ref={streamRef}
           onScroll={onStreamScroll}
-          className="h-full overflow-y-auto overscroll-contain px-3 py-3 sm:px-6"
+          className="relative h-full overflow-y-auto overscroll-contain px-3 py-3 sm:px-6"
         >
           <div className="mx-auto w-full max-w-3xl">
           {older.has && (
@@ -1121,7 +1230,7 @@ export function ChatRoom({
                 type="button"
                 onClick={() => void loadOlder()}
                 disabled={older.loading}
-                className="rounded-full border border-line/70 bg-white/80 px-3.5 py-1.5 text-[12px] font-medium text-muted shadow-xs backdrop-blur active:bg-mist disabled:opacity-50"
+                className="rounded-full border border-line/70 bg-white/80 px-3.5 py-1.5 text-[12px] font-medium text-muted shadow-xs backdrop-blur active:bg-mist disabled:opacity-50 dark:bg-paper/80"
               >
                 {older.loading ? "Loading…" : "Load earlier messages"}
               </button>
@@ -1132,7 +1241,7 @@ export function ChatRoom({
               <div className="my-3 flex justify-center">
                 <span
                   suppressHydrationWarning
-                  className="rounded-full border border-line/70 bg-white/75 px-3 py-1 text-[11px] font-medium text-muted shadow-xs backdrop-blur"
+                  className="rounded-full border border-line/70 bg-white/75 px-3 py-1 text-[11px] font-medium text-muted shadow-xs backdrop-blur dark:bg-paper/75"
                 >
                   {day.label}
                 </span>
@@ -1236,12 +1345,13 @@ export function ChatRoom({
                       <Avatar
                         name={name}
                         size="sm"
+                        userId={g.senderId}
                         className="!h-8 !w-8 !text-[11px]"
                       />
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="flex items-baseline gap-2 pl-0.5">
-                        <span className="truncate text-[13px] font-semibold text-brand-700">
+                        <span className="truncate text-[13px] font-semibold text-brand-700 dark:text-brand-300">
                           {name}
                         </span>
                         <span
@@ -1336,14 +1446,14 @@ export function ChatRoom({
       {!readOnly && (
       <div className="shrink-0 border-t border-line/80 bg-paper/95 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur sm:px-3">
         {error && (
-          <p className="mx-auto mb-2 w-full max-w-3xl rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700">
+          <p className="mx-auto mb-2 w-full max-w-3xl rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </p>
         )}
         {replyTo && (
           <div className="mx-auto mb-2 flex w-full max-w-3xl items-center gap-2 rounded-xl border-l-2 border-brand-500 bg-secondary px-3 py-2">
             <div className="min-w-0 flex-1">
-              <p className="text-[12px] font-semibold text-brand-700">
+              <p className="text-[12px] font-semibold text-brand-700 dark:text-brand-300">
                 Replying to{" "}
                 {replyTo.sender_id
                   ? (memberMap.get(replyTo.sender_id) ?? "Member")
@@ -1404,13 +1514,14 @@ export function ChatRoom({
           />
           <button
             type="button"
-            disabled={sending}
+            disabled={sending || voiceBusy}
             onClick={() => fileRef.current?.click()}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-mist active:bg-mist disabled:opacity-40"
             aria-label="Attach file"
           >
             <Paperclip className="size-[21px]" />
           </button>
+          {voiceBusy ? null : (
           <div className="relative flex min-h-10 flex-1 items-end rounded-3xl bg-secondary px-4 py-2">
             <MentionPopup
               matches={mentionMatches}
@@ -1473,6 +1584,8 @@ export function ChatRoom({
               }}
             />
           </div>
+          )}
+          {!voiceBusy && (body.trim() || staged.length > 0) ? (
           <button
             type="submit"
             disabled={sending || (staged.length === 0 && !body.trim())}
@@ -1481,13 +1594,22 @@ export function ChatRoom({
           >
             <SendHorizontal className="size-5" />
           </button>
+          ) : (
+            <VoiceRecorder
+              disabled={sending}
+              callActive={callPhase !== "idle"}
+              onBusyChange={setVoiceBusy}
+              onSend={sendVoice}
+              onError={setError}
+            />
+          )}
         </form>
         {/* Only appears as the limit comes into view, so it never nags. */}
         {body.length >= COUNTER_VISIBLE_FROM && (
           <p
             className={`px-4 pb-1 text-right text-[11px] tabular-nums ${
               body.length >= MAX_MESSAGE_CHARS
-                ? "font-semibold text-red-600"
+                ? "font-semibold text-red-600 dark:text-red-400"
                 : "text-muted"
             }`}
           >
@@ -1549,6 +1671,7 @@ export function ChatRoom({
               roomName={roomName}
               roomType={roomType}
               roomAvatarUrl={roomAvatarUrl}
+              roomBackgroundUrl={backgroundUrl}
               roomCreatedBy={roomCreatedBy}
               members={members}
               currentUserId={currentUserId}
@@ -1639,6 +1762,7 @@ function repliedName(
 /** One-line preview used in reply bars and reply quotes. */
 function messageSnippet(msg: Message): string {
   if (msg.deleted_at) return "Deleted message";
+  if (isVoiceMessage(msg)) return "Voice message";
   if (msg.kind === "file") return msg.attachment_name ?? "Attachment";
   const text = msg.body ?? "";
   return text.length > 64 ? `${text.slice(0, 64)}…` : text;
@@ -1807,7 +1931,7 @@ function Bubble({
   const pinMark = msg.pinned_at ? (
     <span
       className={`ml-1.5 inline-flex items-center gap-0.5 align-baseline text-[10.5px] font-medium ${
-        mine ? "text-white/80" : "text-amber-700"
+        mine ? "text-white/80" : "text-amber-700 dark:text-amber-300"
       }`}
       title="Pinned"
     >
@@ -1829,6 +1953,27 @@ function Bubble({
     msg.kind === "file" && msg.body && msg.body !== msg.attachment_name
       ? msg.body
       : null;
+
+  if (isVoiceMessage(msg) && msg.attachment_path) {
+    return (
+      <div className={accent}>
+        {replyQuote}
+        <VoiceMessageBubble
+          msg={msg}
+          mine={mine}
+          shape={shape}
+          surface={surface}
+          sign={sign}
+        />
+        {(edited || pinMark) && (
+          <div className="mt-0.5 px-1">
+            {edited}
+            {pinMark}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const attachments = messageAttachments(msg);
   if (attachments.length > 0) {
@@ -1926,7 +2071,7 @@ function AttachmentFile({
     <>
       <span
         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
-          mine ? "bg-white/20" : "bg-brand-50 text-brand-700"
+          mine ? "bg-white/20" : "bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-300"
         }`}
       >
         <FileText className="size-[18px]" />
@@ -2077,7 +2222,7 @@ function MemberRow({
   return (
     <>
       <span className="relative shrink-0">
-        <Avatar name={member.full_name} size="sm" />
+        <Avatar name={member.full_name} size="sm" userId={member.id} />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"

@@ -41,6 +41,7 @@ export function MentionPopup({
           <Avatar
             name={m.full_name}
             size="sm"
+            userId={m.id}
             className="!h-7 !w-7 !text-[10px]"
           />
           <span className="min-w-0 flex-1">

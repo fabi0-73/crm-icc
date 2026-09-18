@@ -1,3 +1,8 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useProfileAvatar } from "@/components/presence/ProfileAvatarsProvider";
+
 /** Shared avatar initials — consistent color from name.
  *  Cool corporate family only, so avatars read as one system. */
 const PALETTE = [
@@ -25,31 +30,15 @@ export function avatarTone(name: string) {
   return PALETTE[h];
 }
 
-export function Avatar({
+function Initials({
   name,
-  size = "md",
-  className = "",
-  src = null,
+  dim,
+  className,
 }: {
   name: string;
-  size?: "sm" | "md" | "lg";
-  className?: string;
-  /** When set, show this image instead of initials (group avatars). */
-  src?: string | null;
+  dim: string;
+  className: string;
 }) {
-  const dim =
-    size === "sm" ? "h-9 w-9 text-xs" : size === "lg" ? "h-14 w-14 text-lg" : "h-11 w-11 text-sm";
-  if (src) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element -- public bucket
-      // URL, not a Next-optimizable asset
-      <img
-        src={src}
-        alt={name}
-        className={`shrink-0 rounded-full object-cover ${dim} ${className}`}
-      />
-    );
-  }
   return (
     <div
       className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-white ${dim} ${avatarTone(name)} ${className}`}
@@ -58,4 +47,44 @@ export function Avatar({
       {initials(name) || "·"}
     </div>
   );
+}
+
+export function Avatar({
+  name,
+  size = "md",
+  className = "",
+  src = null,
+  userId = null,
+}: {
+  name: string;
+  size?: "sm" | "md" | "lg";
+  className?: string;
+  /** Explicit image (group avatars, or a known profile URL). */
+  src?: string | null;
+  /** When set, the live profile-picture map wins over `src`. */
+  userId?: string | null;
+}) {
+  const live = useProfileAvatar(userId, src);
+  const picture = userId ? live : src;
+  // A deleted or replaced upload must not leave a broken image icon
+  // where initials would do.
+  const [broken, setBroken] = useState(false);
+  useEffect(() => setBroken(false), [picture]);
+
+  const dim =
+    size === "sm" ? "h-9 w-9 text-xs" : size === "lg" ? "h-14 w-14 text-lg" : "h-11 w-11 text-sm";
+
+  if (picture && !broken) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- public bucket
+      // URL, not a Next-optimizable asset
+      <img
+        src={picture}
+        alt={name}
+        onError={() => setBroken(true)}
+        className={`shrink-0 rounded-full object-cover ${dim} ${className}`}
+      />
+    );
+  }
+  return <Initials name={name} dim={dim} className={className} />;
 }

@@ -6,6 +6,8 @@ export type Profile = {
   role: Role;
   is_active: boolean;
   created_at: string;
+  /** Profile picture (public URL); null until the person uploads one. */
+  avatar_url?: string | null;
 };
 
 export type Agent = {
@@ -37,6 +39,10 @@ export type Room = {
   name: string;
   created_by: string;
   created_at: string;
+  /** Group image (public URL); null for DMs and un-imaged groups. */
+  avatar_url?: string | null;
+  /** Chat wallpaper behind the message stream. Groups only. */
+  background_url?: string | null;
 };
 
 export type RoomMember = {
@@ -60,6 +66,8 @@ export type RoomMemberView = {
   room_role: RoomMemberRole;
   /** When they last read the room — drives per-message seen state. */
   last_read_at?: string | null;
+  /** Profile picture (public URL); null until the person uploads one. */
+  avatar_url?: string | null;
 };
 
 export type MessageKind = "text" | "file" | "system";

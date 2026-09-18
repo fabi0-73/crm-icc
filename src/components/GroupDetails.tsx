@@ -23,7 +23,7 @@ import { useIsOnline } from "@/components/presence/PresenceProvider";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Field";
 import { createClient } from "@/lib/supabase/client";
-import { uploadGroupAvatar } from "@/lib/avatars";
+import { uploadGroupAvatar, uploadGroupBackground } from "@/lib/avatars";
 import {
   addRoomMember,
   deleteRoom,
@@ -32,6 +32,7 @@ import {
   removeRoomMember,
   renameRoom,
   setRoomAvatar,
+  setRoomBackground,
   setRoomMemberRole,
 } from "@/app/actions/rooms";
 import type { Profile, RoomMemberRole, RoomMemberView, RoomType } from "@/lib/types";
@@ -43,6 +44,7 @@ export function GroupDetails({
   roomName,
   roomType,
   roomAvatarUrl,
+  roomBackgroundUrl = null,
   roomCreatedBy,
   members,
   currentUserId,
@@ -55,6 +57,7 @@ export function GroupDetails({
   roomName: string;
   roomType: RoomType;
   roomAvatarUrl: string | null;
+  roomBackgroundUrl?: string | null;
   roomCreatedBy?: string | null;
   members: RoomMemberView[];
   currentUserId: string;
@@ -73,6 +76,11 @@ export function GroupDetails({
   // of them (they're placed and removed by an admin).
   const canManage = isGroup && (myRoomRole === "admin" || appManager);
   const canAdd = canManage;
+  // The wallpaper is deliberately narrower than canManage: this group's
+  // own admins and the Admin role only — not every manager. Mirrors the
+  // rule inside set_room_background.
+  const canSetBackground =
+    isGroup && (myRoomRole === "admin" || currentUserRole === "admin");
   // Deletion: an app admin removes ANY group; a manager or assistant removes
   // only a group they created. Mirrors the server rule in delete_room so the
   // button is never shown to someone the RPC would reject.
@@ -203,7 +211,7 @@ export function GroupDetails({
         </div>
 
         {error && (
-          <p className="mx-4 mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="mx-4 mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </p>
         )}
@@ -267,7 +275,7 @@ export function GroupDetails({
               <button
                 type="button"
                 onClick={() => setConfirmLeave(true)}
-                className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
               >
                 <LogOut className="size-4" /> Leave group
               </button>
@@ -302,7 +310,7 @@ export function GroupDetails({
               <button
                 type="button"
                 onClick={() => setConfirmDelete(true)}
-                className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
               >
                 <Trash2 className="size-4" /> Delete group
               </button>
@@ -325,6 +333,8 @@ export function GroupDetails({
           roomId={roomId}
           initialName={roomName}
           initialAvatar={roomAvatarUrl}
+          initialBackground={roomBackgroundUrl}
+          canSetBackground={canSetBackground}
           onClose={settingsModal.closeModal}
         />
       )}
@@ -359,7 +369,7 @@ function MemberItem({
   return (
     <li className="flex items-center gap-3 rounded-xl px-2.5 py-2.5 hover:bg-mist">
       <span className="relative shrink-0">
-        <Avatar name={member.full_name} size="sm" />
+        <Avatar name={member.full_name} size="sm" userId={member.id} />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"
@@ -370,7 +380,7 @@ function MemberItem({
           {member.full_name}
           {self && <span className="text-[12px] text-muted">(you)</span>}
           {isAdmin && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
               <ShieldCheck className="size-3" /> Admin
             </span>
           )}
@@ -385,7 +395,7 @@ function MemberItem({
         <button
           type="button"
           onClick={onMessage}
-          className="shrink-0 rounded-md border border-line px-2.5 py-1 text-[12px] font-medium text-brand-700 hover:bg-brand-50"
+          className="shrink-0 rounded-md border border-line px-2.5 py-1 text-[12px] font-medium text-brand-700 hover:bg-brand-50 dark:text-brand-300 dark:hover:bg-brand-900/30"
         >
           Message
         </button>
@@ -397,7 +407,7 @@ function MemberItem({
             type="button"
             onClick={() => onSetRole(isAdmin ? "member" : "admin")}
             disabled={rowBusy || (isAdmin && onlyAdmin)}
-            className="rounded-md px-2 py-1 text-[12px] font-medium text-muted hover:bg-brand-50 hover:text-brand-700 disabled:opacity-40"
+            className="rounded-md px-2 py-1 text-[12px] font-medium text-muted hover:bg-brand-50 hover:text-brand-700 disabled:opacity-40 dark:hover:bg-brand-900/30 dark:hover:text-brand-300"
             title={isAdmin ? "Demote to member" : "Make admin"}
           >
             {isAdmin ? "Demote" : "Make admin"}
@@ -406,7 +416,7 @@ function MemberItem({
             type="button"
             onClick={onRemove}
             disabled={rowBusy}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-red-50 hover:text-red-600 disabled:opacity-40 dark:hover:bg-red-950/40 dark:hover:text-red-400"
             aria-label={`Remove ${member.full_name}`}
             title="Remove from group"
           >
@@ -481,7 +491,7 @@ function AddMembersModal({
     <Modal title="Add members" open onClose={onClose}>
       <div className="space-y-4">
         {error && (
-          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </p>
         )}
@@ -525,19 +535,28 @@ function GroupSettingsModal({
   roomId,
   initialName,
   initialAvatar,
+  initialBackground = null,
+  canSetBackground = false,
   onClose,
 }: {
   roomId: string;
   initialName: string;
   initialAvatar: string | null;
+  initialBackground?: string | null;
+  canSetBackground?: boolean;
   onClose: () => void;
 }) {
   const [name, setName] = useState(initialName);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(initialAvatar);
+  const [backgroundUrl, setBackgroundUrl] = useState<string | null>(
+    initialBackground,
+  );
   const [uploading, setUploading] = useState(false);
+  const [uploadingBg, setUploadingBg] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const bgFileRef = useRef<HTMLInputElement>(null);
 
   async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -552,6 +571,21 @@ function GroupSettingsModal({
       return;
     }
     setAvatarUrl(res.url);
+  }
+
+  async function onPickBackground(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploadingBg(true);
+    setError(null);
+    const res = await uploadGroupBackground(roomId, file);
+    setUploadingBg(false);
+    if (res.error || !res.url) {
+      setError(res.error ?? "Could not upload the image.");
+      return;
+    }
+    setBackgroundUrl(res.url);
   }
 
   async function onSave() {
@@ -586,6 +620,17 @@ function GroupSettingsModal({
         return;
       }
     }
+    if (
+      canSetBackground &&
+      (backgroundUrl ?? "") !== (initialBackground ?? "")
+    ) {
+      const res = await setRoomBackground(roomId, backgroundUrl);
+      if (res.error) {
+        setError(res.error);
+        setPending(false);
+        return;
+      }
+    }
     // Name/avatar show in the header and sidebar, which the client router
     // caches; a reload is the reliable way to reflect them everywhere.
     window.location.reload();
@@ -595,7 +640,7 @@ function GroupSettingsModal({
     <Modal title="Group settings" open onClose={onClose}>
       <div className="space-y-4">
         {error && (
-          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </p>
         )}
@@ -637,6 +682,60 @@ function GroupSettingsModal({
             autoComplete="off"
           />
         </div>
+        {canSetBackground && (
+          <div>
+            <Label>Chat background</Label>
+            <p className="mb-2 text-[12px] text-muted">
+              Everyone in this group sees it behind the messages.
+            </p>
+            <div className="flex items-center gap-3">
+              <div
+                className="h-14 w-24 shrink-0 rounded-lg border border-line bg-mist bg-cover bg-center"
+                style={
+                  backgroundUrl
+                    ? {
+                        backgroundImage: `url("${backgroundUrl.replace(/"/g, "%22")}")`,
+                      }
+                    : undefined
+                }
+                aria-hidden
+              />
+              <div className="min-w-0">
+                <button
+                  type="button"
+                  onClick={() => bgFileRef.current?.click()}
+                  disabled={uploadingBg}
+                  className="rounded-md border border-line px-3 py-1.5 text-sm font-medium text-ink hover:bg-mist disabled:opacity-50"
+                >
+                  {uploadingBg
+                    ? "Uploading…"
+                    : backgroundUrl
+                      ? "Change background"
+                      : "Add background"}
+                </button>
+                {backgroundUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setBackgroundUrl(null)}
+                    className="ml-2 text-sm text-muted hover:text-ink"
+                  >
+                    Remove
+                  </button>
+                )}
+                <p className="mt-1 text-[12px] text-muted">
+                  JPG, PNG or WEBP. 5 MB or smaller.
+                </p>
+              </div>
+            </div>
+            <input
+              ref={bgFileRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={onPickBackground}
+            />
+          </div>
+        )}
         <Button
           type="button"
           onClick={onSave}

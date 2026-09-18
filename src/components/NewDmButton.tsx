@@ -33,7 +33,7 @@ function PersonRow({
       className="flex w-full items-center gap-3 rounded-md px-2 py-2.5 text-left hover:bg-mist disabled:opacity-50"
     >
       <span className="relative shrink-0">
-        <Avatar name={person.full_name} size="sm" />
+        <Avatar name={person.full_name} size="sm" userId={person.id} />
         <PresenceDot
           online={online}
           className="absolute -bottom-0.5 -right-0.5 ring-2 ring-paper"

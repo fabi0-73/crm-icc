@@ -21,7 +21,7 @@ type Candidate = { id: string; full_name: string; role: string };
  * that the actor is in the conversation.
  */
 export function CallParticipants({ onClose }: { onClose: () => void }) {
-  const { call, groupPeers, canManageCall, addParticipant, removeParticipant } =
+  const { selfId, call, groupPeers, canManageCall, addParticipant, removeParticipant } =
     useCall();
   const supabase = useMemo(() => createClient(), []);
   const [roster, setRoster] = useState<Candidate[]>([]);
@@ -91,14 +91,14 @@ export function CallParticipants({ onClose }: { onClose: () => void }) {
       <div className="flex-1 overflow-y-auto p-2">
         <ul className="space-y-0.5">
           <li className="flex items-center gap-3 rounded-lg px-2 py-2">
-            <Avatar name="You" size="sm" />
+            <Avatar name="You" size="sm" userId={selfId} />
             <span className="min-w-0 flex-1 truncate text-[14px] text-white">
               You
             </span>
           </li>
           {groupPeers.map((p) => (
             <li key={p.id} className="flex items-center gap-3 rounded-lg px-2 py-2">
-              <Avatar name={p.name} size="sm" />
+              <Avatar name={p.name} size="sm" userId={p.id} />
               <span className="min-w-0 flex-1 truncate text-[14px] text-white">
                 {p.name}
               </span>
@@ -139,7 +139,7 @@ export function CallParticipants({ onClose }: { onClose: () => void }) {
                   key={p.id}
                   className="flex items-center gap-3 rounded-lg px-2 py-2"
                 >
-                  <Avatar name={p.full_name} size="sm" />
+                  <Avatar name={p.full_name} size="sm" userId={p.id} />
                   <span className="min-w-0 flex-1 truncate text-[14px] text-white/90">
                     {p.full_name}
                   </span>

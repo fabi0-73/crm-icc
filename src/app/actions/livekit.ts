@@ -146,3 +146,64 @@ export async function removeCallParticipant(
     return { error: message || "Could not remove them from the call." };
   }
 }
+
+/**
+ * Force-mute someone else's microphone in a group call.
+ * Same permission gate as eviction: admin/manager who is in the room.
+ */
+export async function muteCallParticipant(
+  roomId: string,
+  callId: string,
+  identity: string,
+): Promise<{ ok?: true; error?: string }> {
+  if (!roomId || !callId || !identity) return { error: "Missing call details." };
+
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  const url = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+  if (!apiKey || !apiSecret || !url) {
+    return { error: "Group calling is not configured on this server." };
+  }
+
+  try {
+    const { supabase, user } = await requireRole(["admin", "manager"]);
+
+    const { data: membership } = await supabase
+      .from("room_members")
+      .select("user_id")
+      .eq("room_id", roomId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!membership) return { error: "You're not a member of this room." };
+    if (identity === user.id) return { error: "Use the mute button for yourself." };
+    if (!(await callBelongsToRoom(callId, roomId))) {
+      return { error: "That call doesn't belong to this conversation." };
+    }
+
+    const httpUrl = url.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+    const svc = new RoomServiceClient(httpUrl, apiKey, apiSecret);
+    const roomName = `call-${callId}`;
+    const parts = await svc.listParticipants(roomName);
+    const person = parts.find((p) => p.identity === identity);
+    if (!person) return { error: "They're not in the call." };
+    const mic = person.tracks.find((t) => {
+      const source = String(t.source ?? "");
+      return (
+        source === "MICROPHONE" ||
+        source === "SOURCE_MICROPHONE" ||
+        source === "2" ||
+        Number(t.source) === 2
+      );
+    });
+    if (!mic?.sid) return { error: "No microphone published." };
+    await svc.mutePublishedTrack(roomName, identity, mic.sid, true);
+    return { ok: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "";
+    if (message === "Permission denied") {
+      return { error: "Only admins and managers can mute other people." };
+    }
+    if (/not found/i.test(message)) return { error: "They're not in the call." };
+    return { error: message || "Could not mute them." };
+  }
+}

@@ -118,7 +118,12 @@ export function FloatingCallTile() {
             />
             {(!groupFirst || !groupFirst.hasVideo) && (
               <div className="absolute inset-0 flex items-center justify-center">
-                <Avatar name={groupFirst?.name ?? call.peerName} size="md" className="relative" />
+                <Avatar
+                  name={groupFirst?.name ?? call.peerName}
+                  size="md"
+                  userId={groupFirst?.id ?? call.peerId}
+                  className="relative"
+                />
               </div>
             )}
             <span className="absolute bottom-2 left-2 rounded-full bg-black/50 px-2 py-0.5 text-[10px] font-semibold text-white">
@@ -152,7 +157,12 @@ export function FloatingCallTile() {
               {phase !== "in-call" && (
                 <span className="absolute -inset-1.5 animate-ping rounded-full bg-brand-400/30 motion-reduce:hidden" />
               )}
-              <Avatar name={call.peerName} size="md" className="relative" />
+              <Avatar
+                name={call.peerName}
+                size="md"
+                userId={call.peerId}
+                className="relative"
+              />
             </div>
           </div>
         )}
@@ -162,6 +172,17 @@ export function FloatingCallTile() {
         {sharing && (
           <span className="absolute left-2 top-2 rounded bg-brand-500/90 px-1.5 py-0.5 text-[10px] font-medium">
             Sharing
+          </span>
+        )}
+        {muted && (
+          <span
+            className="absolute bottom-2 left-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/70 text-white"
+            title="Muted"
+            aria-label="Muted"
+          >
+            <span className="scale-75">
+              <MicOffIcon />
+            </span>
           </span>
         )}
       </button>

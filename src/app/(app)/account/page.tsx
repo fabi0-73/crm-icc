@@ -6,7 +6,7 @@ import { emailToUsername } from "@/lib/username";
 import { ChangePasswordForm } from "@/components/PasswordForms";
 import { DisplayNameForm } from "@/components/DisplayNameForm";
 import { NotificationSettings } from "@/components/NotificationSettings";
-import { Avatar } from "@/components/Avatar";
+import { ProfilePictureForm } from "@/components/account/ProfilePictureForm";
 
 /** Every role reaches this page — it is the only sign-out and
  *  password-change surface an agent has. */
@@ -28,9 +28,8 @@ export default async function AccountPage() {
       </div>
 
       <div className="mx-auto w-full max-w-md space-y-4 p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-        <div className="flex items-center gap-3 rounded-2xl border border-line bg-paper p-4 shadow-xs">
-          <Avatar name={profile.full_name} />
-          <div className="min-w-0">
+        <div className="rounded-2xl border border-line bg-paper p-4 shadow-xs">
+          <div className="mb-3 min-w-0">
             <p className="truncate text-[15px] font-semibold text-ink">
               {profile.full_name}
             </p>
@@ -39,6 +38,11 @@ export default async function AccountPage() {
             </p>
             <p className="text-[12px] capitalize text-muted">{profile.role}</p>
           </div>
+          <ProfilePictureForm
+            userId={profile.id}
+            name={profile.full_name}
+            initialUrl={profile.avatar_url ?? null}
+          />
         </div>
 
         <div className="rounded-2xl border border-line bg-paper p-4 shadow-xs">
@@ -69,10 +73,10 @@ export default async function AccountPage() {
             type="submit"
             className="flex w-full items-center gap-3 rounded-2xl border border-line bg-paper px-4 py-3.5 text-left shadow-xs active:bg-mist"
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600 dark:bg-red-950/50 dark:text-red-400">
               <LogOut className="size-[18px]" />
             </span>
-            <span className="text-[15px] font-medium text-red-600">
+            <span className="text-[15px] font-medium text-red-600 dark:text-red-400">
               Sign out
             </span>
           </button>

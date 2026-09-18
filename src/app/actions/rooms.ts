@@ -259,6 +259,27 @@ export async function setRoomAvatar(
   return { success: "Group image updated." };
 }
 
+/**
+ * Chat wallpaper for a group. Any signed-in member may call it; the
+ * set_room_background function is the gate — it allows the Admin role
+ * and that group's own admins, and rejects DMs and workspaces.
+ */
+export async function setRoomBackground(
+  roomId: string,
+  backgroundUrl: string | null,
+): Promise<{ error?: string; success?: string }> {
+  const { supabase } = await requireProfile();
+  if (!roomId) return { error: "Missing room." };
+
+  const { error } = await supabase.rpc("set_room_background", {
+    p_room_id: roomId,
+    p_background_url: backgroundUrl,
+  });
+  if (error) return { error: error.message };
+  revalidatePath(`/rooms/${roomId}`);
+  return { success: "Chat background updated." };
+}
+
 export async function editMessage(
   _prev: ActionState,
   formData: FormData,

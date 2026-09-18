@@ -13,9 +13,9 @@
  * incoming-call UX, notifications and permissions are unchanged. This module
  * only moves the media.
  *
- * Participants are surfaced as { id, name, stream, hasVideo } — the exact
- * shape the existing CallGrid already renders — and each participant keeps a
- * STABLE MediaStream across updates so <video> elements aren't torn down and
+ * Participants are surfaced as { id, name, stream, hasVideo, muted, sharing }
+ * — the shape CallGrid renders — and each participant keeps a STABLE
+ * MediaStream across updates so <video> elements aren't torn down and
  * re-bound on every track change.
  */
 
@@ -26,6 +26,8 @@ export type LiveKitParticipant = {
   name: string;
   stream: MediaStream;
   hasVideo: boolean;
+  muted: boolean;
+  sharing: boolean;
 };
 
 export type CallRoomHandle = {
@@ -40,14 +42,22 @@ export type CallRoomHandle = {
 type UpdatePayload = {
   participants: LiveKitParticipant[];
   localStream: MediaStream | null;
+  localSharing: boolean;
+};
+
+type Pub = {
+  kind: Track.Kind;
+  source?: Track.Source;
+  isMuted: boolean;
+  track?: { mediaStreamTrack?: MediaStreamTrack };
 };
 
 /** Mirror a participant's published tracks into one long-lived MediaStream. */
 function syncStream(
   key: string,
-  publications: { kind: Track.Kind; isMuted: boolean; track?: { mediaStreamTrack?: MediaStreamTrack } }[],
+  publications: Pub[],
   cache: Map<string, MediaStream>,
-): { stream: MediaStream; hasVideo: boolean } {
+): { stream: MediaStream; hasVideo: boolean; muted: boolean; sharing: boolean } {
   let stream = cache.get(key);
   if (!stream) {
     stream = new MediaStream();
@@ -55,15 +65,45 @@ function syncStream(
   }
 
   const wanted = new Map<string, MediaStreamTrack>();
-  let hasVideo = false;
+  const audioPubs = publications.filter((p) => p.kind === Track.Kind.Audio);
+  const muted =
+    audioPubs.length > 0 && audioPubs.every((p) => p.isMuted);
+  const sharing = publications.some(
+    (p) =>
+      p.source === Track.Source.ScreenShare &&
+      p.track?.mediaStreamTrack?.readyState === "live",
+  );
+
   for (const pub of publications) {
+    if (pub.kind !== Track.Kind.Audio) continue;
     const mst = pub.track?.mediaStreamTrack;
     if (!mst) continue;
     wanted.set(mst.id, mst);
-    if (pub.kind === Track.Kind.Video && !pub.isMuted && mst.readyState === "live") {
-      hasVideo = true;
-    }
   }
+
+  const videos = publications.filter(
+    (p) => p.kind === Track.Kind.Video && p.track?.mediaStreamTrack,
+  );
+  const screen = videos.find((p) => p.source === Track.Source.ScreenShare);
+  const liveCam = videos.find(
+    (p) =>
+      p.source !== Track.Source.ScreenShare &&
+      p.track?.mediaStreamTrack?.readyState === "live",
+  );
+  // Screen wins so the <video> element is not stuck on the camera track.
+  // A live screen counts even while LiveKit still reports the pub muted
+  // (common until the first frame).
+  const display = screen ?? liveCam ?? videos[0];
+  if (display?.track?.mediaStreamTrack) {
+    wanted.set(
+      display.track.mediaStreamTrack.id,
+      display.track.mediaStreamTrack,
+    );
+  }
+  const hasVideo = Boolean(
+    display?.track?.mediaStreamTrack &&
+      display.track.mediaStreamTrack.readyState === "live",
+  );
 
   for (const t of stream.getTracks()) {
     if (!wanted.has(t.id)) stream.removeTrack(t);
@@ -71,20 +111,19 @@ function syncStream(
   for (const t of wanted.values()) {
     if (!stream.getTracks().some((x) => x.id === t.id)) stream.addTrack(t);
   }
-  return { stream, hasVideo };
+  return { stream, hasVideo, muted, sharing };
 }
 
-function publicationsOf(p: RemoteParticipant) {
-  const out: {
-    kind: Track.Kind;
-    isMuted: boolean;
-    track?: { mediaStreamTrack?: MediaStreamTrack };
-  }[] = [];
+function publicationsOf(p: RemoteParticipant): Pub[] {
+  const out: Pub[] = [];
   p.trackPublications.forEach((pub) => {
     out.push({
       kind: pub.kind,
+      source: pub.source,
       isMuted: pub.isMuted,
-      track: pub.track ? { mediaStreamTrack: pub.track.mediaStreamTrack } : undefined,
+      track: pub.track
+        ? { mediaStreamTrack: pub.track.mediaStreamTrack }
+        : undefined,
     });
   });
   return out;
@@ -98,10 +137,24 @@ export async function connectCallRoom(opts: {
   url: string;
   token: string;
   video: boolean;
+  /** Publish microphone on join. Defaults to true. */
+  micEnabled?: boolean;
+  /** Publish camera on join when `video` is true. Defaults to true. */
+  cameraEnabled?: boolean;
   onUpdate: (payload: UpdatePayload) => void;
   onDisconnected: () => void;
+  onLocalMic?: (muted: boolean) => void;
 }): Promise<CallRoomHandle> {
-  const { url, token, video, onUpdate, onDisconnected } = opts;
+  const {
+    url,
+    token,
+    video,
+    micEnabled = true,
+    cameraEnabled = true,
+    onUpdate,
+    onDisconnected,
+    onLocalMic,
+  } = opts;
 
   const room = new Room({
     // Only send/receive what each tile actually needs — this is what keeps a
@@ -122,7 +175,7 @@ export async function connectCallRoom(opts: {
   const emit = () => {
     const participants: LiveKitParticipant[] = [];
     room.remoteParticipants.forEach((p) => {
-      const { stream, hasVideo } = syncStream(
+      const { stream, hasVideo, muted, sharing } = syncStream(
         p.identity,
         publicationsOf(p),
         remoteStreams,
@@ -132,6 +185,8 @@ export async function connectCallRoom(opts: {
         name: p.name || "Participant",
         stream,
         hasVideo,
+        muted,
+        sharing,
       });
     });
 
@@ -140,17 +195,16 @@ export async function connectCallRoom(opts: {
       if (!room.remoteParticipants.has(key)) remoteStreams.delete(key);
     }
 
-    const localPubs: {
-      kind: Track.Kind;
-      isMuted: boolean;
-      track?: { mediaStreamTrack?: MediaStreamTrack };
-    }[] = [];
+    const localPubs: Pub[] = [];
     room.localParticipant.trackPublications.forEach((pub) => {
       if (pub.kind !== Track.Kind.Video) return;
       localPubs.push({
         kind: pub.kind,
+        source: pub.source,
         isMuted: pub.isMuted,
-        track: pub.track ? { mediaStreamTrack: pub.track.mediaStreamTrack } : undefined,
+        track: pub.track
+          ? { mediaStreamTrack: pub.track.mediaStreamTrack }
+          : undefined,
       });
     });
     const local = syncStream("self", localPubs, localCache);
@@ -158,7 +212,18 @@ export async function connectCallRoom(opts: {
     onUpdate({
       participants,
       localStream: local.stream.getTracks().length > 0 ? local.stream : null,
+      localSharing: local.sharing,
     });
+  };
+
+  const onMuteChange = (
+    pub: { kind: Track.Kind; isMuted: boolean },
+    participant: { isLocal?: boolean },
+  ) => {
+    emit();
+    if (participant.isLocal && pub.kind === Track.Kind.Audio) {
+      onLocalMic?.(pub.isMuted);
+    }
   };
 
   room
@@ -166,8 +231,8 @@ export async function connectCallRoom(opts: {
     .on(RoomEvent.ParticipantDisconnected, emit)
     .on(RoomEvent.TrackSubscribed, emit)
     .on(RoomEvent.TrackUnsubscribed, emit)
-    .on(RoomEvent.TrackMuted, emit)
-    .on(RoomEvent.TrackUnmuted, emit)
+    .on(RoomEvent.TrackMuted, onMuteChange)
+    .on(RoomEvent.TrackUnmuted, onMuteChange)
     .on(RoomEvent.LocalTrackPublished, emit)
     .on(RoomEvent.LocalTrackUnpublished, emit)
     .on(RoomEvent.Disconnected, () => {
@@ -178,9 +243,12 @@ export async function connectCallRoom(opts: {
 
   await room.connect(url, token);
 
-  // Publish our media. Mic always; camera only for a video call.
-  await room.localParticipant.setMicrophoneEnabled(true);
-  if (video) await room.localParticipant.setCameraEnabled(true);
+  // Publish our media using the lobby (or default) choices so the user is
+  // not live unmuted / on-camera before they opted in.
+  await room.localParticipant.setMicrophoneEnabled(micEnabled);
+  if (video && cameraEnabled) {
+    await room.localParticipant.setCameraEnabled(true);
+  }
 
   // Browsers can hold remote audio until a gesture; joining is one.
   try {
