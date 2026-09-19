@@ -99,7 +99,9 @@ export function CallLobby() {
   const subtitle =
     lobby.intent === "incoming"
       ? "Joining group video"
-      : "Ready to start group video";
+      : lobby.intent === "join"
+        ? "Joining the call in progress"
+        : "Ready to start group video";
 
   async function join() {
     if (joining) return;

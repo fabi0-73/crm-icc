@@ -40,6 +40,7 @@ import {
   setMessagePinned,
 } from "@/app/actions/rooms";
 import { CallButton } from "@/components/call/CallButton";
+import { JoinCallButton } from "@/components/call/JoinCallButton";
 import { useCall } from "@/components/call/CallProvider";
 import { VoiceRecorder } from "@/components/chat/VoiceRecorder";
 import {
@@ -425,6 +426,14 @@ export function ChatRoom({
   );
 
   const sections = useMemo(() => buildDaySections(messages), [messages]);
+  // A call starting or ending here is the moment to re-check for Join.
+  const lastCallEventId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const event = (messages[i].metadata as { event?: unknown } | null)?.event;
+      if (event === "call_started" || event === "call_ended") return messages[i].id;
+    }
+    return null;
+  }, [messages]);
   const msgById = useMemo(() => {
     const m = new Map<string, Message>();
     messages.forEach((msg) => m.set(msg.id, msg));
@@ -1190,6 +1199,13 @@ export function ChatRoom({
           )}
         </div>
 
+        {roomType !== "dm" && !readOnly && (
+          <JoinCallButton
+            roomId={roomId}
+            roomName={roomName}
+            refreshKey={lastCallEventId}
+          />
+        )}
         <CallButton
           roomId={roomId}
           roomName={roomName}

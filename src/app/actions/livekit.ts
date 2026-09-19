@@ -93,6 +93,105 @@ export async function createCallToken(
   }
 }
 
+export type LiveCall = {
+  roomId: string;
+  callId: string;
+  video: boolean;
+  /** People in the call right now. */
+  count: number;
+};
+
+/** Running calls as LiveKit reports them, shared by every caller for a few
+ *  seconds: each open group chat checks for a call, and 40 of them polling
+ *  must not become 40 LiveKit requests. */
+let liveRoomsCache: {
+  at: number;
+  rooms: Promise<{ callId: string; count: number }[]>;
+} | null = null;
+const LIVE_ROOMS_TTL_MS = 5_000;
+
+function listLiveRooms(httpUrl: string, apiKey: string, apiSecret: string) {
+  if (liveRoomsCache && Date.now() - liveRoomsCache.at < LIVE_ROOMS_TTL_MS) {
+    return liveRoomsCache.rooms;
+  }
+  const rooms = new RoomServiceClient(httpUrl, apiKey, apiSecret)
+    .listRooms()
+    .then((all) =>
+      all
+        .filter((r) => r.name.startsWith("call-") && r.numParticipants > 0)
+        .map((r) => ({ callId: r.name.slice(5), count: r.numParticipants })),
+    );
+  liveRoomsCache = { at: Date.now(), rooms };
+  // A failed request must not be served from the cache for the next 5 s.
+  rooms.catch(() => {
+    if (liveRoomsCache?.rooms === rooms) liveRoomsCache = null;
+  });
+  return rooms;
+}
+
+/** callId → its conversation and kind. A call never moves, so once known it
+ *  is kept (bounded, in case the process lives for months). */
+const callHomes = new Map<string, { roomId: string; video: boolean }>();
+
+async function callHome(callId: string) {
+  const known = callHomes.get(callId);
+  if (known) return known;
+  // The call's invites record which conversation it rang. Service client for
+  // the same reason as callBelongsToRoom: RLS would hide rows not sent to us.
+  const { data } = await createServiceClient()
+    .from("call_signals")
+    .select("room_id, payload")
+    .eq("call_id", callId)
+    .eq("kind", "invite")
+    .limit(1)
+    .maybeSingle<{ room_id: string; payload: { video?: boolean } | null }>();
+  if (!data) return null;
+  const home = { roomId: data.room_id, video: Boolean(data.payload?.video) };
+  if (callHomes.size > 1000) callHomes.clear();
+  callHomes.set(callId, home);
+  return home;
+}
+
+/**
+ * The group call running in a conversation right now, if any — what the Join
+ * button in a group chat offers. Asks LiveKit itself, so a call that has
+ * ended can never show as joinable. Only a member of the conversation learns
+ * of its call; joining then goes through createCallToken's own checks.
+ */
+export async function getLiveCall(roomId: string): Promise<LiveCall | null> {
+  if (!roomId) return null;
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  const url = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+  if (!apiKey || !apiSecret || !url) return null;
+
+  try {
+    const { supabase, user } = await requireProfile();
+    const { data: membership } = await supabase
+      .from("room_members")
+      .select("user_id")
+      .eq("room_id", roomId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!membership) return null;
+
+    const httpUrl = url.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+    const rooms = await listLiveRooms(httpUrl, apiKey, apiSecret);
+    let best: LiveCall | null = null;
+    for (const r of rooms) {
+      const home = await callHome(r.callId);
+      if (home?.roomId !== roomId) continue;
+      // Two calls started at once in one group: offer the busier one.
+      if (!best || r.count > best.count) {
+        best = { roomId, callId: r.callId, video: home.video, count: r.count };
+      }
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Evict someone from an in-progress group call.
  *

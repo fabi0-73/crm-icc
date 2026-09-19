@@ -131,9 +131,21 @@ export type ActiveCall = {
 
 export type IncomingCall = ActiveCall & { roomName: string | null };
 
+/** A group call already running, to walk into (Rejoin / Join). */
+export type GroupCallTarget = {
+  callId: string;
+  roomId: string;
+  roomName: string;
+  video: boolean;
+};
+
 /** Preview before a group video call actually joins LiveKit. */
 export type GroupLobby = {
-  intent: "outgoing" | "incoming";
+  /** outgoing = starting a call, incoming = answering one, join = walking
+   *  into a running one from its chat. */
+  intent: "outgoing" | "incoming" | "join";
+  /** join only: the call to walk into. */
+  callId?: string;
   roomId: string;
   roomName: string;
   memberIds: string[];
@@ -181,9 +193,11 @@ type CallContextValue = {
   /** GROUP CALLS: force-mute someone else's microphone. */
   muteParticipant: (userId: string) => Promise<void>;
   /** A group call this device just left and can still rejoin, if any. */
-  rejoinable: { callId: string; roomId: string; roomName: string; video: boolean } | null;
+  rejoinable: GroupCallTarget | null;
   rejoinCall: () => Promise<void>;
   dismissRejoin: () => void;
+  /** GROUP CALLS: join a call running in a group chat, no invite needed. */
+  joinGroupCall: (target: GroupCallTarget) => Promise<void>;
   dial: (
     roomId: string,
     roomName: string,
@@ -307,12 +321,7 @@ export function CallProvider({
   // GROUP CALLS: render-facing snapshot of the peers (empty for 1:1).
   const [groupPeers, setGroupPeers] = useState<GroupParticipant[]>([]);
   /** A group call this device left that can still be rejoined. */
-  const [rejoinable, setRejoinable] = useState<{
-    callId: string;
-    roomId: string;
-    roomName: string;
-    video: boolean;
-  } | null>(null);
+  const [rejoinable, setRejoinable] = useState<GroupCallTarget | null>(null);
   const [lobby, setLobby] = useState<GroupLobby | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -1398,41 +1407,81 @@ export function CallProvider({
     [canManageCall, showNotice],
   );
 
+  /**
+   * Walk into a group call that is already running: Rejoin after leaving it,
+   * or Join from the group chat without ever having been rung. The token
+   * server admits any member of the conversation, so no invite is needed.
+   */
+  const enterGroupCall = useCallback(
+    async (target: GroupCallTarget, status: string) => {
+      if (phaseRef.current !== "idle") return;
+      setRejoinable(null);
+
+      callGenRef.current += 1;
+      const gen = callGenRef.current;
+      acceptedRef.current = true;
+      isCallerRef.current = false; // only the starter logs call history
+      startedLoggedRef.current = true;
+      groupRef.current = true;
+      groupVideoRef.current = target.video;
+      groupMembersRef.current = [];
+      callIdRef.current = target.callId;
+      roomIdRef.current = target.roomId;
+      peerIdRef.current = null;
+      // A fresh join, so the empty-room grace starts over and we wait for
+      // others rather than ending immediately.
+      hadPeersRef.current = false;
+      setCall({
+        callId: target.callId,
+        roomId: target.roomId,
+        peerId: "",
+        peerName: target.roomName,
+        video: target.video,
+        group: true,
+      });
+      setPhase("in-call");
+      setView("full");
+      setStatusText(status);
+      try {
+        const joined = await joinLiveKit(target.roomId, target.callId, target.video, gen);
+        if (callGenRef.current !== gen) return;
+        if (!joined) cleanup();
+      } catch (err) {
+        if (callGenRef.current !== gen) return; // cleanup already ran
+        showNotice(mediaErrorMessage(err));
+        cleanup();
+      }
+    },
+    [cleanup, joinLiveKit, showNotice],
+  );
+
   /** Rejoin the group call this device just left. */
   const rejoinCall = useCallback(async () => {
-    const target = rejoinable;
-    if (!target || phaseRef.current !== "idle") return;
-    setRejoinable(null);
+    if (rejoinable) await enterGroupCall(rejoinable, "Rejoining…");
+  }, [enterGroupCall, rejoinable]);
 
-    callGenRef.current += 1;
-    const gen = callGenRef.current;
-    acceptedRef.current = true;
-    isCallerRef.current = false; // rejoining never re-logs call history
-    startedLoggedRef.current = true;
-    groupRef.current = true;
-    groupVideoRef.current = target.video;
-    groupMembersRef.current = [];
-    callIdRef.current = target.callId;
-    roomIdRef.current = target.roomId;
-    peerIdRef.current = null;
-    // A fresh join, so the empty-room grace starts over and we wait for
-    // others rather than ending immediately.
-    hadPeersRef.current = false;
-    setCall({
-      callId: target.callId,
-      roomId: target.roomId,
-      peerId: "",
-      peerName: target.roomName,
-      video: target.video,
-      group: true,
-    });
-    setPhase("in-call");
-    setView("full");
-    setStatusText("Rejoining…");
-    const joined = await joinLiveKit(target.roomId, target.callId, target.video, gen);
-    if (callGenRef.current !== gen) return;
-    if (!joined) cleanup();
-  }, [cleanup, joinLiveKit, rejoinable]);
+  /** Join a running group call from its chat. Video goes through the lobby
+   *  first, like answering a group video call does. */
+  const joinGroupCall = useCallback(
+    async (target: GroupCallTarget) => {
+      if (phaseRef.current !== "idle" || lobbyRef.current) return;
+      if (target.video) {
+        const next: GroupLobby = {
+          intent: "join",
+          callId: target.callId,
+          roomId: target.roomId,
+          roomName: target.roomName,
+          memberIds: [],
+          video: true,
+        };
+        lobbyRef.current = next;
+        setLobby(next);
+        return;
+      }
+      await enterGroupCall(target, "Joining…");
+    },
+    [enterGroupCall],
+  );
 
   const dismissRejoin = useCallback(() => setRejoinable(null), []);
 
@@ -1834,11 +1883,16 @@ export function CallProvider({
       setLobby(null);
       if (L.intent === "outgoing") {
         await startGroupCall(L.roomId, L.roomName, L.memberIds, true);
+      } else if (L.intent === "join" && L.callId) {
+        await enterGroupCall(
+          { callId: L.callId, roomId: L.roomId, roomName: L.roomName, video: true },
+          "Joining…",
+        );
       } else {
         await accept();
       }
     },
-    [accept, startGroupCall],
+    [accept, enterGroupCall, startGroupCall],
   );
 
   useEffect(() => {
@@ -2232,6 +2286,7 @@ export function CallProvider({
       rejoinable,
       rejoinCall,
       dismissRejoin,
+      joinGroupCall,
       dial,
       startGroupCall,
       prepareGroupCall,
@@ -2273,6 +2328,7 @@ export function CallProvider({
       rejoinable,
       rejoinCall,
       dismissRejoin,
+      joinGroupCall,
       dial,
       startGroupCall,
       prepareGroupCall,
