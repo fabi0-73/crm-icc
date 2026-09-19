@@ -7,6 +7,7 @@ import { ProfileAvatarsProvider } from "@/components/presence/ProfileAvatarsProv
 import { KeyboardInsets } from "@/components/mobile/KeyboardInsets";
 import { PushRegistrar } from "@/components/PushRegistrar";
 import { NotificationPrompt } from "@/components/NotificationPrompt";
+import { UpdateWatcher } from "@/components/UpdateWatcher";
 import { requireProfile } from "@/lib/auth";
 import { publicDisplayName } from "@/lib/display-name";
 import { sitePath } from "@/lib/site-url";
@@ -51,6 +52,7 @@ export default async function AppLayout({
           <KeyboardInsets />
           <PushRegistrar />
           <NotificationPrompt />
+          <UpdateWatcher />
           <SidebarShell
             profile={profile}
             initialRooms={(data ?? []) as MyRoom[]}
