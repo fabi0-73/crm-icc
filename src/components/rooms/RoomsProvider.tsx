@@ -44,6 +44,16 @@ export function useRooms() {
   return ctx;
 }
 
+/**
+ * How long a delivery receipt waits for more messages before it is sent.
+ * Deliberately long: every receipt is a row write that Realtime replays to
+ * every open tab of that chat, so in a big group a chatty minute used to
+ * cost thousands of deliveries. Waiting a couple of seconds collapses a
+ * burst into one write, at the cost of the sender's second tick landing a
+ * moment later.
+ */
+const DELIVERED_DEBOUNCE_MS = 2_500;
+
 function activeRoomId(pathname: string): string | null {
   const m = pathname.match(/^\/rooms\/([0-9a-f-]{36})/);
   return m ? m[1] : null;
@@ -105,13 +115,20 @@ export function RoomsProvider({
         roomId,
         setTimeout(() => {
           timers.delete(roomId);
+          // Acknowledge up to the newest message seen while the timer ran,
+          // not the one that started it. Naming the moment lets the server
+          // skip the write when this room is already acknowledged that far.
+          const upTo = deliveredUpTo.current.get(roomId);
           void supabase
-            .rpc("mark_room_delivered", { p_room_id: roomId })
+            .rpc("mark_room_delivered", {
+              p_room_id: roomId,
+              p_at: upTo ? new Date(upTo).toISOString() : null,
+            })
             .then(({ error }) => {
               // Forget it so the next message or focus retries.
               if (error) deliveredUpTo.current.delete(roomId);
             });
-        }, 400),
+        }, DELIVERED_DEBOUNCE_MS),
       );
     },
     [supabase],
@@ -146,9 +163,19 @@ export function RoomsProvider({
       if (cancelled) return;
       channel = subscribeToAllMessageInserts(supabase, (msg) => {
         if (msg.sender_id === currentUserId) return;
+        // The chat that is open and on screen marks itself read (ChatRoom),
+        // and a read now counts as a delivery too — so a delivery receipt
+        // here would be a second write saying nothing new.
+        const readingItNow =
+          msg.room_id === activeRef.current &&
+          document.visibilityState === "visible";
         // Only rooms this user belongs to: an admin's subscription also sees
         // rooms they merely oversee, where there is no receipt to give.
-        if (msg.sender_id && roomsRef.current.some((r) => r.room_id === msg.room_id)) {
+        if (
+          !readingItNow &&
+          msg.sender_id &&
+          roomsRef.current.some((r) => r.room_id === msg.room_id)
+        ) {
           markDelivered(msg.room_id, msg.created_at);
         }
         // Someone else's message that you are not currently reading:
