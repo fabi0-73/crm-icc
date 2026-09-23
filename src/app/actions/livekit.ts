@@ -158,6 +158,9 @@ async function callHome(callId: string) {
  * ended can never show as joinable. Only a member of the conversation learns
  * of its call; joining then goes through createCallToken's own checks.
  */
+/** Rate limit for the warning below; module state, not an export. */
+let lastLiveCallWarn = 0;
+
 export async function getLiveCall(roomId: string): Promise<LiveCall | null> {
   if (!roomId) return null;
   const apiKey = process.env.LIVEKIT_API_KEY;
@@ -187,7 +190,15 @@ export async function getLiveCall(roomId: string): Promise<LiveCall | null> {
       }
     }
     return best;
-  } catch {
+  } catch (err) {
+    // Silence here hides a broken lookup forever: the Join button just never
+    // appears and nothing says why. Log at most once a minute, so a lasting
+    // failure shows up in `journalctl -u crm-icc` without flooding it (this
+    // runs on a timer for every open group chat).
+    if (Date.now() - lastLiveCallWarn > 60_000) {
+      lastLiveCallWarn = Date.now();
+      console.warn("[call] getLiveCall failed:", err);
+    }
     return null;
   }
 }
