@@ -17,8 +17,15 @@
  */
 
 export const SCREEN_SHARE_PROFILE = {
-  maxWidth: 2560,
-  maxHeight: 1440,
+  /**
+   * 1080p, deliberately not 1440p. Sharpness is bits per pixel, not pixel
+   * count: at the 4 Mbps ceiling below, 2560×1440 leaves 0.07 bits/pixel —
+   * less than livekit's own stock 1080p screen preset gets — and shared text
+   * came out mushy. The same ceiling over 1920×1080 is 0.13, nearly double,
+   * and it roughly halves the encoding work the sharer's machine does.
+   */
+  maxWidth: 1920,
+  maxHeight: 1080,
   maxFramerate: 15,
   /** 1:1 calls are peer-to-peer: no per-GB cost, so give text room. */
   p2pMaxBitrate: 5_000_000,
@@ -283,9 +290,13 @@ export function planGroupVideo(
     } else if (view.layout === "screens") {
       shown = peer.sharing ? wall : "off"; // cameras aren't on the wall
     } else {
-      // Grid tile. A screen in a tile is unreadable at any size, so it gets
-      // no more than a camera would (the focus stage is where it's read).
-      shown = size;
+      // Grid tile. Cameras follow the tile count, but a shared screen is
+      // there to be read, so it never drops below the 720p layer however
+      // many tiles there are. Until now it used the camera ladder, which
+      // served every grid share at 360p/5 fps once a call reached five
+      // people — including the second of two concurrent shares, which the
+      // grid never auto-focuses.
+      shown = peer.sharing && size === "low" ? "medium" : size;
     }
     plan.set(
       peer.id,

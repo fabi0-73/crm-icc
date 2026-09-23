@@ -189,7 +189,9 @@ export function screenSharePublishOptions(): TrackPublishOptions {
     },
     screenShareSimulcastLayers: [
       new VideoPreset(640, 360, 300_000, 5),
-      new VideoPreset(1280, 720, 1_000_000, p.maxFramerate),
+      // 1.5 Mbps, not 1 — this is the layer grid tiles read, and 1 Mbps over
+      // 720p is 0.07 bits/pixel, the same starvation the top layer had.
+      new VideoPreset(1280, 720, 1_500_000, p.maxFramerate),
     ],
     degradationPreference: "maintain-resolution",
   };
