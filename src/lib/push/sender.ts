@@ -273,7 +273,11 @@ async function onMessage(
       .select("full_name, public_name")
       .eq("id", msg.sender_id)
       .maybeSingle(),
-    supabase.from("rooms").select("name, type").eq("id", msg.room_id).maybeSingle(),
+    supabase
+      .from("rooms")
+      .select("name, type, own_messages_only")
+      .eq("id", msg.room_id)
+      .maybeSingle(),
   ]);
 
   const senderProfile = sender as {
@@ -285,11 +289,28 @@ async function onMessage(
   const roomName = (room as { name?: string } | null)?.name;
   const isDm = roomType === "dm";
 
+  // A room where members only see their own messages: the notification
+  // carries the sender's name and the first 140 characters, so pushing it to
+  // the room would hand everyone exactly what the rule hides. Only the people
+  // allowed to read it hear about it. This runs as the service role, so RLS
+  // does not do it for us.
+  let audience = recipients;
+  if ((room as { own_messages_only?: boolean } | null)?.own_messages_only) {
+    const { data: admins } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("role", "admin")
+      .eq("is_active", true)
+      .in("id", recipients);
+    audience = (admins ?? []).map((a: { id: string }) => a.id);
+    if (audience.length === 0) return;
+  }
+
   const preview = msg.kind === "file" ? "📎 Attachment" : (msg.body ?? "");
   const title = isDm ? senderName : roomName || "New message";
   const body = (isDm ? preview : `${senderName}: ${preview}`).slice(0, 140);
 
-  await sendToUsers(supabase, recipients, {
+  await sendToUsers(supabase, audience, {
     title,
     body,
     url: `/rooms/${msg.room_id}`,

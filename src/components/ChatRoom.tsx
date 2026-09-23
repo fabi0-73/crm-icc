@@ -175,6 +175,7 @@ export function ChatRoom({
   hasOlder = false,
   leading = "back",
   readOnly = false,
+  ownMessagesOnly = false,
 }: {
   roomId: string;
   roomName: string;
@@ -199,6 +200,12 @@ export function ChatRoom({
    * composer, no reply/edit affordances, no marking the room read.
    */
   readOnly?: boolean;
+  /**
+   * A drop box (rooms.own_messages_only): everyone posts, but a member reads
+   * only what they sent — admins read all of it. The database enforces this;
+   * here it only removes what would be misleading or pointlessly revealing.
+   */
+  ownMessagesOnly?: boolean;
 }) {
   const supabase = useMemo(() => createClient(), []);
   const { phase: callPhase } = useCall();
@@ -714,6 +721,9 @@ export function ChatRoom({
   }
 
   function noteTyping() {
+    // Nobody can read what you are typing here, so announcing it only tells
+    // the room who is filing something right now.
+    if (ownMessagesOnly) return;
     const ch = channelRef.current;
     if (!ch) return;
     const now = Date.now();
@@ -1130,7 +1140,9 @@ export function ChatRoom({
     [currentUserId, currentUserRole, myRole],
   );
 
-  const typingNames = Object.keys(typers)
+  // Typing is a broadcast, not a row, so RLS never filtered it: ignore it
+  // here too, in case a tab on an older build is still sending.
+  const typingNames = (ownMessagesOnly ? [] : Object.keys(typers))
     .map((id) => memberMap.get(id))
     .filter((n): n is string => Boolean(n));
   const typingLabel =
@@ -1300,6 +1312,14 @@ export function ChatRoom({
           className="relative h-full overflow-y-auto overscroll-contain px-3 py-3 sm:px-6"
         >
           <div className="mx-auto w-full max-w-3xl">
+          {ownMessagesOnly && !readOnly && currentUserRole !== "admin" && (
+            // Without this, 36 people open the room, find every colleague's
+            // message gone, and report it as lost data.
+            <p className="mx-auto mb-3 max-w-md rounded-xl bg-brand-50 px-3 py-2 text-center text-[12px] leading-snug text-brand-700">
+              Only you and administrators can see what you post here. Other
+              people&apos;s messages are hidden from you, and yours from them.
+            </p>
+          )}
           {older.has && (
             <div className="flex justify-center py-3">
               <button

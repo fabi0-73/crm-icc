@@ -19,7 +19,7 @@ export default async function RoomPage({
 
   const { data: room } = await supabase
     .from("rooms")
-    .select("id, name, type, avatar_url, background_url, created_by")
+    .select("id, name, type, avatar_url, background_url, created_by, own_messages_only")
     .eq("id", roomId)
     .maybeSingle<{
       id: string;
@@ -28,6 +28,7 @@ export default async function RoomPage({
       avatar_url: string | null;
       background_url: string | null;
       created_by: string;
+      own_messages_only: boolean;
     }>();
 
   if (!room) notFound();
@@ -141,6 +142,7 @@ export default async function RoomPage({
       hasOlder={messages.length === INITIAL_MESSAGES}
       leading="back"
       readOnly={readOnly}
+      ownMessagesOnly={room.own_messages_only}
     />
   );
 }
