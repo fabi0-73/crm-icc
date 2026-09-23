@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { useCall } from "@/components/call/CallProvider";
 
-/** The build this tab loaded (inlined at build time, see next.config.ts). */
-const LOADED_BUILD = process.env.NEXT_PUBLIC_BUILD_ID;
 const CHECK_EVERY_MS = 5 * 60_000;
+/** The build a tab has already reloaded itself for, so a wrong answer can
+ *  never turn into a reload loop. */
+const RELOADED_FOR_KEY = "icc:reloaded-for-build";
 
 /** Anything typed that a reload would throw away (the app keeps no drafts). */
 function hasUnsentInput(): boolean {
@@ -22,24 +23,46 @@ function hasUnsentInput(): boolean {
  * until someone happened to reload (2026-09-19: testers still hit the removed
  * one-share limit an hour after the fix shipped).
  *
- * Checks /api/version when the tab comes back into view and every few
- * minutes. A newer build reloads the tab on its own only while nobody is
- * looking at it — never during a call, never over something typed and unsent;
- * otherwise a small banner offers the reload.
+ * The tab learns which build it started on from the FIRST answer /api/version
+ * gives it, and only calls itself stale when a later answer differs. It must
+ * not compare a constant baked into the browser bundle against one baked into
+ * the server bundle: next.config is evaluated once per compilation, so those
+ * two are minted seconds apart and never match. That is what the first
+ * version did, which left every tab permanently "stale" — showing a banner
+ * that no reload could clear, and silently reloading itself every time it was
+ * backgrounded (2026-09-19 to 2026-09-23, a reload per tab switch for
+ * everyone).
+ *
+ * Checks when the tab comes back into view and every few minutes. A newer
+ * build reloads the tab on its own only while nobody is looking at it — never
+ * during a call, never over something typed and unsent, and at most once per
+ * tab per build; otherwise a small banner offers the reload.
  */
 export function UpdateWatcher() {
   const { phase, lobby } = useCall();
   const busy = phase !== "idle" || Boolean(lobby);
   const [stale, setStale] = useState(false);
+  /** The build the server was running when this tab started. */
+  const startedOn = useRef<string | null>(null);
+  /** The newer build that made this tab stale. */
+  const newest = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!LOADED_BUILD) return;
     let stopped = false;
     const check = async () => {
       try {
         const res = await fetch("/api/version", { cache: "no-store" });
+        if (!res.ok) return;
         const { buildId } = (await res.json()) as { buildId?: string | null };
-        if (!stopped && buildId && buildId !== LOADED_BUILD) setStale(true);
+        if (stopped || !buildId) return;
+        if (startedOn.current === null) {
+          startedOn.current = buildId;
+          return;
+        }
+        if (buildId !== startedOn.current) {
+          newest.current = buildId;
+          setStale(true);
+        }
       } catch {
         /* offline or mid-deploy — try again later */
       }
@@ -60,9 +83,20 @@ export function UpdateWatcher() {
   useEffect(() => {
     if (!stale || busy) return;
     const reloadIfUnseen = () => {
-      if (document.visibilityState === "hidden" && !hasUnsentInput()) {
-        window.location.reload();
+      if (document.visibilityState !== "hidden" || hasUnsentInput()) return;
+      const target = newest.current;
+      if (!target) return;
+      // One automatic reload per tab per build. Without this, anything that
+      // makes `stale` wrong reloads the tab on every single tab switch.
+      try {
+        if (sessionStorage.getItem(RELOADED_FOR_KEY) === target) return;
+        sessionStorage.setItem(RELOADED_FOR_KEY, target);
+      } catch {
+        // Can't remember having done it, so don't risk doing it repeatedly.
+        // The banner still offers the reload.
+        return;
       }
+      window.location.reload();
     };
     reloadIfUnseen();
     document.addEventListener("visibilitychange", reloadIfUnseen);

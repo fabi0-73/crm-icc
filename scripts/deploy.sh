@@ -23,6 +23,10 @@ fi
 git archive --format=tar.gz -o "$BUNDLE" HEAD
 echo "bundle: $(du -h "$BUNDLE" | cut -f1)"
 
+# The build's identity, so /api/version answers "what is live?" with the
+# commit. Computed here because the server gets a tar archive, not a git repo.
+BUILD_ID=$(git rev-parse --short HEAD)
+
 if [ -n "${ICC_SSH_KEY:-}" ]; then
   SCP=(scp -i "$ICC_SSH_KEY" -o BatchMode=yes)
   SSH=(ssh -i "$ICC_SSH_KEY" -o BatchMode=yes)
@@ -44,7 +48,7 @@ fi
   tar xzf /tmp/$BUNDLE -C $APP_DIR
   rm -f /tmp/$BUNDLE
   npm ci --no-audit --no-fund 2>&1 | tail -1
-  npx next build 2>&1 | tail -5
+  BUILD_ID='$BUILD_ID' npx next build 2>&1 | tail -5
   # keep files owned by the service user once it exists (Step 6 hardening)
   id -u crmicc >/dev/null 2>&1 && chown -R crmicc: $APP_DIR
   systemctl restart $SERVICE
