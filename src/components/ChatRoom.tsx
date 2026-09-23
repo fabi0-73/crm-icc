@@ -1312,14 +1312,18 @@ export function ChatRoom({
           className="relative h-full overflow-y-auto overscroll-contain px-3 py-3 sm:px-6"
         >
           <div className="mx-auto w-full max-w-3xl">
-          {ownMessagesOnly && !readOnly && currentUserRole !== "admin" && (
-            // Without this, 36 people open the room, find every colleague's
-            // message gone, and report it as lost data.
-            <p className="mx-auto mb-3 max-w-md rounded-xl bg-brand-50 px-3 py-2 text-center text-[12px] leading-snug text-brand-700">
-              Only you and administrators can see what you post here. Other
-              people&apos;s messages are hidden from you, and yours from them.
-            </p>
-          )}
+          {ownMessagesOnly &&
+            !readOnly &&
+            currentUserRole !== "admin" &&
+            currentUserRole !== "manager" && (
+              // Without this, 36 people open the room, find every colleague's
+              // message gone, and report it as lost data.
+              <p className="mx-auto mb-3 max-w-md rounded-xl bg-brand-50 px-3 py-2 text-center text-[12px] leading-snug text-brand-700">
+                Only you, managers and administrators can see what you post
+                here. Other people&apos;s messages are hidden from you, and
+                yours from them.
+              </p>
+            )}
           {older.has && (
             <div className="flex justify-center py-3">
               <button

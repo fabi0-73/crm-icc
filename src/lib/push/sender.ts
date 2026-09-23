@@ -296,13 +296,13 @@ async function onMessage(
   // does not do it for us.
   let audience = recipients;
   if ((room as { own_messages_only?: boolean } | null)?.own_messages_only) {
-    const { data: admins } = await supabase
+    const { data: reviewers } = await supabase
       .from("profiles")
       .select("id")
-      .eq("role", "admin")
+      .in("role", ["admin", "manager"])
       .eq("is_active", true)
       .in("id", recipients);
-    audience = (admins ?? []).map((a: { id: string }) => a.id);
+    audience = (reviewers ?? []).map((a: { id: string }) => a.id);
     if (audience.length === 0) return;
   }
 
