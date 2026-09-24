@@ -1,5 +1,6 @@
 import Image from "next/image";
 import { LoginForm } from "@/components/LoginForm";
+import { ClearBadge } from "@/components/ClearBadge";
 
 export default async function LoginPage({
   searchParams,
@@ -10,6 +11,7 @@ export default async function LoginPage({
 
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center bg-hero px-4 py-10">
+      <ClearBadge />
       <div className="w-full max-w-sm">
         <div className="mb-7 flex flex-col items-center text-center">
           <div className="mb-4 rounded-2xl bg-white p-2 shadow-lift">
