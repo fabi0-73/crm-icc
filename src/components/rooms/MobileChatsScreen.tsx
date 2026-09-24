@@ -124,7 +124,7 @@ function ChatRow({ room }: { room: MyRoom }) {
               className={`shrink-0 min-w-[1.25rem] rounded-full px-1.5 py-0.5 text-center text-[11px] font-bold leading-none ${
                 muted
                   ? "bg-line text-muted"
-                  : "bg-brand-grad text-white shadow-bubble"
+                  : "bg-brand-600 text-white"
               }`}
             >
               {room.unread_count > 99 ? "99+" : room.unread_count}
@@ -167,7 +167,7 @@ export function MobileChatsScreen({
     <div className="flex h-full flex-col bg-paper">
       <header className="shrink-0 bg-mist pt-[max(0.5rem,env(safe-area-inset-top))]">
         <div className="flex items-center justify-between gap-3 px-4 pt-1">
-          <h1 className="text-[26px] font-extrabold tracking-tight text-ink">
+          <h1 className="text-[22px] font-semibold tracking-tight text-ink">
             Chats
           </h1>
           <div className="flex items-center gap-2">
@@ -194,7 +194,7 @@ export function MobileChatsScreen({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search conversations"
-            className="h-11 rounded-full border-line/80 bg-paper pl-10 text-[16px] shadow-xs placeholder:text-muted"
+            className="h-11 rounded-xl border-transparent bg-secondary pl-10 text-[16px] shadow-none placeholder:text-muted focus-visible:border-brand-600"
             aria-label="Search conversations"
           />
         </div>
@@ -207,10 +207,12 @@ export function MobileChatsScreen({
                 key={f.key}
                 type="button"
                 onClick={() => setFilter(f.key)}
-                className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold transition-colors ${
+                // Accent for the active chip: bg-ink is re-pinned to a panel
+                // colour in dark mode and would vanish against the list.
+                className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium transition-colors ${
                   active
-                    ? "bg-ink text-white shadow-soft"
-                    : "border border-line/80 bg-paper text-muted shadow-xs active:bg-mist"
+                    ? "bg-brand-600 text-white"
+                    : "bg-secondary text-muted active:bg-line"
                 }`}
               >
                 {f.label}

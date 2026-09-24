@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "@/app/actions/auth";
@@ -56,10 +55,10 @@ function RoomRow({ room, active }: { room: MyRoom; active: boolean }) {
   return (
     <Link
       href={`/rooms/${room.room_id}`}
-      className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] transition-colors ${
+      className={`flex items-center gap-2 rounded-lg px-2 py-2 text-[13.5px] transition-colors ${
         active
-          ? "bg-brand-grad font-medium text-white shadow-bubble"
-          : "text-white/60 hover:bg-white/8 hover:text-white"
+          ? "bg-brand-600 font-medium text-white"
+          : "text-white/65 hover:bg-white/8 hover:text-white"
       }`}
     >
       {room.type === "dm" ? (
@@ -72,7 +71,7 @@ function RoomRow({ room, active }: { room: MyRoom; active: boolean }) {
           />
           <PresenceDot
             online={online}
-            className="absolute -bottom-0.5 -right-0.5 ring-2 ring-ink"
+            className="absolute -bottom-0.5 -right-0.5 ring-2 ring-[#131519]"
           />
         </span>
       ) : room.avatar_url ? (
@@ -107,7 +106,7 @@ function SectionHeader({
 }) {
   return (
     <div className="mt-4 mb-1 flex items-center justify-between px-2">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-white/40">
+      <p className="text-[12px] font-medium text-white/45">
         {label}
       </p>
       {action}
@@ -132,16 +131,19 @@ export function Sidebar({ profile }: { profile: Profile }) {
 
   return (
     <aside className="hidden sm:flex w-64 shrink-0 flex-col border-r border-white/5 bg-ink-grad text-white">
+      {/* A typographic monogram, not the 3D mark: a glossy object on a flat
+          dark panel was the loudest thing in the shell. */}
       <Link
         href="/rooms"
         className="flex items-center gap-2.5 border-b border-white/10 px-3 py-3"
       >
-        <span className="rounded-lg bg-white p-[3px] shadow-soft">
-          <Image src="/logo-sm.png" alt="ICC" width={22} height={20} className="rounded-md" priority />
+        <span
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand-600 text-[11px] font-bold tracking-tight text-white"
+          aria-hidden
+        >
+          ICC
         </span>
-        <span className="text-[15px] font-bold tracking-tight">
-          ICC Desk
-        </span>
+        <span className="text-[15px] font-semibold tracking-tight">Desk</span>
       </Link>
 
       <div className="flex-1 overflow-y-auto px-2 pb-3">
@@ -169,8 +171,8 @@ export function Sidebar({ profile }: { profile: Profile }) {
                   href={l.href}
                   className={`block rounded-lg px-2 py-1.5 text-[13px] font-medium transition-colors ${
                     active
-                      ? "bg-brand-grad text-white shadow-bubble"
-                      : "text-white/60 hover:bg-white/8 hover:text-white"
+                      ? "bg-white/10 text-white"
+                      : "text-white/65 hover:bg-white/8 hover:text-white"
                   }`}
                 >
                   {l.label}
@@ -229,7 +231,7 @@ export function Sidebar({ profile }: { profile: Profile }) {
             />
             <PresenceDot
               online={selfOnline}
-              className="absolute -bottom-0.5 -right-0.5 ring-2 ring-ink"
+              className="absolute -bottom-0.5 -right-0.5 ring-2 ring-[#131519]"
             />
           </span>
           <span className="min-w-0 flex-1 truncate text-[13px] font-medium">

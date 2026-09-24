@@ -75,14 +75,14 @@ function TabButton({
     >
       <span
         className={`relative flex h-8 min-w-14 items-center justify-center rounded-full transition-colors ${
-          active ? "bg-brand-grad text-white shadow-bubble" : "text-white/55"
+          active ? "bg-brand-600 text-white" : "text-white/60"
         }`}
       >
         {children}
       </span>
       <span
-        className={`text-[10.5px] font-semibold tracking-wide ${
-          active ? "text-white" : "text-white/55"
+        className={`text-[11px] font-medium ${
+          active ? "text-white" : "text-white/60"
         }`}
       >
         {label}
@@ -121,9 +121,9 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
             label="Chats"
             onClick={() => router.push("/rooms")}
           >
-            <MessageCircle className="size-[22px]" strokeWidth={2.1} />
+            <MessageCircle className="size-[22px]" strokeWidth={1.75} />
             {unread > 0 && (
-              <span className="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-brand-400 px-1 text-[10px] font-bold text-ink ring-2 ring-ink">
+              <span className="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-brand-300 px-1 text-[10px] font-bold text-[#0a2e33] ring-2 ring-[#131519]">
                 {unread > 99 ? "99+" : unread}
               </span>
             )}
@@ -135,7 +135,7 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
               label="Agents"
               onClick={() => router.push("/agents")}
             >
-              <ContactRound className="size-[22px]" strokeWidth={2.1} />
+              <ContactRound className="size-[22px]" strokeWidth={1.75} />
             </TabButton>
           )}
 
@@ -213,10 +213,10 @@ export function MobileTabBar({ profile }: { profile: Profile }) {
                 type="submit"
                 className="flex w-full items-center gap-3 rounded-2xl border border-line bg-paper px-3.5 py-3 text-left active:bg-mist"
               >
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600 dark:bg-red-950/40 dark:text-red-400">
                   <LogOut className="size-[18px]" />
                 </span>
-                <span className="text-[15px] font-medium text-red-600">
+                <span className="text-[15px] font-medium text-red-600 dark:text-red-400">
                   Sign out
                 </span>
               </button>
