@@ -4,54 +4,66 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-@theme {
-  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+/* ── Design tokens ────────────────────────────────────────────────────────
+   Who this is for: a team booking appointments from 15:00 to 06:00, on
+   phones, mostly in the dark. So: warm charcoal rather than blue-black,
+   one mid-luminance accent lifted from the ICC mark, no gradients and no
+   glows anywhere, and a light mode that is a first-class citizen.
 
-  /* Neutrals — slate register */
-  --color-ink: #0f172a; /* primary text, dark call surfaces */
-  --color-ink-soft: #1e293b; /* secondary dark surface */
-  --color-mist: #f8fafc; /* app background */
+   Token NAMES are stable — components reach for bg-paper, text-ink,
+   text-muted, border-line, bg-brand-600 … — so the whole app re-skins
+   from this file. Values are the design. */
+@theme {
+  --font-sans: var(--font-plex), ui-sans-serif, system-ui, sans-serif;
+
+  /* Neutrals — warm charcoal register (light mode values; .dark below) */
+  --color-ink: #1c1d21; /* primary text; also intentionally-dark surfaces */
+  --color-ink-soft: #2a2c31; /* secondary dark surface */
+  --color-mist: #f6f5f2; /* app background — warm paper, not cold grey */
   --color-paper: #ffffff; /* panels, cards, chat stream, headers */
-  --color-line: #e2e8f0; /* hairline borders, dividers */
-  --color-line-strong: #cbd5e1; /* form-control borders */
-  --color-muted: #64748b; /* secondary text, meta */
+  --color-line: #e6e4df; /* hairline borders, dividers */
+  --color-line-strong: #cfccc5; /* form-control borders */
+  --color-muted: #6b6d70; /* secondary text, meta (AA on paper) */
 
   /* Chat bubbles */
-  --color-bubble: #1d4ed8; /* own messages — brand blue */
-  --color-bubble-peer: #f1f5f9; /* other people's messages */
+  --color-bubble: #1f8a97; /* own messages — the accent, flat */
+  --color-bubble-peer: #ffffff; /* other people's messages */
 
-  /* Brand — deep blue. NOTE: shifted one step vs Tailwind's blue scale
-     (brand-600 = blue-700 #1d4ed8) so existing bg-brand-600/700 call
-     sites produce the locked accent/hover. Do not "fix" the shift. */
-  --color-brand-50: #eff6ff;
-  --color-brand-100: #dbeafe;
-  --color-brand-200: #bfdbfe;
-  --color-brand-300: #93c5fd;
-  --color-brand-400: #60a5fa;
-  --color-brand-500: #2563eb;
-  --color-brand-600: #1d4ed8; /* primary accent */
-  --color-brand-700: #1e40af; /* hover */
-  --color-brand-800: #1e3a8a;
-  --color-brand-900: #172554;
-  --color-brand-950: #0f1533;
+  /* Brand — verdigris, taken from the cyan in the ICC mark and deepened
+     so white text passes AA on it (brand-600 on white ≈ 4.6:1).
+     NOTE: the scale is offset one step from where Tailwind would put it
+     (brand-600 is the primary, brand-700 the hover) because that is what
+     every existing call site expects. Do not "fix" the offset. */
+  --color-brand-50: #eaf6f7;
+  --color-brand-100: #d1edf0;
+  --color-brand-200: #a6dce2;
+  --color-brand-300: #78c7d0;
+  --color-brand-400: #4db0bc;
+  --color-brand-500: #2e9aa7;
+  --color-brand-600: #1f8a97; /* primary accent */
+  --color-brand-700: #19737e; /* hover */
+  --color-brand-800: #155d66;
+  --color-brand-900: #114950;
+  --color-brand-950: #0a2e33;
 
-  /* Elevation — layered, slate-tinted so shadows read cool, not gray */
+  /* Elevation — neutral and quiet. There are no coloured glows. */
   --shadow-soft:
-    0 1px 2px rgb(15 23 42 / 0.05), 0 4px 12px rgb(15 23 42 / 0.06);
+    0 1px 2px rgb(0 0 0 / 0.06), 0 2px 8px rgb(0 0 0 / 0.04);
   --shadow-lift:
-    0 2px 4px rgb(15 23 42 / 0.06), 0 12px 32px rgb(15 23 42 / 0.12);
-  --shadow-brand: 0 4px 14px rgb(29 78 216 / 0.35);
-  --shadow-bubble: 0 2px 8px rgb(29 78 216 / 0.22);
+    0 4px 12px rgb(0 0 0 / 0.08), 0 16px 40px rgb(0 0 0 / 0.1);
+  /* Kept as names so call sites compile; they no longer glow. */
+  --shadow-brand: 0 1px 2px rgb(0 0 0 / 0.1);
+  --shadow-bubble: 0 0 #0000;
 }
 
-/* shadcn/ui semantic tokens, mapped onto the brand palette above.
+/* shadcn/ui semantic tokens, mapped onto the palette above.
    NOTE: --color-muted is deliberately NOT mapped here — the brand
-   @theme owns it (#64748b, used app-wide as text-muted). shadcn
-   components that want a muted SURFACE use bg-secondary instead. */
+   @theme owns it (used app-wide as text-muted). shadcn components
+   that want a muted SURFACE use bg-secondary instead. */
 @theme inline {
   /* next/font hashes the family name — reuse the variable it sets, or
      headings silently fall back to the system font. */
-  --font-heading: var(--font-manrope), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-plex), ui-sans-serif, system-ui, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -87,95 +99,95 @@
 }
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #f6f5f2;
+  --foreground: #1c1d21;
   --card: #ffffff;
-  --card-foreground: #0f172a;
+  --card-foreground: #1c1d21;
   --popover: #ffffff;
-  --popover-foreground: #0f172a;
-  --primary: #1d4ed8;
+  --popover-foreground: #1c1d21;
+  --primary: #1f8a97;
   --primary-foreground: #ffffff;
-  --secondary: #f1f5f9;
-  --secondary-foreground: #0f172a;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #f1f5f9;
-  --accent-foreground: #0f172a;
-  --destructive: #dc2626;
-  --border: #e2e8f0;
-  --input: #cbd5e1;
-  --ring: #1d4ed8;
+  --secondary: #efeeea;
+  --secondary-foreground: #1c1d21;
+  --muted: #efeeea;
+  --muted-foreground: #6b6d70;
+  --accent: #eaf6f7;
+  --accent-foreground: #114950;
+  --destructive: #d93f45;
+  --border: #e6e4df;
+  --input: #cfccc5;
+  --ring: #1f8a97;
   --radius: 0.5rem;
-  --sidebar: #0f172a;
-  --sidebar-foreground: #ffffff;
-  --sidebar-primary: #1d4ed8;
+  /* The sidebar is always dark: the deepest layer in either mode. */
+  --sidebar: #131519;
+  --sidebar-foreground: #ededea;
+  --sidebar-primary: #1f8a97;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #1e293b;
-  --sidebar-accent-foreground: #ffffff;
-  --sidebar-border: rgb(255 255 255 / 0.1);
-  --sidebar-ring: #1d4ed8;
+  --sidebar-accent: #1e2127;
+  --sidebar-accent-foreground: #ededea;
+  --sidebar-border: rgb(255 255 255 / 0.08);
+  --sidebar-ring: #4db0bc;
 }
 
 /* ── Dark mode ─────────────────────────────────────────────────────────────
    Class strategy: ThemeProvider toggles `.dark` on <html>. This block only
    ADDS overrides — light mode above is untouched. Components consume the
-   semantic tokens (bg-paper, text-ink, text-muted, border-line, bg-secondary …),
-   so redefining the tokens under `.dark` flips the whole app without editing
-   components. Brand is left as-is on purpose (the deep blue stays usable and
-   recognizable). A few utilities carry HARD-CODED colors that don't read a
-   token — bg-stream (chat backdrop) and bg-ink/bg-ink-soft used as dark
-   *surfaces* rather than as text — so those are re-pinned just below, since
-   --color-ink now resolves to near-white for text. */
+   semantic tokens, so redefining them here flips the whole app. The accent
+   stays the same in both modes; it was chosen to hold up on either ground.
+   A few utilities carry HARD-CODED colours that don't read a token —
+   bg-stream and bg-ink/bg-ink-soft used as dark *surfaces* rather than as
+   text — so those are re-pinned just below, since --color-ink now resolves
+   to near-white for text. */
 .dark {
-  /* Brand semantic tokens (same names as the @theme block) */
-  --color-ink: #e7eaef; /* primary text → near-white */
-  --color-ink-soft: #b4bcc8; /* secondary text */
-  --color-mist: #0e1116; /* app background — not pure black */
-  --color-paper: #161b23; /* panels, cards, headers, peer bubbles */
-  --color-line: #272d38; /* hairline borders, dividers */
-  --color-line-strong: #3a424f; /* form-control borders */
-  --color-muted: #8a94a3; /* secondary / meta text (AA on paper) */
+  --color-ink: #ededea; /* primary text → warm off-white */
+  --color-ink-soft: #c9cacd; /* secondary text */
+  --color-mist: #16181d; /* app background — charcoal, not black */
+  --color-paper: #1e2127; /* panels, cards, headers, peer bubbles */
+  --color-line: #2b2f36; /* hairline borders, dividers */
+  --color-line-strong: #3a3f48; /* form-control borders */
+  --color-muted: #9a9c9f; /* secondary / meta text (AA on paper) */
 
-  /* shadcn semantic tokens */
-  --background: #0e1116;
-  --foreground: #e7eaef;
-  --card: #161b23;
-  --card-foreground: #e7eaef;
-  --popover: #161b23;
-  --popover-foreground: #e7eaef;
-  --primary: #1d4ed8; /* keep the brand blue */
+  --color-bubble: #1e3a3f; /* own messages — teal-tinted dark, calm at 2am */
+  --color-bubble-peer: #1e2127;
+
+  --background: #16181d;
+  --foreground: #ededea;
+  --card: #1e2127;
+  --card-foreground: #ededea;
+  --popover: #1e2127;
+  --popover-foreground: #ededea;
+  --primary: #1f8a97;
   --primary-foreground: #ffffff;
-  --secondary: #1e2530;
-  --secondary-foreground: #e7eaef;
-  --muted: #1e2530; /* muted SURFACE (bg-muted / bg-secondary) */
-  --muted-foreground: #8a94a3;
-  --accent: #1e2530;
-  --accent-foreground: #e7eaef;
-  --destructive: #ef4444;
-  --border: #272d38;
-  --input: #3a424f;
-  --ring: #3b82f6; /* lighter focus ring for dark surfaces */
+  --secondary: #262a31;
+  --secondary-foreground: #ededea;
+  --muted: #262a31; /* muted SURFACE (bg-muted / bg-secondary) */
+  --muted-foreground: #9a9c9f;
+  --accent: #1e3a3f;
+  --accent-foreground: #a6dce2;
+  --destructive: #e5484d;
+  --border: #2b2f36;
+  --input: #3a3f48;
+  --ring: #4db0bc; /* lighter focus ring for dark surfaces */
 }
 
-/* Hard-coded-color utilities re-pinned for dark so intentionally-dark chrome
+/* Hard-coded-colour utilities re-pinned for dark so intentionally-dark chrome
    (the chat backdrop, call/toast/modal surfaces, the mobile active-chat pill)
    stays dark even though --color-ink now maps to near-white for text. */
 .dark .bg-stream {
-  background-color: #0c1015;
-  background-image: linear-gradient(180deg, #12161d 0%, #0c1015 100%);
+  background-color: #16181d;
 }
 .dark .bg-ink,
 .dark .hover\:bg-ink:hover {
-  background-color: #232a37;
+  background-color: #1e2127;
 }
 .dark .bg-ink-soft {
-  background-color: #2b3441;
+  background-color: #262a31;
 }
 .dark .bg-ink\/70 {
-  background-color: rgb(6 9 14 / 0.72);
+  background-color: rgb(22 24 29 / 0.72);
 }
 .dark .bg-ink\/50 {
-  background-color: rgb(6 9 14 / 0.58);
+  background-color: rgb(22 24 29 / 0.58);
 }
 
 @layer base {
@@ -190,19 +202,24 @@ body {
 }
 
 html {
-  /* Kill the gray tap flash on iOS/Android webviews. */
+  /* Kill the grey tap flash on iOS/Android webviews. */
   -webkit-tap-highlight-color: transparent;
 }
 
 body {
   @apply bg-mist text-ink antialiased font-sans;
+  /* Plex has real tabular figures; counts and times should line up. */
+  font-variant-numeric: tabular-nums;
   /* No rubber-band page bounce / accidental pull-to-refresh inside the
      app shell (the store apps load this page in a webview). */
   overscroll-behavior-y: none;
 }
 
 ::selection {
-  background: color-mix(in oklab, var(--color-brand-600) 18%, white);
+  background: color-mix(in oklab, var(--color-brand-600) 22%, white);
+}
+.dark ::selection {
+  background: color-mix(in oklab, var(--color-brand-600) 45%, #16181d);
 }
 
 /* App-shell height that tracks the on-screen keyboard: a client hook
@@ -221,29 +238,30 @@ body {
   }
 }
 
-/* Brand gradient — buttons, own bubbles, active nav. One accent,
-   used with intent. */
+/* The accent, flat. The name survives from when it was a gradient;
+   buttons, own bubbles and active nav all use it, and it is one colour. */
 @utility bg-brand-grad {
-  background-image: linear-gradient(135deg, #2563eb 0%, #1d4ed8 55%, #1e40af 100%);
+  background-color: var(--color-brand-600);
 }
 
-/* Deep-slate vertical wash for the sidebar / dark chrome. */
+/* The sidebar's ground: the deepest layer in both modes. */
 @utility bg-ink-grad {
-  background-image: linear-gradient(180deg, #131e38 0%, #0f172a 55%, #0b1120 100%);
+  background-color: var(--sidebar);
 }
 
-/* Chat stream backdrop — a barely-there cool falloff so white
-   bubbles and cards sit on something with depth. */
+/* Chat stream backdrop: the app background, so bubbles sit on paper
+   with nothing painted underneath them. */
 @utility bg-stream {
-  background-color: #f1f5fa;
-  background-image: linear-gradient(180deg, #f6f8fc 0%, #eef2f8 100%);
+  background-color: var(--color-mist);
 }
 
-/* Auth hero — ink base with two deep-blue glows. */
+/* Sign-in ground — charcoal with a single soft wash of the accent, the
+   one place the palette is allowed to be atmospheric. */
 @utility bg-hero {
-  background-color: #0b1120;
-  background-image:
-    radial-gradient(70rem 42rem at 75% -12%, rgb(37 99 235 / 0.28), transparent 60%),
-    radial-gradient(48rem 30rem at -8% 105%, rgb(30 64 175 / 0.22), transparent 55%),
-    linear-gradient(180deg, #0d1528 0%, #0b1120 100%);
+  background-color: #16181d;
+  background-image: radial-gradient(
+    60rem 36rem at 72% -12%,
+    rgb(31 138 151 / 0.2),
+    transparent 62%
+  );
 }

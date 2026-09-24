@@ -1,12 +1,13 @@
 import type { Metadata, Viewport } from "next";
-import { Manrope } from "next/font/google";
+import { IBM_Plex_Sans } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { themeInitScript } from "@/lib/theme";
 
-const manrope = Manrope({
+const plex = IBM_Plex_Sans({
   subsets: ["latin"],
-  variable: "--font-manrope",
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-plex",
   display: "swap",
 });
 
@@ -30,8 +31,8 @@ export const viewport: Viewport = {
   // Android: shrink the layout viewport when the keyboard opens.
   interactiveWidget: "resizes-content",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f8fafc" },
-    { media: "(prefers-color-scheme: dark)", color: "#0e1116" },
+    { media: "(prefers-color-scheme: light)", color: "#f6f5f2" },
+    { media: "(prefers-color-scheme: dark)", color: "#16181d" },
   ],
 };
 
@@ -39,10 +40,10 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={manrope.variable} suppressHydrationWarning>
+    <html lang="en" className={plex.variable} suppressHydrationWarning>
       <body
         className="font-sans"
-        style={{ "--font-sans": "var(--font-manrope)" } as React.CSSProperties}
+        style={{ "--font-sans": "var(--font-plex)" } as React.CSSProperties}
       >
         {/* Parser-blocking inline script: sets the theme class before the app
             paints so there's no light flash on load. Kept as the first child of

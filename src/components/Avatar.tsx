@@ -3,16 +3,15 @@
 import { useEffect, useState } from "react";
 import { useProfileAvatar } from "@/components/presence/ProfileAvatarsProvider";
 
-/** Shared avatar initials — consistent color from name.
- *  Cool corporate family only, so avatars read as one system. */
+/** Shared avatar initials — a consistent tone from the name.
+ *  Four tones, all drawn from the palette, so a wall of initials reads as
+ *  one system rather than a lottery of blues and violets. Each is deep
+ *  enough for white initials in both modes. */
 const PALETTE = [
-  "bg-[#1d4ed8]", // blue-700
-  "bg-[#0e7490]", // cyan-700
-  "bg-[#4f46e5]", // indigo-600
-  "bg-[#7c3aed]", // violet-600
-  "bg-[#0369a1]", // sky-700
-  "bg-[#475569]", // slate-600
-  "bg-[#1e3a8a]", // blue-900
+  "bg-[#19737e]", // brand-700
+  "bg-[#114950]", // brand-900
+  "bg-[#4a4d55]", // graphite
+  "bg-[#2f4f55]", // slate-teal
 ];
 
 export function initials(name: string) {

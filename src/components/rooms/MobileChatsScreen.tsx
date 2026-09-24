@@ -77,7 +77,7 @@ function ChatRow({ room }: { room: MyRoom }) {
           className="ring-1 ring-black/5"
         />
       ) : (
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-50 to-brand-100 text-brand-700 ring-1 ring-brand-200/60 dark:from-brand-900/50 dark:to-brand-950 dark:text-brand-300 dark:ring-brand-800">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700 ring-1 ring-brand-200/60 dark:bg-brand-950 dark:text-brand-300 dark:ring-brand-800">
           <Hash className="size-5" strokeWidth={2.2} />
         </span>
       )}
