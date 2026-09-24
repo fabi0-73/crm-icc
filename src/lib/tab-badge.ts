@@ -94,7 +94,40 @@ function paintFavicon(count: number) {
   }
 }
 
-/** Reflect `count` unread on the tab. Call with 0 to clear. */
+/**
+ * The installed app's own icon badge — the number on the home screen, dock
+ * or taskbar. Driven from here rather than from the call site so the tab and
+ * the icon can never disagree.
+ *
+ * Only an INSTALLED app has an icon to badge: in an ordinary browser tab
+ * this is a no-op, and Firefox has no such API at all. iOS additionally
+ * requires notification permission, which this app already asks for. Every
+ * path is guarded, so an unsupported platform silently keeps the tab badge.
+ *
+ * Note what this does NOT cover: messages arriving while the app is fully
+ * closed. Nothing of ours is running then, so the number stays at its last
+ * known value until the app is opened (or the service worker updates it —
+ * see sw.js).
+ */
+function paintAppBadge(count: number) {
+  if (typeof navigator === "undefined") return;
+  const nav = navigator as Navigator & {
+    setAppBadge?: (contents?: number) => Promise<void>;
+    clearAppBadge?: () => Promise<void>;
+  };
+  if (typeof nav.setAppBadge !== "function") return;
+  try {
+    const done =
+      count > 0 ? nav.setAppBadge(count) : nav.clearAppBadge?.();
+    void done?.catch(() => {
+      /* not installed, or the platform refused */
+    });
+  } catch {
+    /* older implementations throw synchronously */
+  }
+}
+
+/** Reflect `count` unread on the tab and on the app icon. 0 clears both. */
 export function setTabBadge(count: number) {
   if (typeof document === "undefined") return;
   if (count === lastCount) return;
@@ -107,4 +140,5 @@ export function setTabBadge(count: number) {
   document.title = `${prefix}${baseTitle}`;
 
   paintFavicon(count);
+  paintAppBadge(count);
 }
