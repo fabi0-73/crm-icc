@@ -69,6 +69,7 @@ import {
 } from "@/components/uikit/sheet";
 import { GroupDetails } from "@/components/GroupDetails";
 import { MediaHistory } from "@/components/MediaHistory";
+import { PostCounts } from "@/components/PostCounts";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import {
   messageAttachments,
@@ -83,6 +84,9 @@ import type {
   RoomMemberView,
   RoomType,
 } from "@/lib/types";
+
+/** Which panel the details sheet is showing. */
+type DetailsTab = "members" | "media" | "counts";
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 /** Messages are chat, not documents — anything longer belongs in a file. */
@@ -222,7 +226,7 @@ export function ChatRoom({
   const [error, setError] = useState<string | null>(null);
   const [showMembers, setShowMembers] = useState(false);
   /** Which pane of the details sheet is showing (roster vs shared media). */
-  const [detailsTab, setDetailsTab] = useState<"members" | "media">("members");
+  const [detailsTab, setDetailsTab] = useState<DetailsTab>("members");
   const [typers, setTypers] = useState<Record<string, number>>({});
   const [older, setOlder] = useState({ has: hasOlder, loading: false });
   /** Group wallpaper, kept live so every member sees a change at once. */
@@ -1731,13 +1735,30 @@ export function ChatRoom({
           side="right"
           className="w-[88%] gap-0 bg-paper sm:max-w-sm"
         >
-          {detailsTab === "media" ? (
+          {detailsTab === "counts" ? (
+            <>
+              <SheetHeader className="border-b border-line">
+                <SheetTitle>Details</SheetTitle>
+                <SheetDescription>How many each person posted</SheetDescription>
+              </SheetHeader>
+              <DetailsTabs
+                value={detailsTab}
+                onChange={setDetailsTab}
+                showCounts={ownMessagesOnly}
+              />
+              <PostCounts roomId={roomId} />
+            </>
+          ) : detailsTab === "media" ? (
             <>
               <SheetHeader className="border-b border-line">
                 <SheetTitle>Details</SheetTitle>
                 <SheetDescription>Shared files and links</SheetDescription>
               </SheetHeader>
-              <DetailsTabs value={detailsTab} onChange={setDetailsTab} />
+              <DetailsTabs
+                value={detailsTab}
+                onChange={setDetailsTab}
+                showCounts={ownMessagesOnly}
+              />
               <MediaHistory
                 roomId={roomId}
                 members={members}
@@ -1750,7 +1771,11 @@ export function ChatRoom({
                 <SheetTitle>Details</SheetTitle>
                 <SheetDescription>Direct message</SheetDescription>
               </SheetHeader>
-              <DetailsTabs value={detailsTab} onChange={setDetailsTab} />
+              <DetailsTabs
+                value={detailsTab}
+                onChange={setDetailsTab}
+                showCounts={ownMessagesOnly}
+              />
               <ul className="flex-1 overflow-y-auto p-2">
                 {members.map((m) => (
                   <li
@@ -1785,7 +1810,11 @@ export function ChatRoom({
               currentUserRole={currentUserRole}
               myRoomRole={myRole}
               onRosterChanged={refreshMembers}
-              tabs={<DetailsTabs value={detailsTab} onChange={setDetailsTab} />}
+              tabs={<DetailsTabs
+                value={detailsTab}
+                onChange={setDetailsTab}
+                showCounts={ownMessagesOnly}
+              />}
             />
           )}
         </SheetContent>
@@ -2264,13 +2293,17 @@ function AttachmentImage({
 function DetailsTabs({
   value,
   onChange,
+  showCounts = false,
 }: {
-  value: "members" | "media";
-  onChange: (v: "members" | "media") => void;
+  value: DetailsTab;
+  onChange: (v: DetailsTab) => void;
+  /** Counting posts only means something where one post is one record. */
+  showCounts?: boolean;
 }) {
-  const tabs: { key: "members" | "media"; label: string }[] = [
+  const tabs: { key: DetailsTab; label: string }[] = [
     { key: "members", label: "Members" },
     { key: "media", label: "Media" },
+    ...(showCounts ? [{ key: "counts" as const, label: "Counts" }] : []),
   ];
   return (
     <div className="flex shrink-0 gap-1 border-b border-line bg-mist/40 p-2">
