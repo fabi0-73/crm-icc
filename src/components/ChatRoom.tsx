@@ -260,6 +260,19 @@ export function ChatRoom({
 
   const streamRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // The composer floats over the stream (glass needs something behind it),
+  // so the stream reserves its height as bottom padding and scroll padding —
+  // otherwise the newest message would sit underneath it.
+  const composerRef = useRef<HTMLDivElement>(null);
+  const [composerH, setComposerH] = useState(0);
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setComposerH(el.offsetHeight));
+    ro.observe(el);
+    setComposerH(el.offsetHeight);
+    return () => ro.disconnect();
+  }, [readOnly]);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -1157,7 +1170,7 @@ export function ChatRoom({
       : null;
 
   return (
-    <div className="flex h-full flex-col bg-stream">
+    <div className="relative flex h-full flex-col bg-stream">
       {/* ── Header ─────────────────────────────────────────────── */}
       <div className="flex shrink-0 items-center gap-1.5 border-b border-line/80 bg-paper/90 px-1.5 pb-2 pt-[calc(env(safe-area-inset-top)+0.5rem)] backdrop-blur-md sm:px-3">
         {leading === "account" ? (
@@ -1314,6 +1327,11 @@ export function ChatRoom({
           ref={streamRef}
           onScroll={onStreamScroll}
           className="relative h-full overflow-y-auto overscroll-contain px-3 py-3 sm:px-6"
+          style={
+            composerH
+              ? { paddingBottom: composerH + 12, scrollPaddingBottom: composerH }
+              : undefined
+          }
         >
           <div className="mx-auto w-full max-w-3xl">
           {ownMessagesOnly &&
@@ -1530,7 +1548,8 @@ export function ChatRoom({
                 ? `${unseenBelow} new message${unseenBelow === 1 ? "" : "s"} — jump to latest`
                 : "Jump to latest messages"
             }
-            className={`absolute bottom-4 right-4 z-10 flex items-center justify-center gap-1.5 rounded-full border shadow-md backdrop-blur transition active:scale-95 ${
+            style={{ bottom: composerH + 16 }}
+            className={`absolute right-4 z-10 flex items-center justify-center gap-1.5 rounded-full border shadow-md backdrop-blur transition active:scale-95 ${
               unseenBelow > 0
                 ? "border-transparent bg-brand-600 px-3.5 h-10 text-[13px] font-semibold text-white hover:bg-brand-700"
                 : "h-10 w-10 border-line/70 bg-paper text-ink hover:bg-mist"
@@ -1548,14 +1567,17 @@ export function ChatRoom({
 
       {/* ── Composer (hidden for a read-only admin preview) ────── */}
       {!readOnly && (
-      <div className="shrink-0 border-t border-line/80 bg-paper/95 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] backdrop-blur sm:px-3">
+      <div
+        ref={composerRef}
+        className="absolute inset-x-0 bottom-0 z-20 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-3"
+      >
         {error && (
           <p className="mx-auto mb-2 w-full max-w-3xl rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </p>
         )}
         {replyTo && (
-          <div className="mx-auto mb-2 flex w-full max-w-3xl items-center gap-2 rounded-xl border-l-2 border-brand-500 bg-secondary px-3 py-2">
+          <div className="glass mx-auto mb-2 flex w-full max-w-3xl items-center gap-2 rounded-2xl px-3.5 py-2">
             <div className="min-w-0 flex-1">
               <p className="text-[12px] font-semibold text-brand-700 dark:text-brand-300">
                 Replying to{" "}
@@ -1578,7 +1600,7 @@ export function ChatRoom({
           </div>
         )}
         <StagedAttachments items={staged} onRemove={removeStaged} />
-        <div className="flex items-center gap-0.5 px-1 pb-1">
+        <div className="glass mx-auto mb-1.5 flex w-fit items-center gap-0.5 rounded-full px-1.5 py-1">
           {(
             [
               { kind: "bold", label: "Bold", Icon: Bold },
@@ -1595,7 +1617,7 @@ export function ChatRoom({
               onClick={() => applyFormat(kind)}
               aria-label={label}
               title={label}
-              className="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-mist hover:text-ink"
+              className="flex h-7 w-7 items-center justify-center rounded-full text-muted transition-colors hover:bg-ink/5 hover:text-ink dark:hover:bg-white/10"
             >
               <Icon className="size-4" />
             </button>
@@ -1620,13 +1642,13 @@ export function ChatRoom({
             type="button"
             disabled={sending || voiceBusy}
             onClick={() => fileRef.current?.click()}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted hover:bg-mist active:bg-mist disabled:opacity-40"
+            className="glass flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-ink/75 transition-transform active:scale-95 disabled:opacity-40"
             aria-label="Attach file"
           >
             <Paperclip className="size-[21px]" />
           </button>
           {voiceBusy ? null : (
-          <div className="relative flex min-h-10 flex-1 items-end rounded-3xl bg-secondary px-4 py-2">
+          <div className="glass relative flex min-h-11 flex-1 items-end rounded-[22px] px-4 py-2.5 transition-[border-color] focus-within:!border-brand-400/70">
             <MentionPopup
               matches={mentionMatches}
               activeIndex={mentionIndex}
@@ -1693,7 +1715,7 @@ export function ChatRoom({
           <button
             type="submit"
             disabled={sending || (staged.length === 0 && !body.trim())}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white transition-[opacity,transform,background-color] hover:bg-brand-700 active:scale-95 disabled:opacity-40"
+            className="flex h-11 w-11 shrink-0 animate-in zoom-in-75 fade-in items-center justify-center rounded-full bg-brand-600 text-white shadow-soft transition-[opacity,transform,background-color] duration-150 hover:bg-brand-700 active:scale-95 disabled:opacity-40 motion-reduce:animate-none"
             aria-label="Send"
           >
             <SendHorizontal className="size-5" />
@@ -1711,7 +1733,7 @@ export function ChatRoom({
         {/* Only appears as the limit comes into view, so it never nags. */}
         {body.length >= COUNTER_VISIBLE_FROM && (
           <p
-            className={`px-4 pb-1 text-right text-[11px] tabular-nums ${
+            className={`glass ml-auto mt-1 w-fit rounded-full px-2.5 py-0.5 text-right text-[11px] tabular-nums ${
               body.length >= MAX_MESSAGE_CHARS
                 ? "font-semibold text-red-600 dark:text-red-400"
                 : "text-muted"
