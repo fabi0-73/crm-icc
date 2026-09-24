@@ -4,47 +4,37 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, Copy, RefreshCw } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
-type Row = { user_id: string; person: string; posts: number };
+type Row = {
+  user_id: string;
+  person: string;
+  appointments: number;
+  other_posts: number;
+  from_day: string;
+  to_day: string;
+};
 type Period = "today" | "week" | "month" | "all";
 
-/** Local YYYY-MM-DD. toISOString() would answer in UTC and, at UTC+2,
- *  put anything after midnight on the wrong day. */
-function ymd(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
-function rangeFor(period: Period): { from: string; to: string } {
-  const now = new Date();
-  const to = ymd(now);
-  if (period === "today") return { from: to, to };
-  if (period === "week") {
-    const d = new Date(now);
-    // Monday as the first day, the way a work week is counted here.
-    const back = (d.getDay() + 6) % 7;
-    d.setDate(d.getDate() - back);
-    return { from: ymd(d), to };
-  }
-  if (period === "month") {
-    return { from: ymd(new Date(now.getFullYear(), now.getMonth(), 1)), to };
-  }
-  return { from: "2000-01-01", to };
-}
-
 const LABELS: Record<Period, string> = {
-  today: "Today",
-  week: "This week",
-  month: "This month",
-  all: "All time",
+  today: "Shift",
+  week: "Week",
+  month: "Month",
+  all: "All",
 };
 
 /**
- * How many each person posted over a period. In a drop box (one message =
- * one appointment) this is the appointment count, which is otherwise only
- * obtainable by scrolling several hundred messages a day.
+ * Appointments per person over a shift, week or month.
  *
- * The server decides what comes back: a supervisor gets the whole team,
- * anyone else gets their own line only.
+ * Two things here are deliberate and easy to get wrong:
+ *
+ * The period is named, not dated — the server works out the range in
+ * Tirane time, so a phone set to the wrong timezone cannot move anybody's
+ * numbers. A "day" turns over at NOON, because the shift runs 15:00 to
+ * 06:00 and a calendar day would cut every one of them in half.
+ *
+ * Appointments are counted, not messages. Most of what is posted in that
+ * group is conversation; counting all of it overstated the real figure
+ * roughly threefold. The server decides what looks like a record — see
+ * private.looks_like_appointment.
  */
 export function PostCounts({ roomId }: { roomId: string }) {
   const supabase = useMemo(() => createClient(), []);
@@ -57,11 +47,9 @@ export function PostCounts({ roomId }: { roomId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     setError(false);
-    const { from, to } = rangeFor(period);
     const { data, error: rpcError } = await supabase.rpc("room_post_counts", {
       p_room: roomId,
-      p_from: from,
-      p_to: to,
+      p_period: period,
     });
     setLoading(false);
     if (rpcError) {
@@ -75,20 +63,26 @@ export function PostCounts({ roomId }: { roomId: string }) {
     void load();
   }, [load]);
 
-  const total = (rows ?? []).reduce((n, r) => n + Number(r.posts), 0);
+  const totalAppts = (rows ?? []).reduce(
+    (n, r) => n + Number(r.appointments),
+    0,
+  );
+  const span = rows?.[0];
 
   const copy = async () => {
     if (!rows) return;
-    const { from, to } = rangeFor(period);
-    const header =
-      from === to ? `Appointments — ${from}` : `Appointments — ${from} to ${to}`;
+    const head =
+      span && span.from_day === span.to_day
+        ? `Appointments — ${span.from_day}`
+        : `Appointments — ${span?.from_day} to ${span?.to_day}`;
     const body = rows
-      .filter((r) => Number(r.posts) > 0)
-      .map((r) => `${r.person}: ${r.posts}`)
+      .filter((r) => Number(r.appointments) > 0)
+      .map((r) => `${r.person}: ${r.appointments}`)
       .join("\n");
-    const text = `${header}\n${body}\n\nTotal: ${total}`;
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(
+        `${head}\n${body}\n\nTotal: ${totalAppts}`,
+      );
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
@@ -116,11 +110,20 @@ export function PostCounts({ roomId }: { roomId: string }) {
         ))}
       </div>
 
-      <div className="flex shrink-0 items-center justify-between px-3 py-2.5">
-        <p className="text-[13px] text-muted">
-          {loading ? "Counting…" : `${total} in total`}
-        </p>
-        <div className="flex items-center gap-1">
+      <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="text-[13px] font-semibold text-ink">
+            {loading ? "Counting…" : `${totalAppts} appointments`}
+          </p>
+          {span && !loading && (
+            <p className="truncate text-[11px] text-muted">
+              {span.from_day === span.to_day
+                ? `Shift of ${span.from_day} · noon to noon`
+                : `${span.from_day} → ${span.to_day}`}
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={() => void load()}
@@ -132,7 +135,7 @@ export function PostCounts({ roomId }: { roomId: string }) {
           <button
             type="button"
             onClick={() => void copy()}
-            disabled={!rows || total === 0}
+            disabled={!rows || totalAppts === 0}
             className="flex items-center gap-1.5 rounded-full bg-mist px-2.5 py-1.5 text-[12px] font-semibold text-ink hover:bg-line disabled:opacity-40"
           >
             {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
@@ -153,21 +156,31 @@ export function PostCounts({ roomId }: { roomId: string }) {
             key={r.user_id}
             className="flex items-center justify-between gap-3 rounded-xl px-2.5 py-2"
           >
-            <span className="truncate text-[14px] text-ink">{r.person}</span>
+            <span className="min-w-0 flex-1 truncate text-[14px] text-ink">
+              {r.person}
+            </span>
+            {Number(r.other_posts) > 0 && (
+              <span
+                className="shrink-0 text-[11px] text-muted"
+                title="Other messages — conversation, not counted as appointments"
+              >
+                +{r.other_posts}
+              </span>
+            )}
             <span
               className={`shrink-0 rounded-full px-2 py-0.5 text-[13px] font-semibold tabular-nums ${
-                Number(r.posts) > 0
+                Number(r.appointments) > 0
                   ? "bg-brand-50 text-brand-700"
                   : "bg-mist text-muted"
               }`}
             >
-              {r.posts}
+              {r.appointments}
             </span>
           </li>
         ))}
         {rows !== null && rows.length === 0 && !error && (
           <li className="px-2.5 py-6 text-center text-[13px] text-muted">
-            Nothing posted in this period.
+            Nothing in this period.
           </li>
         )}
       </ul>
