@@ -54,7 +54,7 @@ function excerpt(body: string, term: string): { before: string; hit: string; aft
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="px-2 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted">
+    <p className="px-2 pb-1 pt-3 text-[12px] font-medium text-muted">
       {children}
     </p>
   );

@@ -170,7 +170,7 @@ export function PostCounts({ roomId }: { roomId: string }) {
             <span
               className={`shrink-0 rounded-full px-2 py-0.5 text-[13px] font-semibold tabular-nums ${
                 Number(r.appointments) > 0
-                  ? "bg-brand-50 text-brand-700"
+                  ? "bg-brand-50 text-brand-700 dark:bg-brand-950 dark:text-brand-300"
                   : "bg-mist text-muted"
               }`}
             >

@@ -12,7 +12,7 @@ export default function AppNotFound() {
       </div>
       <Link
         href="/rooms"
-        className="inline-flex h-9 items-center rounded-lg bg-brand-grad px-3.5 text-[13px] font-semibold text-white shadow-brand"
+        className="inline-flex h-9 items-center rounded-lg bg-brand-600 px-3.5 text-[13px] font-semibold text-white hover:bg-brand-700"
       >
         Go to chats
       </Link>

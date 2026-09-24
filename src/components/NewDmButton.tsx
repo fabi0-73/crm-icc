@@ -124,7 +124,7 @@ export function NewDmButton({
         onClick={openModal}
         className={
           big
-            ? "flex h-10 w-10 items-center justify-center rounded-full bg-brand-grad text-white shadow-brand active:brightness-95"
+            ? "flex h-10 w-10 items-center justify-center rounded-full bg-brand-600 text-white active:bg-brand-700"
             : `rounded-md p-1.5 ${
                 dark
                   ? "text-white/60 hover:bg-white/10 hover:text-white"

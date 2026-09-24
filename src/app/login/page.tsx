@@ -24,7 +24,7 @@ export default async function LoginPage({
               className="rounded-xl"
             />
           </div>
-          <h1 className="text-[26px] font-extrabold tracking-tight text-white">
+          <h1 className="text-[24px] font-semibold tracking-tight text-white">
             ICC Desk
           </h1>
           <p className="mt-1 text-sm text-white/55">

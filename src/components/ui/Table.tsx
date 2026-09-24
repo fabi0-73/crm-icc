@@ -20,7 +20,7 @@ export function TBody({ children }: { children: React.ReactNode }) {
 
 export function Th({ children }: { children?: React.ReactNode }) {
   return (
-    <th className="px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-muted">
+    <th className="px-4 py-2.5 text-[12px] font-medium text-muted">
       {children}
     </th>
   );

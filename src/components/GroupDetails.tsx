@@ -382,7 +382,7 @@ function MemberItem({
           {shownName}
           {self && <span className="text-[12px] text-muted">(you)</span>}
           {isAdmin && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-brand-50 px-1.5 py-0.5 text-[11px] font-medium text-brand-700 dark:bg-brand-900/40 dark:text-brand-300">
               <ShieldCheck className="size-3" /> Admin
             </span>
           )}

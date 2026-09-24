@@ -1192,7 +1192,7 @@ export function ChatRoom({
           </span>
         ) : (
           <span className="ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700 dark:bg-brand-900/40 dark:text-brand-300 sm:ml-0">
-            <Hash className="size-[18px]" strokeWidth={2.2} />
+            <Hash className="size-[18px]" strokeWidth={1.75} />
           </span>
         )}
 
@@ -1334,7 +1334,7 @@ export function ChatRoom({
                 type="button"
                 onClick={() => void loadOlder()}
                 disabled={older.loading}
-                className="rounded-full border border-line/70 bg-white/80 px-3.5 py-1.5 text-[12px] font-medium text-muted shadow-xs backdrop-blur active:bg-mist disabled:opacity-50 dark:bg-paper/80"
+                className="rounded-full bg-secondary px-3.5 py-1.5 text-[12px] font-medium text-ink/80 active:bg-line disabled:opacity-50"
               >
                 {older.loading ? "Loading…" : "Load earlier messages"}
               </button>
@@ -1345,7 +1345,7 @@ export function ChatRoom({
               <div className="my-3 flex justify-center">
                 <span
                   suppressHydrationWarning
-                  className="rounded-full border border-line/70 bg-white/75 px-3 py-1 text-[11px] font-medium text-muted shadow-xs backdrop-blur dark:bg-paper/75"
+                  className="rounded-full bg-secondary px-3 py-1 text-[11px] font-medium text-muted"
                 >
                   {day.label}
                 </span>
@@ -1693,7 +1693,7 @@ export function ChatRoom({
           <button
             type="submit"
             disabled={sending || (staged.length === 0 && !body.trim())}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-grad text-white shadow-brand transition-[opacity,transform] hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:shadow-none"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white transition-[opacity,transform,background-color] hover:bg-brand-700 active:scale-95 disabled:opacity-40"
             aria-label="Send"
           >
             <SendHorizontal className="size-5" />
@@ -1970,7 +1970,7 @@ function EditBox({
           type="button"
           disabled={busy || !value.trim()}
           onClick={() => onSave(value)}
-          className="rounded-lg bg-brand-grad px-3 py-1 font-medium text-white disabled:opacity-40"
+          className="rounded-lg bg-brand-600 px-3 py-1 font-medium text-white hover:bg-brand-700 disabled:opacity-40"
         >
           Save
         </button>
@@ -2057,9 +2057,12 @@ function Bubble({
   const shape = mine
     ? `rounded-2xl ${tail ? "rounded-br-md" : ""}`
     : `rounded-2xl ${tail ? "rounded-bl-md" : ""}`;
+  // Own messages sit on the bubble token: the accent in light mode, a
+  // teal-tinted dark in dark mode so a wall of your own posts at 2am is
+  // calm rather than a column of bright fills. No shadows on either.
   const surface = mine
-    ? "bg-brand-grad text-white shadow-bubble"
-    : "border border-line/70 bg-paper text-ink shadow-xs";
+    ? "bg-bubble text-white dark:text-ink"
+    : "border border-line/70 bg-bubble-peer text-ink";
 
   // A caption lives in body; show it only when it differs from the
   // filename (a captionless file send stores the filename in body).
