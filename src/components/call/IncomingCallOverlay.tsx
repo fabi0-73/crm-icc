@@ -11,7 +11,7 @@ export function IncomingCallOverlay() {
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-ink/70 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-xs rounded-xl bg-ink-soft p-8 text-center text-white shadow-lg">
+      <div className="w-full max-w-xs rounded-2xl bg-ink-soft p-8 text-center text-white shadow-lift">
         <div className="relative mx-auto h-24 w-24">
           <span className="absolute inset-0 animate-ping rounded-full bg-brand-400/40 motion-reduce:hidden" />
           <span className="absolute -inset-2 rounded-full border-2 border-brand-400/50" />
@@ -34,7 +34,7 @@ export function IncomingCallOverlay() {
             <button
               type="button"
               onClick={decline}
-              className="flex h-14 w-14 items-center justify-center rounded-full bg-red-500 text-white shadow-lg transition-transform hover:scale-105 active:scale-95"
+              className="flex h-14 w-14 items-center justify-center rounded-full bg-red-500 text-white transition-transform hover:scale-105 active:scale-95"
               aria-label="Decline call"
             >
               <HangUpIcon />
@@ -48,7 +48,7 @@ export function IncomingCallOverlay() {
                 if (incoming.group && incoming.video) openIncomingLobby();
                 else void accept();
               }}
-              className="flex h-14 w-14 items-center justify-center rounded-full bg-brand-500 text-white shadow-lg transition-transform hover:scale-105 active:scale-95"
+              className="flex h-14 w-14 items-center justify-center rounded-full bg-brand-600 text-white transition-transform hover:scale-105 active:scale-95"
               aria-label="Accept call"
             >
               <PhoneIcon size={24} />

@@ -418,7 +418,7 @@ function RemoteTile({
         {peer.name}
       </span>
       {peer.sharing && !stage && (
-        <span className="absolute left-1.5 top-1.5 rounded bg-brand-500/90 px-1.5 py-0.5 text-[10px] font-medium">
+        <span className="absolute left-1.5 top-1.5 rounded bg-brand-600/90 px-1.5 py-0.5 text-[10px] font-medium">
           Sharing
         </span>
       )}
@@ -518,7 +518,7 @@ function SelfTile({
         You
       </span>
       {sharing && (
-        <span className="absolute left-1.5 top-1.5 rounded bg-brand-500/90 px-1.5 py-0.5 text-[10px] font-medium">
+        <span className="absolute left-1.5 top-1.5 rounded bg-brand-600/90 px-1.5 py-0.5 text-[10px] font-medium">
           Sharing
         </span>
       )}

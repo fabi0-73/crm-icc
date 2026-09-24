@@ -236,7 +236,7 @@ export function FullScreenCall() {
           <button
             type="button"
             onClick={hangup}
-            className="flex h-14 w-14 items-center justify-center rounded-full bg-red-500 text-white shadow-lg transition-transform hover:scale-105 active:scale-95"
+            className="flex h-14 w-14 items-center justify-center rounded-full bg-red-500 text-white transition-transform hover:scale-105 active:scale-95"
             aria-label="Hang up"
           >
             <HangUpIcon />

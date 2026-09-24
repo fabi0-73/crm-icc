@@ -95,7 +95,7 @@ export function FloatingCallTile() {
 
   // Mobile: sit above the chat composer/keyboard, not on top of it.
   return (
-    <div className="fixed right-3 bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] z-[115] w-60 overflow-hidden rounded-xl bg-ink text-white shadow-lg ring-1 ring-brand-400/40 sm:right-4 sm:bottom-4 sm:w-64">
+    <div className="fixed right-3 bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] z-[115] w-60 overflow-hidden rounded-xl bg-ink text-white shadow-lift ring-1 ring-white/10 sm:right-4 sm:bottom-4 sm:w-64">
       <button
         type="button"
         onClick={() => setView("full")}
@@ -169,7 +169,7 @@ export function FloatingCallTile() {
           <ExpandIcon />
         </span>
         {sharing && (
-          <span className="absolute left-2 top-2 rounded bg-brand-500/90 px-1.5 py-0.5 text-[10px] font-medium">
+          <span className="absolute left-2 top-2 rounded bg-brand-600/90 px-1.5 py-0.5 text-[10px] font-medium">
             Sharing
           </span>
         )}

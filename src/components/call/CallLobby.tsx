@@ -117,7 +117,7 @@ export function CallLobby() {
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-ink/80 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-sm overflow-hidden rounded-2xl bg-ink-soft text-white shadow-lg">
+      <div className="w-full max-w-sm overflow-hidden rounded-2xl bg-ink-soft text-white shadow-lift">
         <div className="relative aspect-video bg-ink">
           <video
             ref={videoRef}
@@ -171,7 +171,7 @@ export function CallLobby() {
                 type="button"
                 onClick={cancelLobby}
                 disabled={joining}
-                className="flex h-14 w-14 items-center justify-center rounded-full bg-red-500 text-white shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-40"
+                className="flex h-14 w-14 items-center justify-center rounded-full bg-red-500 text-white transition-transform hover:scale-105 active:scale-95 disabled:opacity-40"
                 aria-label="Cancel"
               >
                 <HangUpIcon />
@@ -183,7 +183,7 @@ export function CallLobby() {
                 type="button"
                 onClick={() => void join()}
                 disabled={joining}
-                className="flex h-14 min-w-14 items-center justify-center rounded-full bg-brand-500 px-5 text-[15px] font-semibold text-white shadow-lg transition-transform hover:scale-105 active:scale-95 disabled:opacity-40"
+                className="flex h-14 min-w-14 items-center justify-center rounded-full bg-brand-600 px-5 text-[15px] font-semibold text-white transition-transform hover:scale-105 active:scale-95 disabled:opacity-40"
               >
                 {joining ? "Joining…" : "Join"}
               </button>
