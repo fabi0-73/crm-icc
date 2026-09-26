@@ -2177,10 +2177,10 @@ export function CallProvider({
 
   // GROUP CALLS: screen share is one call on the LiveKit participant — the SFU
   // republishes it to everyone, so there is no per-peer renegotiation to do.
-  // Any number of people may share at once: each share is published in three
-  // layers and every viewer fetches only the one it displays (planGroupVideo),
-  // so 40 concurrent shares cost a viewer 360p/5 fps thumbnails, not 40
-  // full-size streams.
+  // Any number of people may share at once. Each share is ONE 1080p layer
+  // (screenSharePublishOptions) and every visible share is fetched at that
+  // size, so several screens on the wall at once cost a viewer ~4 Mbps each;
+  // only shares scrolled out of view are paused (planGroupVideo).
   const toggleScreenShare = useCallback(async () => {
     if (groupRef.current) {
       const handle = lkRef.current;

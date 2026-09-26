@@ -271,10 +271,6 @@ export function planGroupVideo(
   const plan = new Map<string, { camera: LayerChoice; screen: LayerChoice }>();
   const tiles = peers.length + 1; // + the viewer's own tile
   const size: LayerChoice = tiles <= 2 ? "high" : tiles <= 4 ? "medium" : "low";
-  // Screen wall: two screens side by side are still read, 3–4 fit 720p, and
-  // a wall of 40 concurrent shares is an overview at the 360p/5 fps layer.
-  const sharers = peers.filter((p) => p.sharing).length;
-  const wall: LayerChoice = sharers <= 2 ? "high" : sharers <= 4 ? "medium" : "low";
   const hidden = new Set(view.layout === "mini" ? [] : (view.hidden ?? []));
 
   for (const peer of peers) {
@@ -288,16 +284,17 @@ export function planGroupVideo(
     } else if (view.layout === "focus") {
       shown = "low"; // filmstrip thumbnail
     } else if (view.layout === "screens") {
-      shown = peer.sharing ? wall : "off"; // cameras aren't on the wall
+      shown = peer.sharing ? "high" : "off"; // cameras aren't on the wall
     } else {
-      // Grid tile. Cameras follow the tile count, but a shared screen is
-      // there to be read, so it never drops below the 720p layer however
-      // many tiles there are. Until now it used the camera ladder, which
-      // served every grid share at 360p/5 fps once a call reached five
-      // people — including the second of two concurrent shares, which the
-      // grid never auto-focuses.
-      shown = peer.sharing && size === "low" ? "medium" : size;
+      // Grid tile: cameras follow the tile count.
+      shown = size;
     }
+    // A shared screen is always requested at full size wherever it is
+    // visible — stage, grid, wall, filmstrip or minimized tile — however
+    // many people are in the call. Screens are published as a single 1080p
+    // layer (see screenSharePublishOptions), so there is nothing smaller to
+    // fall back to anyway; only a screen out of view is paused.
+    if (peer.sharing && shown !== "off") shown = "high";
     plan.set(
       peer.id,
       peer.sharing

@@ -23,7 +23,6 @@ import {
   Room,
   RoomEvent,
   Track,
-  VideoPreset,
   VideoQuality,
   type RemoteParticipant,
   type ScreenShareCaptureOptions,
@@ -172,27 +171,31 @@ export function screenShareCaptureOptions(): ScreenShareCaptureOptions {
 }
 
 /**
- * Screen-share publishing. Three layers so every viewer gets what their
- * view needs: full size for the big focus view, 720p for grid tiles, 360p at
- * 5 fps for thumbnails and a minimized call. VP8 on purpose: livekit-client
- * forces VP9/AV1 into an SVC mode that overrides the "detail" content hint
- * and drops the smaller layers, and every browser can encode and decode VP8.
+ * Screen-share publishing: ONE layer, full size. The ask is a constant
+ * 1080p for every viewer no matter how many people are watching, and a
+ * lower copy would be exactly what gets served instead.
+ *
+ * Simulcast is off on purpose. With three layers the browser fills the
+ * small ones first, so whenever the sharer's uplink or CPU could not carry
+ * all of them (~5.8 Mbps and three encodes) the 1080p layer was the one
+ * that starved -- for everybody at once. One encode at ~4 Mbps is far
+ * easier to sustain. The cost of the choice is deliberate: a viewer whose
+ * own connection cannot take 1080p gets a stuttering share, never a
+ * smaller one. Under pressure the encoder sheds frames, not pixels
+ * (maintain-resolution), so text stays sharp and only motion suffers.
+ *
+ * VP8 on purpose: every browser encodes and decodes it, and livekit-client
+ * forces VP9/AV1 into an SVC mode that overrides the "detail" content hint.
  */
 export function screenSharePublishOptions(): TrackPublishOptions {
   const p = SCREEN_SHARE_PROFILE;
   return {
     videoCodec: "vp8",
-    simulcast: true,
+    simulcast: false,
     screenShareEncoding: {
       maxBitrate: p.sfuMaxBitrate,
       maxFramerate: p.maxFramerate,
     },
-    screenShareSimulcastLayers: [
-      new VideoPreset(640, 360, 300_000, 5),
-      // 1.5 Mbps, not 1 — this is the layer grid tiles read, and 1 Mbps over
-      // 720p is 0.07 bits/pixel, the same starvation the top layer had.
-      new VideoPreset(1280, 720, 1_500_000, p.maxFramerate),
-    ],
     degradationPreference: "maintain-resolution",
   };
 }
