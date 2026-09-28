@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LayoutGrid, MonitorUp } from "lucide-react";
+import { shareDecodeBudget } from "@/lib/call/screen-share";
 import { Avatar } from "@/components/Avatar";
 import { useCall, type GroupParticipant } from "@/components/call/CallProvider";
 import { MicOffIcon } from "@/components/icons";
@@ -17,9 +18,22 @@ const SCREENS = "__screens__";
  *   unreadable in a grid tile) — later ones never pull the viewer away;
  * - with two or more, "All screens" puts them side by side;
  * - clicking any shared screen enlarges it; a filmstrip + Grid control switch
- *   views without stopping anyone's share.
+ *   views without stopping anyone's share;
+ * - an enlarged screen fills the whole call window, and its view buttons and
+ *   filmstrip float over it only while the call controls show (`chrome`);
+ * - a device plays only as many screens at once as it can decode
+ *   (shareDecodeBudget); the rest show who is sharing until clicked.
  */
-export function CallGrid() {
+export function CallGrid({
+  chrome = true,
+  onStageChange,
+}: {
+  /** Whether the call's controls are showing right now. */
+  chrome?: boolean;
+  /** Reports whether a screen fills the stage, so FullScreenCall can float
+   *  its bars over it. */
+  onStageChange?: (onStage: boolean) => void;
+} = {}) {
   const { groupPeers, localStream, camOff, sharing, call, muted, setGroupLayout } =
     useCall();
   const [focusId, setFocusId] = useState<string | null>(null);
@@ -61,9 +75,31 @@ export function CallGrid() {
     });
   }, []);
 
+  // Screens this device can decode at once; any more wait for a click.
+  const [maxLive, setMaxLive] = useState(2);
+  useEffect(() => {
+    let live = true;
+    void shareDecodeBudget().then((n) => live && setMaxLive(n));
+    return () => {
+      live = false;
+    };
+  }, []);
+  // Grid and wall only: on the stage nothing else plays (planGroupVideo).
+  const paused = useMemo(() => {
+    const out = new Set<string>();
+    if (focusId && focusId !== SCREENS) return out;
+    let playing = 0;
+    for (const peer of sharers) {
+      if (hidden.has(peer.id)) continue;
+      if (playing < maxLive) playing++;
+      else out.add(peer.id);
+    }
+    return out;
+  }, [focusId, sharers, hidden, maxLive]);
+
   // Every video is fetched at the size it is shown (see planGroupVideo).
   useEffect(() => {
-    const hiddenIds = [...hidden];
+    const hiddenIds = [...hidden, ...paused];
     setGroupLayout(
       focusId === SCREENS
         ? { layout: "screens", hidden: hiddenIds }
@@ -75,7 +111,7 @@ export function CallGrid() {
             }
           : { layout: "grid", hidden: hiddenIds },
     );
-  }, [focusId, hidden, setGroupLayout]);
+  }, [focusId, hidden, paused, setGroupLayout]);
 
   // Views exist for shares: when the one on screen ends, move to another
   // share that is still running, else back to the grid.
@@ -100,6 +136,11 @@ export function CallGrid() {
       ? (groupPeers.find((p) => p.id === focusId) ?? null)
       : null;
   const focusingSelf = focusId === SELF_FOCUS;
+  const onStage = Boolean(focusId && (focusingSelf || focusedPeer));
+  useEffect(() => {
+    onStageChange?.(onStage);
+  }, [onStage, onStageChange]);
+  useEffect(() => () => onStageChange?.(false), [onStageChange]);
   const remoteFit = "object-contain";
   const allScreens =
     sharers.length >= 2 ? (
@@ -144,6 +185,7 @@ export function CallGrid() {
               key={peer.id}
               peer={peer}
               fitClass={remoteFit}
+              paused={paused.has(peer.id)}
               onSelect={() => setFocusId(peer.id)}
               onVisibility={reportVisibility}
             />
@@ -154,37 +196,51 @@ export function CallGrid() {
   }
 
   // ── One share (or your own) large, everyone in a filmstrip ─────────
-  if (focusId && (focusingSelf || focusedPeer)) {
+  // The screen takes the whole call window; the view buttons and the
+  // filmstrip float over it and fade out with the call controls.
+  if (onStage) {
+    const fade = `transition-opacity duration-300 ${
+      chrome ? "opacity-100" : "pointer-events-none opacity-0"
+    }`;
     return (
-      <div className="flex h-full min-h-0 flex-col gap-2 p-2 sm:p-3">
-        <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl bg-ink">
-          {focusingSelf ? (
-            <SelfTile
-              stream={localStream}
-              camOff={camOff}
-              sharing={sharing}
-              video={Boolean(call?.video)}
-              muted={muted}
-            />
-          ) : focusedPeer ? (
-            <RemoteTile peer={focusedPeer} fitClass={remoteFit} stage />
-          ) : null}
-          <div className="absolute left-2 top-2 z-10 flex gap-2">
-            <ViewButton
-              onClick={() => setFocusId(null)}
-              label="Grid"
-              icon={<LayoutGrid className="size-3.5" />}
-            />
-            {allScreens}
-          </div>
+      <div className="relative h-full min-h-0 bg-ink">
+        {focusingSelf ? (
+          <SelfTile
+            stream={localStream}
+            camOff={camOff}
+            sharing={sharing}
+            video={Boolean(call?.video)}
+            muted={muted}
+            stage
+          />
+        ) : focusedPeer ? (
+          <RemoteTile peer={focusedPeer} fitClass={remoteFit} stage />
+        ) : null}
+        <div
+          className={`absolute left-3 top-[calc(max(1rem,env(safe-area-inset-top))+3.75rem)] z-10 flex gap-2 ${fade}`}
+        >
+          <ViewButton
+            onClick={() => setFocusId(null)}
+            label="Grid"
+            icon={<LayoutGrid className="size-3.5" />}
+          />
+          {allScreens}
+          <span className="flex items-center rounded-full bg-black/65 px-3 py-1.5 text-[12px] font-medium text-white">
+            {focusingSelf ? "Your screen" : `Screen · ${focusedPeer?.name ?? ""}`}
+          </span>
         </div>
-        <div className="flex h-[5.5rem] shrink-0 gap-2 overflow-x-auto pb-0.5">
+        <div
+          className={`absolute inset-x-0 bottom-[calc(max(1.5rem,env(safe-area-inset-bottom))+6.75rem)] z-10 flex h-[5.5rem] gap-2 overflow-x-auto px-3 pb-0.5 ${fade}`}
+        >
           {ordered.map((peer) => (
             <div key={peer.id} className="h-full w-28 shrink-0">
               <RemoteTile
                 peer={peer}
                 fitClass={remoteFit}
                 compact
+                // The stage already shows the selected screen; any other
+                // screen is paused here (planGroupVideo), so say so.
+                paused={peer.sharing && peer.id !== focusId}
                 selected={peer.id === focusId}
                 onSelect={peer.sharing ? () => setFocusId(peer.id) : undefined}
                 onVisibility={reportVisibility}
@@ -233,6 +289,7 @@ export function CallGrid() {
             key={peer.id}
             peer={peer}
             fitClass={remoteFit}
+            paused={paused.has(peer.id)}
             onSelect={peer.sharing ? () => setFocusId(peer.id) : undefined}
             onVisibility={reportVisibility}
           />
@@ -329,6 +386,7 @@ function RemoteTile({
   fitClass,
   compact,
   stage,
+  paused,
   selected,
   onSelect,
   onVisibility,
@@ -336,6 +394,8 @@ function RemoteTile({
   peer: GroupParticipant;
   fitClass: string;
   compact?: boolean;
+  /** A screen this viewer is not fetching: show who is sharing instead. */
+  paused?: boolean;
   /** The big focus stage: the view buttons sit where the badge would. */
   stage?: boolean;
   selected?: boolean;
@@ -374,10 +434,13 @@ function RemoteTile({
     };
   }, [peer.stream]);
 
+  const showVideo = peer.hasVideo && !paused;
   return (
     <div
       ref={tileRef}
-      className={`relative flex h-full min-h-0 items-center justify-center overflow-hidden rounded-xl bg-ink-soft ${
+      className={`relative flex h-full min-h-0 items-center justify-center overflow-hidden bg-ink-soft ${
+        stage ? "" : "rounded-xl"
+      } ${
         onSelect ? "cursor-pointer" : ""
       } ${selected ? "ring-2 ring-brand-400" : ""}`}
       onClick={(e) => activateTile(e, onSelect)}
@@ -407,27 +470,36 @@ function RemoteTile({
         autoPlay
         playsInline
         muted
-        className={`h-full w-full bg-ink ${fitClass} ${peer.hasVideo ? "" : "opacity-0"}`}
+        className={`h-full w-full bg-ink ${fitClass} ${showVideo ? "" : "opacity-0"}`}
       />
-      {!peer.hasVideo && (
-        <div className="absolute inset-0 flex items-center justify-center">
+      {!showVideo && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
           <Avatar name={peer.name} size={compact ? "sm" : "lg"} userId={peer.id} />
+          {paused && !compact && (
+            <span className="flex items-center gap-1.5 rounded-full bg-black/55 px-3 py-1 text-[12px] font-medium text-white">
+              <MonitorUp className="size-3.5" />
+              Click to watch
+            </span>
+          )}
         </div>
       )}
-      <span className="absolute bottom-1.5 left-1.5 max-w-[70%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white">
-        {peer.name}
-      </span>
+      {/* On the stage the name rides with the view buttons, which fade. */}
+      {!stage && (
+        <span className="absolute bottom-1.5 left-1.5 max-w-[70%] truncate rounded bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white">
+          {peer.name}
+        </span>
+      )}
       {peer.sharing && !stage && (
         <span className="absolute left-1.5 top-1.5 rounded bg-brand-600/90 px-1.5 py-0.5 text-[10px] font-medium">
           Sharing
         </span>
       )}
-      {peer.muted && (
+      {peer.muted && !stage && (
         <div className="absolute bottom-1.5 right-1.5">
           <MuteBadge />
         </div>
       )}
-      {canManageCall && !peer.muted && !compact && (
+      {canManageCall && !peer.muted && !compact && !stage && (
         <button
           type="button"
           onClick={() => void muteParticipant(peer.id)}
@@ -451,6 +523,7 @@ function SelfTile({
   video,
   muted,
   compact,
+  stage,
   selected,
   onSelect,
 }: {
@@ -460,6 +533,8 @@ function SelfTile({
   video: boolean;
   muted: boolean;
   compact?: boolean;
+  /** Fills the call window: no rounded corners or ring. */
+  stage?: boolean;
   selected?: boolean;
   onSelect?: () => void;
 }) {
@@ -480,7 +555,9 @@ function SelfTile({
 
   return (
     <div
-      className={`relative flex h-full min-h-0 items-center justify-center overflow-hidden rounded-xl bg-ink-soft ring-1 ring-white/15 ${
+      className={`relative flex h-full min-h-0 items-center justify-center overflow-hidden bg-ink-soft ${
+        stage ? "" : "rounded-xl ring-1 ring-white/15"
+      } ${
         onSelect ? "cursor-pointer" : ""
       } ${selected ? "ring-2 ring-brand-400" : ""}`}
       onClick={(e) => activateTile(e, onSelect)}
@@ -514,10 +591,12 @@ function SelfTile({
           <Avatar name="You" size={compact ? "sm" : "lg"} userId={selfId} />
         </div>
       )}
-      <span className="absolute bottom-1.5 left-1.5 rounded bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white">
-        You
-      </span>
-      {sharing && (
+      {!stage && (
+        <span className="absolute bottom-1.5 left-1.5 rounded bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-white">
+          You
+        </span>
+      )}
+      {sharing && !stage && (
         <span className="absolute left-1.5 top-1.5 rounded bg-brand-600/90 px-1.5 py-0.5 text-[10px] font-medium">
           Sharing
         </span>

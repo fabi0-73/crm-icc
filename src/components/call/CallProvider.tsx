@@ -30,7 +30,6 @@ import {
   applyScreenShareParams,
   displayMediaOptions,
   restoreSenderParams,
-  watchScreenShareEncoder,
   type GroupView,
   type SavedSenderParams,
 } from "@/lib/call/screen-share";
@@ -336,7 +335,6 @@ export function CallProvider({
     sender: RTCRtpSender;
     saved: SavedSenderParams;
   } | null>(null);
-  const stopEncoderWatchRef = useRef<(() => void) | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const callIdRef = useRef<string | null>(null);
   const roomIdRef = useRef<string | null>(null);
@@ -552,8 +550,6 @@ export function CallProvider({
       screenStreamRef.current = null;
       cameraTrackRef.current = null;
       screenAddedSenderRef.current = false;
-      stopEncoderWatchRef.current?.();
-      stopEncoderWatchRef.current = null;
       screenParamsRef.current = null;
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
@@ -1264,13 +1260,9 @@ export function CallProvider({
                 ? pc.getSenders().find((x) => x.track === screenTrack)
                 : undefined;
             if (screenSender) {
-              const applied = await applyScreenShareParams(
+              await applyScreenShareParams(
                 screenSender,
                 SCREEN_SHARE_PROFILE.p2pMaxBitrate,
-              );
-              stopEncoderWatchRef.current ??= watchScreenShareEncoder(
-                screenSender,
-                applied?.codec,
               );
             }
           }
@@ -2012,8 +2004,6 @@ export function CallProvider({
     const pc = pcRef.current;
     const screen = screenStreamRef.current;
     const screenTrack = screen?.getVideoTracks()[0] ?? null;
-    stopEncoderWatchRef.current?.();
-    stopEncoderWatchRef.current = null;
     const screenParams = screenParamsRef.current;
     screenParamsRef.current = null;
 
@@ -2151,10 +2141,6 @@ export function CallProvider({
         );
         if (saved) screenParamsRef.current = { sender: videoSender, saved };
         await videoSender.replaceTrack(screenTrack);
-        stopEncoderWatchRef.current = watchScreenShareEncoder(
-          videoSender,
-          saved?.codec,
-        );
         screenAddedSenderRef.current = false;
       } else {
         pc.addTrack(screenTrack, screen);
@@ -2177,10 +2163,10 @@ export function CallProvider({
 
   // GROUP CALLS: screen share is one call on the LiveKit participant — the SFU
   // republishes it to everyone, so there is no per-peer renegotiation to do.
-  // Any number of people may share at once. Each share is ONE 1080p layer
-  // (screenSharePublishOptions) and every visible share is fetched at that
-  // size, so several screens on the wall at once cost a viewer ~4 Mbps each;
-  // only shares scrolled out of view are paused (planGroupVideo).
+  // Any number of people may share at once. Each share is ONE 1080p H.264
+  // layer (screenSharePublishOptions) and every share that plays is fetched
+  // at that size. Screens out of view, in the filmstrip, or beyond what this
+  // device can decode at once (shareDecodeBudget) are paused.
   const toggleScreenShare = useCallback(async () => {
     if (groupRef.current) {
       const handle = lkRef.current;

@@ -171,26 +171,26 @@ export function screenShareCaptureOptions(): ScreenShareCaptureOptions {
 }
 
 /**
- * Screen-share publishing: ONE layer, full size. The ask is a constant
- * 1080p for every viewer no matter how many people are watching, and a
- * lower copy would be exactly what gets served instead.
+ * Screen-share publishing: ONE 1080p layer in H.264.
  *
- * Simulcast is off on purpose. With three layers the browser fills the
- * small ones first, so whenever the sharer's uplink or CPU could not carry
- * all of them (~5.8 Mbps and three encodes) the 1080p layer was the one
- * that starved -- for everybody at once. One encode at ~4 Mbps is far
- * easier to sustain. The cost of the choice is deliberate: a viewer whose
- * own connection cannot take 1080p gets a stuttering share, never a
- * smaller one. Under pressure the encoder sheds frames, not pixels
- * (maintain-resolution), so text stays sharp and only motion suffers.
+ * One layer because the ask is a constant 1080p: with simulcast the browser
+ * fills the small layers first, so a sharer whose uplink or CPU could not
+ * carry all three starved the 1080p one for everybody at once.
  *
- * VP8 on purpose: every browser encodes and decodes it, and livekit-client
- * forces VP9/AV1 into an SVC mode that overrides the "detail" content hint.
+ * H.264 because of what it costs everyone else. The 1080p change went out
+ * in VP8, and a day later people reported 100% CPU and "Aw, Snap!" crashes:
+ * almost no PC decodes VP8 on its graphics chip, so every visible 1080p
+ * share was a software decode (~17 ms of CPU a frame, measured), multiplied
+ * by every screen on the wall. H.264 is decoded in hardware on nearly every
+ * PC and phone (~1 ms a frame), came out sharper for text at the same
+ * ceiling, and needs no SVC mode (livekit-client forces VP9/AV1 into one
+ * that overrides the "detail" content hint). Under pressure the encoder
+ * sheds frames, not pixels (maintain-resolution), so text stays sharp.
  */
 export function screenSharePublishOptions(): TrackPublishOptions {
   const p = SCREEN_SHARE_PROFILE;
   return {
-    videoCodec: "vp8",
+    videoCodec: "h264",
     simulcast: false,
     screenShareEncoding: {
       maxBitrate: p.sfuMaxBitrate,

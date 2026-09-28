@@ -96,7 +96,16 @@ export type SavedSenderParams = {
   degradationPreference?: string;
 };
 
-const isAv1 = (c?: CodecLike) => c?.mimeType.toLowerCase() === "video/av1";
+/** H.264 as every hardware codec takes it: packetization-mode 1, and the
+ *  constrained-baseline profile (42e01f) when it was offered. */
+function pickH264(codecs?: CodecLike[]): CodecLike | undefined {
+  const h264 = (codecs ?? []).filter(
+    (c) =>
+      c.mimeType.toLowerCase() === "video/h264" &&
+      /packetization-mode=1/.test(c.sdpFmtpLine ?? ""),
+  );
+  return h264.find((c) => /profile-level-id=42e01f/i.test(c.sdpFmtpLine ?? "")) ?? h264[0];
+}
 
 /** The codec the sender uses when none is pinned: the first negotiated media
  *  codec (rtx/red/fec are not codecs you can send with). Only meaningful
@@ -110,11 +119,15 @@ function negotiatedDefault(params: ParamsLike): CodecLike | undefined {
 /**
  * Point a video sender at screen content: bitrate ceiling, frame-rate cap,
  * full resolution, keep resolution under pressure, and — when both browsers
- * negotiated it — AV1, whose screen-content tools (palette mode, content
- * tuning) are markedly better for text than VP8/H.264. Switching codec this
- * way (encodings[].codec, Chrome 119+/Firefox 142+) needs no renegotiation
- * and can only pick what the peer already accepted, so it is safe with any
- * peer; browsers without it ignore the field.
+ * negotiated it — H.264. Screen shares used to prefer AV1 for its text
+ * tools, but AV1 is encoded on the processor everywhere and decoded there
+ * on most office PCs, while nearly every PC has had H.264 in its graphics
+ * chip for a decade. Measured 2026-09-29 at 1080p: VP8 took ~17 ms of CPU per frame
+ * to decode and managed 5 fps; H.264 took ~1 ms, held 13 fps and read
+ * sharper. After the CPU complaints from 2026-09-27 that decided it.
+ * Switching codec this way (encodings[].codec, Chrome 119+/Firefox 142+)
+ * needs no renegotiation and can only pick what the peer already accepted,
+ * so it is safe with any peer; browsers without it ignore the field.
  *
  * Call it right after getParameters() has encodings, i.e. once the sender has
  * been negotiated. Returns what it replaced (for restoreSenderParams), or
@@ -123,7 +136,7 @@ function negotiatedDefault(params: ParamsLike): CodecLike | undefined {
 export async function applyScreenShareParams(
   sender: RTCRtpSender,
   maxBitrate: number,
-  preferAv1 = true,
+  preferH264 = true,
 ): Promise<SavedSenderParams | null> {
   // No await between getParameters and setParameters (transactionId).
   const params = sender.getParameters() as unknown as ParamsLike;
@@ -135,7 +148,7 @@ export async function applyScreenShareParams(
     scaleResolutionDownBy: enc.scaleResolutionDownBy,
     // Recorded now, while the list is still in negotiated order: leaving
     // `codec` out later does NOT undo a pin in Chrome (measured — the camera
-    // stayed on AV1), so the restore has to name it.
+    // stayed on the screen's codec), so the restore has to name it.
     codec: enc.codec ?? negotiatedDefault(params),
     degradationPreference: params.degradationPreference,
   };
@@ -145,13 +158,13 @@ export async function applyScreenShareParams(
   // Chrome already does this for contentHint "detail"; Firefox ignores
   // contentHint, so say it explicitly.
   params.degradationPreference = "maintain-resolution";
-  const av1 = preferAv1 ? params.codecs?.find(isAv1) : undefined;
-  if (av1) enc.codec = av1;
+  const h264 = preferH264 ? pickH264(params.codecs) : undefined;
+  if (h264) enc.codec = h264;
   try {
     await sender.setParameters(params as unknown as RTCRtpSendParameters);
     return saved;
   } catch (err) {
-    if (av1) return applyScreenShareParams(sender, maxBitrate, false);
+    if (h264) return applyScreenShareParams(sender, maxBitrate, false);
     console.warn("[screen-share] could not apply sender parameters", err);
     return null;
   }
@@ -184,60 +197,6 @@ function setOrDelete<T extends object, K extends keyof T>(
 ) {
   if (value === undefined) delete obj[key];
   else obj[key] = value;
-}
-
-type Stat = {
-  type: string;
-  id: string;
-  kind?: string;
-  mimeType?: string;
-  codecId?: string;
-  qualityLimitationReason?: string;
-};
-
-/**
- * While a 1:1 share runs: if AV1 turns out to be too heavy for the sharer's
- * CPU (the encoder keeps reporting a CPU limit), drop back to `fallback` —
- * the default codec applyScreenShareParams recorded. Returns a stop function.
- */
-export function watchScreenShareEncoder(
-  sender: RTCRtpSender,
-  fallback: SavedSenderParams["codec"],
-): () => void {
-  let cpuStrikes = 0;
-  let done = false;
-  const timer = setInterval(async () => {
-    if (done) return;
-    const report = await sender.getStats().catch(() => null);
-    if (!report || done) return;
-    const found: { out?: Stat } = {};
-    const mimeById = new Map<string, string>();
-    report.forEach((s: Stat) => {
-      if (s.type === "outbound-rtp" && s.kind === "video") found.out = s;
-      if (s.type === "codec" && s.mimeType) mimeById.set(s.id, s.mimeType);
-    });
-    const out = found.out;
-    if (!out) return;
-    const mime = (out.codecId && mimeById.get(out.codecId)) || "";
-    cpuStrikes = out.qualityLimitationReason === "cpu" ? cpuStrikes + 1 : 0;
-    if (cpuStrikes < 3 || !/av1/i.test(mime)) return;
-    done = true;
-    clearInterval(timer);
-    const params = sender.getParameters() as unknown as ParamsLike;
-    const enc = params.encodings?.[0];
-    if (!enc || !fallback || isAv1(fallback)) return;
-    enc.codec = fallback; // (deleting `codec` would not switch it back)
-    await sender
-      .setParameters(params as unknown as RTCRtpSendParameters)
-      .then(() =>
-        console.info("[screen-share] AV1 was CPU-limited; using the default codec"),
-      )
-      .catch(() => undefined);
-  }, 4000);
-  return () => {
-    done = true;
-    clearInterval(timer);
-  };
 }
 
 // ── Group calls: which video layer to ask the SFU for ──────────────────
@@ -282,18 +241,21 @@ export function planGroupVideo(
     } else if (hidden.has(peer.id)) {
       shown = "off"; // scrolled out of view
     } else if (view.layout === "focus") {
-      shown = "low"; // filmstrip thumbnail
+      // Filmstrip thumbnail. A screen there is a 1080p decode for a picture
+      // 112 px wide, so it is paused and the tile says who is sharing.
+      shown = peer.sharing ? "off" : "low";
     } else if (view.layout === "screens") {
       shown = peer.sharing ? "high" : "off"; // cameras aren't on the wall
     } else {
       // Grid tile: cameras follow the tile count.
       shown = size;
     }
-    // A shared screen is always requested at full size wherever it is
-    // visible — stage, grid, wall, filmstrip or minimized tile — however
-    // many people are in the call. Screens are published as a single 1080p
-    // layer (see screenSharePublishOptions), so there is nothing smaller to
-    // fall back to anyway; only a screen out of view is paused.
+    // A shared screen that plays is always requested at full size — stage,
+    // grid, wall or minimized tile — however many people are in the call.
+    // Screens are published as a single 1080p layer (see
+    // screenSharePublishOptions), so there is nothing smaller to fall back
+    // to. Screens beyond what this device can decode at once arrive in
+    // `hidden` (see shareDecodeBudget) and are paused like off-screen tiles.
     if (peer.sharing && shown !== "off") shown = "high";
     plan.set(
       peer.id,
@@ -303,4 +265,33 @@ export function planGroupVideo(
     );
   }
   return plan;
+}
+
+/**
+ * How many 1080p shares this device plays at once before the rest wait for
+ * a click. Where H.264 is decoded by the graphics chip a decode is ~1 ms a
+ * frame, so six is nothing; in software it is the processor's job, and a
+ * wall of them is what pinned CPUs at 100% and crashed tabs ("Aw, Snap!").
+ * Resolved once per page; unknown counts as software.
+ */
+let budget: Promise<number> | null = null;
+export function shareDecodeBudget(): Promise<number> {
+  budget ??= (async () => {
+    try {
+      const info = await navigator.mediaCapabilities.decodingInfo({
+        type: "webrtc",
+        video: {
+          contentType: "video/H264",
+          width: SCREEN_SHARE_PROFILE.maxWidth,
+          height: SCREEN_SHARE_PROFILE.maxHeight,
+          bitrate: SCREEN_SHARE_PROFILE.sfuMaxBitrate,
+          framerate: SCREEN_SHARE_PROFILE.maxFramerate,
+        },
+      });
+      return info.supported && info.powerEfficient ? 6 : 2;
+    } catch {
+      return 2;
+    }
+  })();
+  return budget;
 }

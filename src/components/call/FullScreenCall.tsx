@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Avatar } from "@/components/Avatar";
 import { useCall } from "@/components/call/CallProvider";
 import { CallGrid } from "@/components/call/CallGrid";
@@ -16,7 +16,10 @@ import {
   NoiseIcon,
   ScreenShareIcon,
 } from "@/components/icons";
-import { Users } from "lucide-react";
+import { Maximize, Minimize, Users } from "lucide-react";
+
+/** Theater mode: how long the pointer may rest before the bars fade. */
+const IDLE_MS = 2500;
 
 export function FullScreenCall() {
   const [showPeople, setShowPeople] = useState(false);
@@ -44,6 +47,66 @@ export function FullScreenCall() {
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const duration = useDuration(connectedAt);
+
+  // ── Theater mode ──────────────────────────────────────────────────
+  // While a shared screen is on the stage it gets the whole window: the
+  // header and the controls float over it and fade out when the pointer
+  // rests, coming back on any movement, tap or key — the way a video
+  // player behaves. Never while the pointer is on the bars themselves.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [groupStage, setGroupStage] = useState(false);
+  const theater = isGroup
+    ? groupStage
+    : Boolean(call && !call.video && remoteHasVideo); // 1:1: their screen
+  const [idle, setIdle] = useState(false);
+  const overBars = useRef(false);
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wake = useCallback(() => {
+    setIdle(false);
+    if (idleTimer.current) clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(() => {
+      if (!overBars.current) setIdle(true);
+    }, IDLE_MS);
+  }, []);
+  useEffect(() => {
+    if (theater) wake();
+    else setIdle(false);
+    return () => {
+      if (idleTimer.current) clearTimeout(idleTimer.current);
+    };
+  }, [theater, wake]);
+  const chrome = !theater || !idle || showPeople;
+  const barEvents = theater
+    ? {
+        onPointerEnter: () => {
+          overBars.current = true;
+        },
+        onPointerLeave: () => {
+          overBars.current = false;
+          wake();
+        },
+      }
+    : {};
+  const barFade = theater
+    ? `absolute inset-x-0 z-20 transition-opacity duration-300 ${
+        chrome ? "opacity-100" : "pointer-events-none opacity-0"
+      }`
+    : "";
+
+  // Browser full screen: the call window without tabs or the address bar.
+  const [fullscreen, setFullscreen] = useState(false);
+  const canFullscreen =
+    typeof document !== "undefined" && Boolean(document.fullscreenEnabled);
+  useEffect(() => {
+    const sync = () =>
+      setFullscreen(document.fullscreenElement === rootRef.current);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void rootRef.current?.requestFullscreen().catch(() => undefined);
+  };
 
   // remoteHasVideo now comes from the provider, which recomputes it from
   // the remote track's live/mute events (FIX C) so the frame doesn't freeze
@@ -94,13 +157,26 @@ export function FullScreenCall() {
           : "Voice";
 
   return (
-    <div className="fixed inset-0 z-[115] flex flex-col bg-ink text-white">
+    <div
+      ref={rootRef}
+      className={`fixed inset-0 z-[115] flex flex-col bg-ink text-white ${
+        chrome ? "" : "cursor-none"
+      }`}
+      onPointerMove={theater ? wake : undefined}
+      onPointerDown={theater ? wake : undefined}
+      onKeyDown={theater ? wake : undefined}
+    >
       {showPeople && call.group && (
         <CallParticipants onClose={() => setShowPeople(false)} />
       )}
       {/* The page draws under the notch (viewport-fit=cover), so the
           minimize button needs the inset or it sits under the status bar. */}
-      <div className="flex items-center gap-3 px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
+      <div
+        className={`flex items-center gap-3 px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] ${
+          theater ? `top-0 bg-gradient-to-b from-black/70 to-transparent ${barFade}` : ""
+        }`}
+        {...barEvents}
+      >
         <button
           type="button"
           onClick={() => setView("mini")}
@@ -110,17 +186,32 @@ export function FullScreenCall() {
         >
           <MinimizeIcon />
         </button>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-lg font-semibold">{call.peerName}</p>
           <p className="text-xs text-white/50 tabular-nums">
             {modeLabel} · {subtitle}
           </p>
         </div>
+        {canFullscreen && (
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/10 hover:bg-white/20"
+            aria-label={fullscreen ? "Exit full screen" : "Full screen"}
+            title={fullscreen ? "Exit full screen" : "Full screen"}
+          >
+            {fullscreen ? (
+              <Minimize className="size-[18px]" />
+            ) : (
+              <Maximize className="size-[18px]" />
+            )}
+          </button>
+        )}
       </div>
 
       <div className="relative flex-1 min-h-0 bg-ink-soft">
         {isGroup ? (
-          <CallGrid />
+          <CallGrid chrome={chrome} onStageChange={setGroupStage} />
         ) : showVideo ? (
           <>
             {/* Muted on purpose: the provider's persistent <audio> element
@@ -183,7 +274,12 @@ export function FullScreenCall() {
         )}
       </div>
 
-      <div className="flex items-center justify-center gap-4 px-4 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+      <div
+        className={`flex items-center justify-center gap-4 px-4 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] ${
+          theater ? `bottom-0 bg-gradient-to-t from-black/70 to-transparent ${barFade}` : ""
+        }`}
+        {...barEvents}
+      >
         <CallControlButton
           onClick={toggleMic}
           active={muted}
