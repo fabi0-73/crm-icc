@@ -1,5 +1,5 @@
 /**
- * A minimal .xlsx writer: one sheet, a bold header row, text, numbers and
+ * A minimal .xlsx writer: one or more sheets, each with a bold header row, text, numbers and
  * dates. An .xlsx file is a zip of a few XML parts; this writes them
  * uncompressed ("stored"), which every spreadsheet program accepts, so it
  * needs no library at all. Excel, LibreOffice, Numbers and Google Sheets
@@ -83,8 +83,15 @@ const STYLES =
   `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
   `</styleSheet>`;
 
-export function buildXlsx(sheet: Sheet): Uint8Array {
-  const name = esc(sheet.name.replace(/[\\/?*[\]:]/g, " ").slice(0, 31) || "Sheet1");
+/** One or more sheets, in tab order. */
+export function buildXlsx(input: Sheet | Sheet[]): Uint8Array {
+  const sheets = Array.isArray(input) ? input : [input];
+  const names = sheets.map((sh, i) =>
+    esc(sh.name.replace(/[\\/?*[\]:]/g, " ").slice(0, 31) || `Sheet${i + 1}`),
+  );
+  const n = sheets.length;
+  const each = (fn: (i: number) => string) =>
+    Array.from({ length: n }, (_, i) => fn(i)).join("");
   const files: [string, string][] = [
     [
       "[Content_Types].xml",
@@ -93,7 +100,10 @@ export function buildXlsx(sheet: Sheet): Uint8Array {
         `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
         `<Default Extension="xml" ContentType="application/xml"/>` +
         `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
-        `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+        each(
+          (i) =>
+            `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
+        ) +
         `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` +
         `</Types>`,
     ],
@@ -108,19 +118,27 @@ export function buildXlsx(sheet: Sheet): Uint8Array {
       "xl/workbook.xml",
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
         `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
-        `<sheets><sheet name="${name}" sheetId="1" r:id="rId1"/></sheets>` +
-        `<definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'${name.replace(/'/g, "''")}'!$A$1:$${colName(sheet.columns.length - 1)}$${sheet.rows.length + 1}</definedName></definedNames>` +
+        `<sheets>${each((i) => `<sheet name="${names[i]}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`)}</sheets>` +
+        `<definedNames>${each(
+          (i) =>
+            `<definedName name="_xlnm._FilterDatabase" localSheetId="${i}" hidden="1">'${names[i].replace(/'/g, "''")}'!$A$1:$${colName(sheets[i].columns.length - 1)}$${sheets[i].rows.length + 1}</definedName>`,
+        )}</definedNames>` +
         `</workbook>`,
     ],
     [
       "xl/_rels/workbook.xml.rels",
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
         `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-        `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>` +
-        `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
+        each(
+          (i) =>
+            `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`,
+        ) +
+        `<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
         `</Relationships>`,
     ],
-    ["xl/worksheets/sheet1.xml", sheetXml(sheet)],
+    ...sheets.map(
+      (sh, i) => [`xl/worksheets/sheet${i + 1}.xml`, sheetXml(sh)] as [string, string],
+    ),
     ["xl/styles.xml", STYLES],
   ];
   return zipStored(files.map(([path, text]) => [path, new TextEncoder().encode(text)]));

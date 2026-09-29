@@ -12,23 +12,32 @@ type Row = {
   from_day: string;
   to_day: string;
 };
-type Period = "today" | "week" | "month" | "all";
+type Period = "today" | "week" | "month" | "all" | "range";
 
 const LABELS: Record<Period, string> = {
   today: "Shift",
   week: "Week",
   month: "Month",
   all: "All",
+  range: "Dates",
 };
+
+/** Today's date on this device, YYYY-MM-DD — only a starting value for
+ *  the date pickers; the person chooses the days themselves. */
+function localToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
 /**
  * Appointments per person over a shift, week or month.
  *
  * Two things here are deliberate and easy to get wrong:
  *
- * The period is named, not dated — the server works out the range in
+ * The presets are named, not dated — the server works out the range in
  * Tirane time, so a phone set to the wrong timezone cannot move anybody's
- * numbers. A "day" turns over at NOON, because the shift runs 15:00 to
+ * numbers. "Dates" takes explicit shift days (from, to) instead. A "day" turns over at NOON, because the shift runs 15:00 to
  * 06:00 and a calendar day would cut every one of them in half.
  *
  * Appointments are counted, not messages. Most of what is posted in that
@@ -50,26 +59,41 @@ export function PostCounts({
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [from, setFrom] = useState(localToday);
+  const [to, setTo] = useState(localToday);
+  const rangeOk = period !== "range" || (Boolean(from) && Boolean(to) && from <= to);
 
   const load = useCallback(async () => {
+    if (period === "range" && !(from && to && from <= to)) return;
     setLoading(true);
     setError(false);
-    const { data, error: rpcError } = await supabase.rpc("room_post_counts", {
-      p_room: roomId,
-      p_period: period,
-    });
+    const { data, error: rpcError } =
+      period === "range"
+        ? await supabase.rpc("room_post_counts_range", {
+            p_room: roomId,
+            p_from: from,
+            p_to: to,
+          })
+        : await supabase.rpc("room_post_counts", {
+            p_room: roomId,
+            p_period: period,
+          });
     setLoading(false);
     if (rpcError) {
       setError(true);
       return;
     }
     setRows((data ?? []) as Row[]);
-  }, [supabase, roomId, period]);
+  }, [supabase, roomId, period, from, to]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  const exportQuery =
+    period === "range"
+      ? `room=${roomId}&from=${from}&to=${to}`
+      : `room=${roomId}&period=${period}`;
   const totalAppts = (rows ?? []).reduce(
     (n, r) => n + Number(r.appointments),
     0,
@@ -117,6 +141,31 @@ export function PostCounts({
         ))}
       </div>
 
+      {period === "range" && (
+        <div className="flex shrink-0 items-end gap-2 px-3 pt-2.5">
+          <label className="min-w-0 flex-1 text-[11px] font-medium text-muted">
+            From
+            <input
+              type="date"
+              value={from}
+              max={to || undefined}
+              onChange={(e) => setFrom(e.target.value)}
+              className="mt-1 block w-full rounded-lg border border-line-strong bg-paper px-2 py-1.5 text-[13px] text-ink"
+            />
+          </label>
+          <label className="min-w-0 flex-1 text-[11px] font-medium text-muted">
+            To
+            <input
+              type="date"
+              value={to}
+              min={from || undefined}
+              onChange={(e) => setTo(e.target.value)}
+              className="mt-1 block w-full rounded-lg border border-line-strong bg-paper px-2 py-1.5 text-[13px] text-ink"
+            />
+          </label>
+        </div>
+      )}
+
       <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2.5">
         <div className="min-w-0">
           <p className="text-[13px] font-semibold text-ink">
@@ -152,10 +201,13 @@ export function PostCounts({
             // A plain link: the route answers with the file itself, named
             // for the period, and runs as whoever clicks it.
             <a
-              href={`/api/appointments/export?room=${roomId}&period=${period}`}
+              href={`/api/appointments/export?${exportQuery}`}
               download
               title="Appointments entered with the form, as an Excel file"
-              className="flex items-center gap-1.5 rounded-full bg-brand-600 px-2.5 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-700"
+              aria-disabled={!rangeOk}
+              className={`flex items-center gap-1.5 rounded-full bg-brand-600 px-2.5 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-700 ${
+                rangeOk ? "" : "pointer-events-none opacity-40"
+              }`}
             >
               <FileSpreadsheet className="size-3.5" />
               Excel
@@ -163,10 +215,13 @@ export function PostCounts({
           )}
           {excel && (
             <a
-              href={`/api/appointments/export?room=${roomId}&period=${period}&format=csv`}
+              href={`/api/appointments/export?${exportQuery}&format=csv`}
               download
               title="The same appointments as a CSV file"
-              className="flex items-center rounded-full bg-mist px-2.5 py-1.5 text-[12px] font-semibold text-ink hover:bg-line"
+              aria-disabled={!rangeOk}
+              className={`flex items-center rounded-full bg-mist px-2.5 py-1.5 text-[12px] font-semibold text-ink hover:bg-line ${
+                rangeOk ? "" : "pointer-events-none opacity-40"
+              }`}
             >
               CSV
             </a>

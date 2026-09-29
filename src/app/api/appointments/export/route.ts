@@ -2,9 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import { buildXlsx, type Cell } from "@/lib/xlsx";
 
 /**
- * The appointments of a group as an Excel file (or CSV, `format=csv`), for a named period (the
- * same Shift / Week / Month / All as the counts tab, worked out on the
- * server in Tirane time).
+ * The appointments of a group as an Excel file (or CSV, `format=csv`), for
+ * a named period (the same Shift / Week / Month / All as the counts tab,
+ * worked out on the server in Tirane time) or for chosen shift days (`from`
+ * and `to`, YYYY-MM-DD). The Excel file has a second sheet with each
+ * dialer's total over the same days.
  *
  * Runs as the signed-in person: appointments_export returns only their own
  * appointments, or everyone's for an admin or manager, so this route adds
@@ -43,7 +45,11 @@ export async function GET(request: Request) {
   const room = url.searchParams.get("room") ?? "";
   const period = url.searchParams.get("period") ?? "today";
   const csv = url.searchParams.get("format") === "csv";
-  if (!/^[0-9a-f-]{36}$/i.test(room) || !PERIODS.has(period)) {
+  const from = url.searchParams.get("from");
+  const to = url.searchParams.get("to");
+  const isDay = (d: string | null) => d !== null && /^\d{4}-\d{2}-\d{2}$/.test(d);
+  const ranged = isDay(from) && isDay(to);
+  if (!/^[0-9a-f-]{36}$/i.test(room) || (!ranged && !PERIODS.has(period))) {
     return new Response("Bad request", { status: 400 });
   }
 
@@ -53,10 +59,16 @@ export async function GET(request: Request) {
   } = await supabase.auth.getUser();
   if (!user) return new Response("Sign in first", { status: 401 });
 
-  const { data, error } = await supabase.rpc("appointments_export", {
-    p_room: room,
-    p_period: period,
-  });
+  const { data, error } = ranged
+    ? await supabase.rpc("appointments_export_range", {
+        p_room: room,
+        p_from: from,
+        p_to: to,
+      })
+    : await supabase.rpc("appointments_export", {
+        p_room: room,
+        p_period: period,
+      });
   if (error) return new Response("Could not load appointments", { status: 500 });
   const rows = (data ?? []) as Row[];
 
@@ -83,7 +95,11 @@ export async function GET(request: Request) {
   ]);
 
   const first = rows[0];
-  const span = !first
+  const span = ranged
+    ? from === to
+      ? from
+      : `${from} to ${to}`
+    : !first
     ? period
     : period === "all"
       ? `all to ${first.to_day}`
@@ -101,7 +117,28 @@ export async function GET(request: Request) {
     });
   }
 
-  const file = buildXlsx({ name: "Takimet", columns, rows: cells });
+  // Per dialer, most first: what each person booked over the same days.
+  const perDialer = new Map<string, number>();
+  for (const r of rows) {
+    perDialer.set(r.dialer_name, (perDialer.get(r.dialer_name) ?? 0) + 1);
+  }
+  const summary = [...perDialer.entries()].sort(
+    (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+  );
+  const file = buildXlsx([
+    { name: "Takimet", columns, rows: cells },
+    {
+      name: "Sipas dialerit",
+      columns: [
+        { header: "Emri i dialerit", width: 24 },
+        { header: "Takime", width: 10 },
+      ],
+      rows: [
+        ...summary.map(([dialer, n]): Cell[] => [dialer, n]),
+        ["Totali", rows.length],
+      ],
+    },
+  ]);
   const name = `Takimet ${span}.xlsx`;
   return new Response(file as BodyInit, {
     headers: {

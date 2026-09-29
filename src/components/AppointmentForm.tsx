@@ -44,7 +44,6 @@ export function AppointmentForm({
   onClose: () => void;
 }) {
   const supabase = useMemo(() => createClient(), []);
-  const [dialer, setDialer] = useState(dialerName);
   const [agent, setAgent] = useState("");
   const [policy, setPolicy] = useState("");
   const [client, setClient] = useState("");
@@ -71,7 +70,7 @@ export function AppointmentForm({
     setError(null);
     const { error: rpcError } = await supabase.rpc("create_appointment", {
       p_room: roomId,
-      p_dialer: dialer,
+      p_dialer: dialerName,
       p_agent: agent,
       p_policy: policy,
       p_client: client,
@@ -123,7 +122,9 @@ export function AppointmentForm({
         <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
           <div>
             <Label htmlFor="appt-dialer">Dialer</Label>
-            <Input id="appt-dialer" value={dialer} onChange={(e) => setDialer(e.target.value)} required maxLength={200} />
+            {/* Always the person posting (create_appointment sets it), so
+                one person can't appear under two spellings. */}
+            <Input id="appt-dialer" value={dialerName} readOnly disabled />
           </div>
           <div>
             <Label htmlFor="appt-agent">Agent</Label>

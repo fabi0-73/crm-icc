@@ -449,7 +449,11 @@ export function CallProvider({
   const showNotice = useCallback((text: string) => {
     setNotice(text);
     if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
-    noticeTimerRef.current = setTimeout(() => setNotice(null), 4000);
+    // Long enough to read: a sentence-long reason stays up longer.
+    noticeTimerRef.current = setTimeout(
+      () => setNotice(null),
+      Math.max(4000, text.length * 70),
+    );
   }, []);
 
   const clearTimers = useCallback(() => {

@@ -35,6 +35,25 @@ async function callBelongsToRoom(callId: string, roomId: string): Promise<boolea
   }
 }
 
+/** A human reason if LiveKit would refuse this token right now, else null. */
+async function liveKitRefusal(url: string, token: string): Promise<string | null> {
+  try {
+    const httpUrl = url.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+    const res = await fetch(`${httpUrl}/rtc/validate?access_token=${token}`, {
+      signal: AbortSignal.timeout(4000),
+      cache: "no-store",
+    });
+    if (res.status !== 429) return null;
+    const text = (await res.text()).toLowerCase();
+    console.warn("[call] LiveKit refused a join:", text.slice(0, 200));
+    return text.includes("bandwidth") || text.includes("usage")
+      ? "Group calls are paused: the call service's monthly data allowance is used up. An admin needs to upgrade the LiveKit plan."
+      : "The call service is refusing new calls right now. Try again in a few minutes.";
+  } catch {
+    return null;
+  }
+}
+
 export type CallTokenResult = { token?: string; url?: string; error?: string };
 
 /**
@@ -91,7 +110,17 @@ export async function createCallToken(
       canPublishData: true,
     });
 
-    return { token: await at.toJwt(), url };
+    const token = await at.toJwt();
+
+    // Ask LiveKit whether it will take this connection before the browser
+    // tries. When the project is over its plan (it answers 429 "bandwidth
+    // usage exceeded"), the browser only ever sees a bare websocket error,
+    // and a group call that cannot connect never rings anyone. Only a clear
+    // refusal blocks; if the check itself fails, the join goes ahead.
+    const refusal = await liveKitRefusal(url, token);
+    if (refusal) return { error: refusal };
+
+    return { token, url };
   } catch {
     return { error: "Could not join the call." };
   }
