@@ -161,6 +161,16 @@ export function PostCounts({
               Excel
             </a>
           )}
+          {excel && (
+            <a
+              href={`/api/appointments/export?room=${roomId}&period=${period}&format=csv`}
+              download
+              title="The same appointments as a CSV file"
+              className="flex items-center rounded-full bg-mist px-2.5 py-1.5 text-[12px] font-semibold text-ink hover:bg-line"
+            >
+              CSV
+            </a>
+          )}
         </div>
       </div>
 

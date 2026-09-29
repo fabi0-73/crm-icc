@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { buildXlsx, type Cell } from "@/lib/xlsx";
 
 /**
- * The appointments of a group as an Excel file, for a named period (the
+ * The appointments of a group as an Excel file (or CSV, `format=csv`), for a named period (the
  * same Shift / Week / Month / All as the counts tab, worked out on the
  * server in Tirane time).
  *
@@ -42,6 +42,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const room = url.searchParams.get("room") ?? "";
   const period = url.searchParams.get("period") ?? "today";
+  const csv = url.searchParams.get("format") === "csv";
   if (!/^[0-9a-f-]{36}$/i.test(room) || !PERIODS.has(period)) {
     return new Response("Bad request", { status: 400 });
   }
@@ -60,29 +61,26 @@ export async function GET(request: Request) {
   const rows = (data ?? []) as Row[];
 
   // The columns the team asked for, in their order and their words.
-  const file = buildXlsx({
-    name: "Takimet",
-    columns: [
-      { header: "Data sotme", width: 12 },
-      { header: "Emri i dialerit", width: 20 },
-      { header: "Agjenti", width: 20 },
-      { header: "Policy #", width: 16 },
-      { header: "Emri klientit", width: 24 },
-      { header: "Phone number", width: 17 },
-      { header: "Data e takimit", width: 14 },
-      { header: "Ora e takimit", width: 14 },
-    ],
-    rows: rows.map((r) => [
-      day(r.shift_day),
-      r.dialer_name,
-      r.agent_name,
-      r.policy_number,
-      r.client_name,
-      r.phone,
-      day(r.appt_date),
-      clock(r.appt_time, r.appt_tz),
-    ]),
-  });
+  const columns = [
+    { header: "Data sotme", width: 12 },
+    { header: "Emri i dialerit", width: 20 },
+    { header: "Agjenti", width: 20 },
+    { header: "Policy #", width: 16 },
+    { header: "Emri klientit", width: 24 },
+    { header: "Phone number", width: 17 },
+    { header: "Data e takimit", width: 14 },
+    { header: "Ora e takimit", width: 14 },
+  ];
+  const cells: Cell[][] = rows.map((r) => [
+    day(r.shift_day),
+    r.dialer_name,
+    r.agent_name,
+    r.policy_number,
+    r.client_name,
+    r.phone,
+    day(r.appt_date),
+    clock(r.appt_time, r.appt_tz),
+  ]);
 
   const first = rows[0];
   const span = !first
@@ -92,6 +90,18 @@ export async function GET(request: Request) {
       : first.from_day === first.to_day
         ? first.to_day
         : `${first.from_day} to ${first.to_day}`;
+  if (csv) {
+    const name = `Takimet ${span}.csv`;
+    return new Response(toCsv(columns.map((c) => c.header), cells), {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
+  const file = buildXlsx({ name: "Takimet", columns, rows: cells });
   const name = `Takimet ${span}.xlsx`;
   return new Response(file as BodyInit, {
     headers: {
@@ -101,4 +111,28 @@ export async function GET(request: Request) {
       "Cache-Control": "no-store",
     },
   });
+}
+
+/**
+ * The same sheet as CSV. A byte-order mark so Excel reads the letters
+ * (ë, ç) as UTF-8, CRLF line ends, dates as dd/mm/yyyy like the Excel file,
+ * and every value quoted, so a phone number keeps its formatting and a
+ * comma in a name cannot shift the columns.
+ */
+function toCsv(headers: string[], rows: Cell[][]): string {
+  const text = (v: Cell) => {
+    if (v === null) return "";
+    if (v instanceof Date) {
+      const dd = String(v.getUTCDate()).padStart(2, "0");
+      const mm = String(v.getUTCMonth() + 1).padStart(2, "0");
+      return `${dd}/${mm}/${v.getUTCFullYear()}`;
+    }
+    return String(v);
+  };
+  const quote = (v: Cell) => `"${text(v).replace(/"/g, '""')}"`;
+  return (
+    "\uFEFF" +
+    [headers, ...rows].map((r) => r.map(quote).join(",")).join("\r\n") +
+    "\r\n"
+  );
 }
