@@ -379,19 +379,28 @@ export async function connectCallRoom(opts: {
   };
 
   // ── Recording notices ─────────────────────────────────────────────
-  // A reliable data message on its own topic; resent to each newcomer, so
-  // someone who joins mid-recording is told too. Kept as a map of identity →
+  // Recording is known to admins and managers only. The notice is a
+  // reliable data message addressed to their identities alone — never
+  // broadcast — so nobody else's browser receives it at all. Resent to each
+  // admin or manager who joins mid-recording. Kept as a map of identity →
   // name so a recorder who leaves drops off the list.
   const RECORDING_TOPIC = "recording";
   let recordingOn = false;
   const recorders = new Map<string, string>();
-  const sendRecording = (to?: string[]) => {
+  const sendRecording = (only?: string[]) => {
+    const to = only ?? [];
+    if (!only) {
+      room.remoteParticipants.forEach((p) => {
+        if (isSupervisor(p)) to.push(p.identity);
+      });
+    }
+    if (to.length === 0) return;
     const payload = new TextEncoder().encode(JSON.stringify({ on: recordingOn }));
     void room.localParticipant
       .publishData(payload, {
         reliable: true,
         topic: RECORDING_TOPIC,
-        ...(to ? { destinationIdentities: to } : {}),
+        destinationIdentities: to,
       })
       .catch(() => undefined);
   };
@@ -410,7 +419,7 @@ export async function connectCallRoom(opts: {
   room
     .on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
       if (screenRestricted) applyScreenPrivacy(true);
-      if (recordingOn) sendRecording([p.identity]);
+      if (recordingOn && isSupervisor(p)) sendRecording([p.identity]);
       emit();
     })
     .on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
@@ -418,7 +427,8 @@ export async function connectCallRoom(opts: {
       emit();
     })
     .on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
-      if (topic !== RECORDING_TOPIC || !participant) return;
+      // Only an admin or manager may raise the badge.
+      if (topic !== RECORDING_TOPIC || !participant || !isSupervisor(participant)) return;
       try {
         const { on } = JSON.parse(new TextDecoder().decode(payload)) as { on?: boolean };
         if (on) recorders.set(participant.identity, participant.name || "Someone");

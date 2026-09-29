@@ -339,7 +339,14 @@ export function CallProvider({
   const [recorders, setRecorders] = useState<string[]>([]);
   const recordingRef = useRef<CallRecording | null>(null);
   const [canRecord, setCanRecord] = useState(false);
-  useEffect(() => setCanRecord(recordingSupported()), []);
+  // Recording is a supervisor tool: nobody else is offered it.
+  useEffect(
+    () =>
+      setCanRecord(
+        (userRole === "admin" || userRole === "manager") && recordingSupported(),
+      ),
+    [userRole],
+  );
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -2186,9 +2193,10 @@ export function CallProvider({
   }, [refreshLocalPreview, send, showNotice, stopScreenShare]);
 
   /**
-   * Record the call to a file on this computer (see recorder.ts). Everyone
-   * is told: a notice in the conversation, and in a group call a live
-   * "Recording" badge on every participant's screen.
+   * Record the call to a file on this computer (see recorder.ts). Admins
+   * and managers only, and only they are told: no notice in the
+   * conversation, and the in-call "Recording" badge goes to the other
+   * admins and managers in the call alone (see livekit-room setRecording).
    */
   const toggleRecording = useCallback(async () => {
     if (recordingRef.current) {
@@ -2196,7 +2204,7 @@ export function CallProvider({
       return;
     }
     const current = call;
-    if (!current) return;
+    if (!current || !canRecord) return;
     const micTrack = groupRef.current
       ? (lkRef.current?.micTrack() ?? null)
       : (localStreamRef.current?.getAudioTracks()[0] ?? null);
@@ -2213,21 +2221,12 @@ export function CallProvider({
       recordingRef.current = rec;
       setRecording(true);
       lkRef.current?.setRecording(true);
-      if (current.roomId) {
-        void supabase.from("messages").insert({
-          room_id: current.roomId,
-          sender_id: userId,
-          kind: "text",
-          body: "🔴 Started recording this call",
-          metadata: { event: "call_recording" },
-        });
-      }
     } catch (err) {
       // Dismissing the tab picker is not an error worth showing.
       if (err instanceof DOMException && err.name === "NotAllowedError") return;
       showNotice(err instanceof Error ? err.message : "Could not start recording");
     }
-  }, [call, showNotice, supabase, userId]);
+  }, [call, canRecord, showNotice]);
 
   // GROUP CALLS: screen share is one call on the LiveKit participant — the SFU
   // republishes it to everyone, so there is no per-peer renegotiation to do.
