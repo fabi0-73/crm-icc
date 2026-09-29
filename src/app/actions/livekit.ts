@@ -76,6 +76,10 @@ export async function createCallToken(
     const at = new AccessToken(apiKey, apiSecret, {
       identity: user.id,
       name: publicDisplayName(profile),
+      // Read by the other participants to decide who may watch a screen
+      // (see applyScreenPrivacy). Set here, never by the browser: the token
+      // does not grant canUpdateOwnMetadata, so nobody can promote themselves.
+      attributes: { role: profile.role },
       // Comfortably longer than any call, short enough to not linger.
       ttl: "4h",
     });

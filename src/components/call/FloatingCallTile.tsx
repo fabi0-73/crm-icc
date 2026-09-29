@@ -35,6 +35,8 @@ export function FloatingCallTile() {
     toggleMic,
     toggleCam,
     toggleScreenShare,
+    recording,
+    recorders,
     setView,
   } = useCall();
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -103,6 +105,15 @@ export function FloatingCallTile() {
         aria-label="Expand call to full screen"
         title="Expand"
       >
+        {(recording || recorders.length > 0) && (
+          <span
+            className="absolute left-2 top-2 z-10 flex items-center gap-1 rounded-full bg-red-500/90 px-2 py-0.5 text-[10px] font-semibold text-white"
+            title="This call is being recorded"
+          >
+            <span className="size-1.5 rounded-full bg-white" />
+            REC
+          </span>
+        )}
         {isGroup ? (
           <>
             {/* Muted: audio plays through the provider's per-peer sinks. */}

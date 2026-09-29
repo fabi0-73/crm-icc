@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, Copy, RefreshCw } from "lucide-react";
+import { Check, Copy, FileSpreadsheet, RefreshCw } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 type Row = {
@@ -36,7 +36,14 @@ const LABELS: Record<Period, string> = {
  * roughly threefold. The server decides what looks like a record — see
  * private.looks_like_appointment.
  */
-export function PostCounts({ roomId }: { roomId: string }) {
+export function PostCounts({
+  roomId,
+  excel = false,
+}: {
+  roomId: string;
+  /** Offer the form-entered appointments as an Excel file (0023). */
+  excel?: boolean;
+}) {
   const supabase = useMemo(() => createClient(), []);
   const [period, setPeriod] = useState<Period>("today");
   const [rows, setRows] = useState<Row[] | null>(null);
@@ -141,6 +148,19 @@ export function PostCounts({ roomId }: { roomId: string }) {
             {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
             {copied ? "Copied" : "Copy"}
           </button>
+          {excel && (
+            // A plain link: the route answers with the file itself, named
+            // for the period, and runs as whoever clicks it.
+            <a
+              href={`/api/appointments/export?room=${roomId}&period=${period}`}
+              download
+              title="Appointments entered with the form, as an Excel file"
+              className="flex items-center gap-1.5 rounded-full bg-brand-600 px-2.5 py-1.5 text-[12px] font-semibold text-white hover:bg-brand-700"
+            >
+              <FileSpreadsheet className="size-3.5" />
+              Excel
+            </a>
+          )}
         </div>
       </div>
 

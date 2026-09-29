@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import {
   Bold,
+  CalendarPlus,
   ChevronDown,
   ChevronLeft,
   CircleUserRound,
@@ -70,6 +71,7 @@ import {
 import { GroupDetails } from "@/components/GroupDetails";
 import { MediaHistory } from "@/components/MediaHistory";
 import { PostCounts } from "@/components/PostCounts";
+import { AppointmentForm } from "@/components/AppointmentForm";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import {
   messageAttachments,
@@ -180,6 +182,7 @@ export function ChatRoom({
   leading = "back",
   readOnly = false,
   ownMessagesOnly = false,
+  appointmentForm = false,
 }: {
   roomId: string;
   roomName: string;
@@ -210,6 +213,9 @@ export function ChatRoom({
    * here it only removes what would be misleading or pointlessly revealing.
    */
   ownMessagesOnly?: boolean;
+  /** rooms.appointment_form: the composer offers "New appointment", whose
+   *  entries feed the Excel export (migration 0023). */
+  appointmentForm?: boolean;
 }) {
   const supabase = useMemo(() => createClient(), []);
   const { phase: callPhase } = useCall();
@@ -398,6 +404,7 @@ export function ChatRoom({
     };
   }, [supabase, roomId, roomType]);
 
+  const [apptOpen, setApptOpen] = useState(false);
   const memberMap = useMemo(() => {
     const m = new Map<string, string>();
     members.forEach((p) => m.set(p.id, publicDisplayName(p)));
@@ -1427,7 +1434,14 @@ export function ChatRoom({
                             <MessageActions
                               align="right"
                               canReply={!readOnly}
-                              canEdit={!readOnly && msg.kind === "text"}
+                              canEdit={
+                                !readOnly &&
+                                msg.kind === "text" &&
+                                // Its Excel row was stored as typed; an edit
+                                // would leave the two disagreeing.
+                                (msg.metadata as { event?: string } | null)?.event !==
+                                  "appointment"
+                              }
                               canDelete={canDeleteMessage(msg)}
                               canPin={canPinMessages && !readOnly && !msg.deleted_at}
                               pinned={Boolean(msg.pinned_at)}
@@ -1600,7 +1614,8 @@ export function ChatRoom({
           </div>
         )}
         <StagedAttachments items={staged} onRemove={removeStaged} />
-        <div className="glass mx-auto mb-1.5 flex w-fit items-center gap-0.5 rounded-full px-1.5 py-1">
+        <div className="mx-auto mb-1.5 flex w-fit items-center gap-1.5">
+        <div className="glass flex w-fit items-center gap-0.5 rounded-full px-1.5 py-1">
           {(
             [
               { kind: "bold", label: "Bold", Icon: Bold },
@@ -1623,6 +1638,24 @@ export function ChatRoom({
             </button>
           ))}
         </div>
+        {appointmentForm && (
+          <button
+            type="button"
+            onClick={() => setApptOpen(true)}
+            className="glass flex h-9 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold text-brand-700 transition-transform active:scale-95 dark:text-brand-300"
+          >
+            <CalendarPlus className="size-4" />
+            New appointment
+          </button>
+        )}
+        </div>
+        {apptOpen && (
+          <AppointmentForm
+            roomId={roomId}
+            dialerName={memberMap.get(currentUserId) ?? ""}
+            onClose={() => setApptOpen(false)}
+          />
+        )}
         <form
           onSubmit={submit}
           className="mx-auto flex w-full max-w-3xl items-end gap-1.5"
@@ -1768,7 +1801,7 @@ export function ChatRoom({
                 onChange={setDetailsTab}
                 showCounts={ownMessagesOnly}
               />
-              <PostCounts roomId={roomId} />
+              <PostCounts roomId={roomId} excel={appointmentForm} />
             </>
           ) : detailsTab === "media" ? (
             <>

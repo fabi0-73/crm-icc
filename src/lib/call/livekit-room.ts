@@ -24,6 +24,7 @@ import {
   RoomEvent,
   Track,
   VideoQuality,
+  type ParticipantTrackPermission,
   type RemoteParticipant,
   type ScreenShareCaptureOptions,
   type TrackPublishOptions,
@@ -54,6 +55,10 @@ export type CallRoomHandle = {
   /** What the viewer's screen shows, so each video is fetched at the size
    *  it is displayed (see planGroupVideo). */
   setView: (view: GroupView) => void;
+  /** This person's microphone, for mixing into a local recording. */
+  micTrack: () => MediaStreamTrack | null;
+  /** Tell everyone in the call (and anyone who joins) that we record. */
+  setRecording: (on: boolean) => void;
   disconnect: () => Promise<void>;
 };
 
@@ -200,6 +205,12 @@ export function screenSharePublishOptions(): TrackPublishOptions {
   };
 }
 
+/** Roles that may watch anyone's screen. Everyone else sees only screens
+ *  shared by these roles, and their own. */
+const SCREEN_SUPERVISORS = new Set(["admin", "manager"]);
+const isSupervisor = (p: { attributes?: Record<string, string> }) =>
+  SCREEN_SUPERVISORS.has(p.attributes?.role ?? "");
+
 const QUALITY: Record<Exclude<LayerChoice, "off">, VideoQuality> = {
   low: VideoQuality.LOW,
   medium: VideoQuality.MEDIUM,
@@ -221,6 +232,8 @@ export async function connectCallRoom(opts: {
   onUpdate: (payload: UpdatePayload) => void;
   onDisconnected: () => void;
   onLocalMic?: (muted: boolean) => void;
+  /** Names of the other participants recording this call right now. */
+  onRecorders?: (names: string[]) => void;
 }): Promise<CallRoomHandle> {
   const {
     url,
@@ -231,6 +244,7 @@ export async function connectCallRoom(opts: {
     onUpdate,
     onDisconnected,
     onLocalMic,
+    onRecorders,
   } = opts;
 
   const room = new Room({
@@ -278,6 +292,46 @@ export async function connectCallRoom(opts: {
     });
   };
 
+  /**
+   * Screen privacy: a screen shared by anyone but an admin or manager is
+   * visible to admins and managers only — call centre agents do not watch
+   * each other's screens. Enforced by the SFU (subscription permissions),
+   * not by hiding tiles, so a modified browser cannot watch either; the role
+   * comes from each person's server-issued token (createCallToken).
+   *
+   * Restricted only while this participant is sharing: everyone else keeps
+   * every other track (microphone, camera) by name, and the list is redone
+   * whenever someone joins or a track of ours comes or goes. Outside a share
+   * everything is open, so a slip here can never cost anyone the audio.
+   */
+  let screenRestricted = false;
+  const applyScreenPrivacy = (sharingNow: boolean) => {
+    const me = room.localParticipant;
+    if (!sharingNow || isSupervisor(me)) {
+      if (screenRestricted) me.setTrackSubscriptionPermissions(true);
+      screenRestricted = false;
+      return;
+    }
+    const open: string[] = [];
+    me.trackPublications.forEach((pub) => {
+      if (pub.source !== Track.Source.ScreenShare && pub.trackSid) {
+        open.push(pub.trackSid);
+      }
+    });
+    const perms: ParticipantTrackPermission[] = [];
+    room.remoteParticipants.forEach((p) => {
+      perms.push(
+        isSupervisor(p)
+          ? { participantIdentity: p.identity, allowAll: true }
+          : { participantIdentity: p.identity, allowedTrackSids: open },
+      );
+    });
+    me.setTrackSubscriptionPermissions(false, perms);
+    screenRestricted = true;
+  };
+  const localSharing = () =>
+    Boolean(room.localParticipant.getTrackPublication(Track.Source.ScreenShare));
+
   const emit = () => {
     const participants: LiveKitParticipant[] = [];
     room.remoteParticipants.forEach((p) => {
@@ -324,6 +378,25 @@ export async function connectCallRoom(opts: {
     });
   };
 
+  // ── Recording notices ─────────────────────────────────────────────
+  // A reliable data message on its own topic; resent to each newcomer, so
+  // someone who joins mid-recording is told too. Kept as a map of identity →
+  // name so a recorder who leaves drops off the list.
+  const RECORDING_TOPIC = "recording";
+  let recordingOn = false;
+  const recorders = new Map<string, string>();
+  const sendRecording = (to?: string[]) => {
+    const payload = new TextEncoder().encode(JSON.stringify({ on: recordingOn }));
+    void room.localParticipant
+      .publishData(payload, {
+        reliable: true,
+        topic: RECORDING_TOPIC,
+        ...(to ? { destinationIdentities: to } : {}),
+      })
+      .catch(() => undefined);
+  };
+  const reportRecorders = () => onRecorders?.([...recorders.values()]);
+
   const onMuteChange = (
     pub: { kind: Track.Kind; isMuted: boolean },
     participant: { isLocal?: boolean },
@@ -335,14 +408,38 @@ export async function connectCallRoom(opts: {
   };
 
   room
-    .on(RoomEvent.ParticipantConnected, emit)
-    .on(RoomEvent.ParticipantDisconnected, emit)
+    .on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
+      if (screenRestricted) applyScreenPrivacy(true);
+      if (recordingOn) sendRecording([p.identity]);
+      emit();
+    })
+    .on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
+      if (recorders.delete(p.identity)) reportRecorders();
+      emit();
+    })
+    .on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
+      if (topic !== RECORDING_TOPIC || !participant) return;
+      try {
+        const { on } = JSON.parse(new TextDecoder().decode(payload)) as { on?: boolean };
+        if (on) recorders.set(participant.identity, participant.name || "Someone");
+        else recorders.delete(participant.identity);
+        reportRecorders();
+      } catch {
+        /* not ours */
+      }
+    })
     .on(RoomEvent.TrackSubscribed, emit)
     .on(RoomEvent.TrackUnsubscribed, emit)
     .on(RoomEvent.TrackMuted, onMuteChange)
     .on(RoomEvent.TrackUnmuted, onMuteChange)
-    .on(RoomEvent.LocalTrackPublished, emit)
-    .on(RoomEvent.LocalTrackUnpublished, emit)
+    .on(RoomEvent.LocalTrackPublished, () => {
+      if (screenRestricted) applyScreenPrivacy(localSharing());
+      emit();
+    })
+    .on(RoomEvent.LocalTrackUnpublished, () => {
+      if (screenRestricted) applyScreenPrivacy(localSharing());
+      emit();
+    })
     .on(RoomEvent.Disconnected, () => {
       remoteStreams.clear();
       localCache.clear();
@@ -378,19 +475,32 @@ export async function connectCallRoom(opts: {
       emit();
     },
     async setScreenShare(on: boolean) {
+      // Before publishing: the screen's own track is not in the allowed list,
+      // so it is restricted from its very first frame.
+      if (on) applyScreenPrivacy(true);
       try {
         await room.localParticipant.setScreenShareEnabled(
           on,
           screenShareCaptureOptions(),
           screenSharePublishOptions(),
         );
+        applyScreenPrivacy(on);
         emit();
         return on;
       } catch {
         // User dismissed the picker, or the browser refused.
+        applyScreenPrivacy(localSharing());
         emit();
         return false;
       }
+    },
+    micTrack() {
+      const pub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+      return pub?.track?.mediaStreamTrack ?? null;
+    },
+    setRecording(on: boolean) {
+      recordingOn = on;
+      sendRecording();
     },
     setView(next: GroupView) {
       view = next;

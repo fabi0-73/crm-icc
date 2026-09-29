@@ -26,6 +26,12 @@ import { createClient } from "@/lib/supabase/client";
 import { ensureRealtimeAuth } from "@/lib/supabase/realtime";
 import { iceServers, waitForIceGathering } from "@/lib/call/webrtc";
 import {
+  recordingFileName,
+  recordingSupported,
+  startCallRecording,
+  type CallRecording,
+} from "@/lib/call/recorder";
+import {
   SCREEN_SHARE_PROFILE,
   applyScreenShareParams,
   displayMediaOptions,
@@ -228,6 +234,13 @@ type CallContextValue = {
   toggleCam: () => void;
   toggleNoise: () => void;
   toggleScreenShare: () => Promise<void>;
+  /** This device is recording the call to a local file. */
+  recording: boolean;
+  /** False where the browser cannot record (phones). */
+  canRecord: boolean;
+  toggleRecording: () => Promise<void>;
+  /** GROUP CALLS: names of the others recording this call right now. */
+  recorders: string[];
   setView: (v: "full" | "mini") => void;
 };
 
@@ -322,6 +335,11 @@ export function CallProvider({
   /** A group call this device left that can still be rejoined. */
   const [rejoinable, setRejoinable] = useState<GroupCallTarget | null>(null);
   const [lobby, setLobby] = useState<GroupLobby | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recorders, setRecorders] = useState<string[]>([]);
+  const recordingRef = useRef<CallRecording | null>(null);
+  const [canRecord, setCanRecord] = useState(false);
+  useEffect(() => setCanRecord(recordingSupported()), []);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -541,6 +559,11 @@ export function CallProvider({
       groupVideoRef.current = false;
       groupMembersRef.current = [];
       setGroupPeers([]);
+      // Hanging up ends a recording and saves what there is.
+      recordingRef.current?.stop();
+      recordingRef.current = null;
+      setRecording(false);
+      setRecorders([]);
       // Drop the persistent audio sink's stream so a torn-down call leaves
       // nothing playing (the element itself never unmounts).
       if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
@@ -982,6 +1005,7 @@ export function CallProvider({
         cameraEnabled: video && prefs.camera,
         onUpdate: applyLiveKitUpdate,
         onLocalMic: (isMuted) => setMuted(isMuted),
+        onRecorders: setRecorders,
         onDisconnected: () => {
           // cleanup() nulls lkRef before disconnecting, so this only fires for
           // an unexpected drop — never as an echo of our own teardown.
@@ -2161,6 +2185,50 @@ export function CallProvider({
     }
   }, [refreshLocalPreview, send, showNotice, stopScreenShare]);
 
+  /**
+   * Record the call to a file on this computer (see recorder.ts). Everyone
+   * is told: a notice in the conversation, and in a group call a live
+   * "Recording" badge on every participant's screen.
+   */
+  const toggleRecording = useCallback(async () => {
+    if (recordingRef.current) {
+      recordingRef.current.stop();
+      return;
+    }
+    const current = call;
+    if (!current) return;
+    const micTrack = groupRef.current
+      ? (lkRef.current?.micTrack() ?? null)
+      : (localStreamRef.current?.getAudioTracks()[0] ?? null);
+    try {
+      const rec = await startCallRecording({
+        micTrack,
+        fileName: recordingFileName(current.peerName),
+        onEnded: () => {
+          if (recordingRef.current === rec) recordingRef.current = null;
+          setRecording(false);
+          lkRef.current?.setRecording(false);
+        },
+      });
+      recordingRef.current = rec;
+      setRecording(true);
+      lkRef.current?.setRecording(true);
+      if (current.roomId) {
+        void supabase.from("messages").insert({
+          room_id: current.roomId,
+          sender_id: userId,
+          kind: "text",
+          body: "🔴 Started recording this call",
+          metadata: { event: "call_recording" },
+        });
+      }
+    } catch (err) {
+      // Dismissing the tab picker is not an error worth showing.
+      if (err instanceof DOMException && err.name === "NotAllowedError") return;
+      showNotice(err instanceof Error ? err.message : "Could not start recording");
+    }
+  }, [call, showNotice, supabase, userId]);
+
   // GROUP CALLS: screen share is one call on the LiveKit participant — the SFU
   // republishes it to everyone, so there is no per-peer renegotiation to do.
   // Any number of people may share at once. Each share is ONE 1080p H.264
@@ -2287,6 +2355,10 @@ export function CallProvider({
       toggleCam,
       toggleNoise,
       toggleScreenShare,
+      recording,
+      canRecord,
+      toggleRecording,
+      recorders,
       setView,
       setGroupLayout,
     }),
@@ -2329,6 +2401,10 @@ export function CallProvider({
       toggleCam,
       toggleNoise,
       toggleScreenShare,
+      recording,
+      canRecord,
+      toggleRecording,
+      recorders,
     ],
   );
 

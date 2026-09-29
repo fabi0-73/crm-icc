@@ -41,6 +41,10 @@ export function FullScreenCall() {
     toggleCam,
     toggleNoise,
     toggleScreenShare,
+    recording,
+    canRecord,
+    toggleRecording,
+    recorders,
     setView,
   } = useCall();
   const isGroup = Boolean(call?.group);
@@ -192,6 +196,22 @@ export function FullScreenCall() {
             {modeLabel} · {subtitle}
           </p>
         </div>
+        {/* Everyone can see when the call is being recorded, and by whom. */}
+        {(recording || recorders.length > 0) && (
+          <span
+            className="flex max-w-[45%] shrink items-center gap-1.5 truncate rounded-full bg-red-500/90 px-3 py-1 text-[12px] font-semibold text-white"
+            title="This call is being recorded"
+          >
+            <span className="size-2 shrink-0 animate-pulse rounded-full bg-white motion-reduce:animate-none" />
+            <span className="truncate">
+              {recording
+                ? recorders.length
+                  ? `Recording · you, ${recorders.join(", ")}`
+                  : "Recording"
+                : `Recording · ${recorders.join(", ")}`}
+            </span>
+          </span>
+        )}
         {canFullscreen && (
           <button
             type="button"
@@ -312,6 +332,19 @@ export function FullScreenCall() {
             label={sharing ? "Stop share" : "Share"}
           >
             <ScreenShareIcon />
+          </CallControlButton>
+        )}
+        {phase === "in-call" && canRecord && (
+          <CallControlButton
+            onClick={() => void toggleRecording()}
+            active={recording}
+            label={recording ? "Stop rec." : "Record"}
+          >
+            <span
+              className={`block size-[18px] rounded-full border-2 ${
+                recording ? "border-red-500 bg-red-500" : "border-current"
+              }`}
+            />
           </CallControlButton>
         )}
         {/* Suppression is ON by default (noiseOff starts false), so the control
