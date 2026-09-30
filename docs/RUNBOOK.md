@@ -677,3 +677,34 @@ ssh -i ~/.ssh/icc_vps_ed25519 root@72.62.42.52 \
   'date; uptime; free -h; df -h /; systemctl is-active crm-icc supabase nginx docker; \
    cd /srv/supabase && docker compose ps'
 ```
+
+## Group calls: self-hosted LiveKit (since 2026-09-30)
+
+Group calls (the SFU) run on this VPS, not LiveKit Cloud — the Cloud free
+plan ran out of bandwidth on 2026-09-27 and refused every connection (429).
+
+- **Container:** `docker ps --filter name=livekit` — `livekit/livekit-server`
+  (1.13.7 at setup), `--network host`, `--restart unless-stopped`.
+- **Config:** `/etc/livekit/livekit.yaml` (mode 600; holds the API key and
+  secret — never commit it). Backup of the previous version:
+  `/root/livekit.yaml.bak`.
+- **Ports:** signalling `127.0.0.1:7880`, published only through nginx at
+  `wss://chat.icenterconsult.com/lk` (`location /lk/` in
+  `/etc/nginx/sites-enabled/crm-icc`; nginx backups in `/root/nginx-backups`).
+  Media: UDP `50000-60000` (one port per connection) and TCP `7881` as the
+  fallback for networks without UDP. Both are open in ufw.
+  Do NOT switch to a single `udp_port`: LiveKit's UDP mux keyed PCs behind
+  one office IP together and dropped all but one to TCP (seen in testing).
+- **CRM settings** (`/srv/apps/crm-icc/.env.local`):
+  `NEXT_PUBLIC_LIVEKIT_URL=wss://chat.icenterconsult.com/lk`,
+  `LIVEKIT_API_URL=http://127.0.0.1:7880` (the server SDK drops the `/lk`
+  path), `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` = the key in livekit.yaml.
+  `NEXT_PUBLIC_*` is inlined at build time: redeploy after changing it.
+- **Back to LiveKit Cloud:** restore
+  `/root/env.local.livekit-cloud-backup-20260930-*` over `.env.local`
+  (keep mode 600), remove `LIVEKIT_API_URL`, redeploy.
+- **Health:** `curl -s https://chat.icenterconsult.com/lk/` answers `OK`;
+  `docker logs --since 10m livekit`.
+- **Update:** `docker pull livekit/livekit-server:latest`, then recreate the
+  container with the same `docker run` flags (see the container's
+  `docker inspect livekit`), then one test call.
