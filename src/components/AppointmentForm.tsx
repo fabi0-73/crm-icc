@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarPlus, X } from "lucide-react";
+import { CalendarPlus, Pencil, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Input, Label, Select } from "@/components/ui/Field";
 
@@ -28,10 +28,26 @@ function rememberAgent(name: string) {
   }
 }
 
+/** "Wed, Oct 1, 2026 · 3:30 PM EST" — how create_appointment writes it. */
+function whenText(date: string, time: string, tz: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const [hh, mm] = time.split(":").map(Number);
+  const day = new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const h12 = hh % 12 === 0 ? 12 : hh % 12;
+  const clock = `${h12}:${String(mm).padStart(2, "0")} ${hh < 12 ? "AM" : "PM"}`;
+  return `${day} · ${clock}${tz ? ` ${tz}` : ""}`;
+}
+
 /**
  * "New appointment": the only way an appointment reaches the Excel export.
  * Each field is stored as typed (create_appointment, migration 0023), and
- * the same call posts the usual readable message in the group.
+ * the same call posts the usual readable message in the group. Nothing is
+ * posted until the person has seen the preview and confirmed it.
  */
 export function AppointmentForm({
   roomId,
@@ -52,6 +68,7 @@ export function AppointmentForm({
   const [time, setTime] = useState("");
   const [tz, setTz] = useState("EST");
   const [busy, setBusy] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agents, setAgents] = useState<string[]>([]);
 
@@ -64,8 +81,15 @@ export function AppointmentForm({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const submit = async (e: React.FormEvent) => {
+  // First submit (the browser has checked the required fields): show the
+  // preview. Confirm on the preview is what actually posts.
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+    setReviewing(true);
+  };
+
+  const confirm = async () => {
     setBusy(true);
     setError(null);
     const { error: rpcError } = await supabase.rpc("create_appointment", {
@@ -107,7 +131,7 @@ export function AppointmentForm({
             <CalendarPlus className="size-[18px]" />
           </span>
           <h2 id="appt-title" className="flex-1 text-[17px] font-semibold text-ink">
-            New appointment
+            {reviewing ? "Preview" : "New appointment"}
           </h2>
           <button
             type="button"
@@ -119,6 +143,30 @@ export function AppointmentForm({
           </button>
         </div>
 
+        {reviewing ? (
+          <div>
+            <p className="mb-2.5 text-[13px] text-muted">
+              Check it before it goes to the group.
+            </p>
+            <dl className="divide-y divide-line rounded-xl border border-line bg-mist/40 text-[14px]">
+              {(
+                [
+                  ["Dialer", dialerName],
+                  ["Agent", agent.trim()],
+                  ["Policy #", policy.trim() || "—"],
+                  ["Client", client.trim()],
+                  ["Phone", phone.trim()],
+                  ["When", whenText(date, time, tz)],
+                ] as const
+              ).map(([k, v]) => (
+                <div key={k} className="flex gap-3 px-3.5 py-2.5">
+                  <dt className="w-20 shrink-0 text-muted">{k}</dt>
+                  <dd className="min-w-0 flex-1 break-words font-medium text-ink">{v}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ) : (
         <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
           <div>
             <Label htmlFor="appt-dialer">Dialer</Label>
@@ -188,6 +236,7 @@ export function AppointmentForm({
             </div>
           </div>
         </div>
+        )}
 
         {error && (
           <p className="mt-3.5 rounded-lg bg-red-50 px-3 py-2 text-[13px] text-red-700 dark:bg-red-950/50 dark:text-red-300">
@@ -196,20 +245,44 @@ export function AppointmentForm({
         )}
 
         <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-10 rounded-full px-4 text-[14px] font-medium text-muted hover:bg-mist hover:text-ink"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={busy}
-            className="h-10 rounded-full bg-brand-600 px-5 text-[14px] font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
-          >
-            {busy ? "Posting…" : "Post appointment"}
-          </button>
+          {reviewing ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setReviewing(false)}
+                disabled={busy}
+                className="flex h-10 items-center gap-1.5 rounded-full px-4 text-[14px] font-medium text-ink hover:bg-mist disabled:opacity-50"
+              >
+                <Pencil className="size-4" />
+                Edit
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => void confirm()}
+                disabled={busy}
+                className="h-10 rounded-full bg-brand-600 px-5 text-[14px] font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+              >
+                {busy ? "Posting…" : "Confirm & post"}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onClose}
+                className="h-10 rounded-full px-4 text-[14px] font-medium text-muted hover:bg-mist hover:text-ink"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="h-10 rounded-full bg-brand-600 px-5 text-[14px] font-semibold text-white hover:bg-brand-700"
+              >
+                Review
+              </button>
+            </>
+          )}
         </div>
       </form>
     </div>

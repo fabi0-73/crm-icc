@@ -1433,7 +1433,7 @@ export function ChatRoom({
                           {!msg.deleted_at && editing !== msg.id && (
                             <MessageActions
                               align="right"
-                              canReply={!readOnly}
+                              canReply={!readOnly && !appointmentForm}
                               canEdit={
                                 !readOnly &&
                                 msg.kind === "text" &&
@@ -1531,7 +1531,7 @@ export function ChatRoom({
                           {!msg.deleted_at && (
                             <MessageActions
                               align="left"
-                              canReply={!readOnly}
+                              canReply={!readOnly && !appointmentForm}
                               canEdit={false}
                               canDelete={canDeleteMessage(msg)}
                               canPin={canPinMessages && !readOnly && !msg.deleted_at}
@@ -1590,6 +1590,28 @@ export function ChatRoom({
             {error}
           </p>
         )}
+        {appointmentForm ? (
+          // An appointments group takes appointments only: no free text,
+          // files or voice — every post goes through the form.
+          <div className="mx-auto flex w-full max-w-3xl justify-center">
+            <button
+              type="button"
+              onClick={() => setApptOpen(true)}
+              className="flex h-12 items-center gap-2 rounded-full bg-brand-600 px-6 text-[15px] font-semibold text-white shadow-soft transition-[transform,background-color] hover:bg-brand-700 active:scale-95"
+            >
+              <CalendarPlus className="size-5" />
+              New appointment
+            </button>
+            {apptOpen && (
+              <AppointmentForm
+                roomId={roomId}
+                dialerName={memberMap.get(currentUserId) ?? ""}
+                onClose={() => setApptOpen(false)}
+              />
+            )}
+          </div>
+        ) : (
+        <>
         {replyTo && (
           <div className="glass mx-auto mb-2 flex w-full max-w-3xl items-center gap-2 rounded-2xl px-3.5 py-2">
             <div className="min-w-0 flex-1">
@@ -1638,24 +1660,7 @@ export function ChatRoom({
             </button>
           ))}
         </div>
-        {appointmentForm && (
-          <button
-            type="button"
-            onClick={() => setApptOpen(true)}
-            className="glass flex h-9 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-semibold text-brand-700 transition-transform active:scale-95 dark:text-brand-300"
-          >
-            <CalendarPlus className="size-4" />
-            New appointment
-          </button>
-        )}
         </div>
-        {apptOpen && (
-          <AppointmentForm
-            roomId={roomId}
-            dialerName={memberMap.get(currentUserId) ?? ""}
-            onClose={() => setApptOpen(false)}
-          />
-        )}
         <form
           onSubmit={submit}
           className="mx-auto flex w-full max-w-3xl items-end gap-1.5"
@@ -1774,6 +1779,8 @@ export function ChatRoom({
           >
             {body.length} / {MAX_MESSAGE_CHARS}
           </p>
+        )}
+        </>
         )}
       </div>
       )}
