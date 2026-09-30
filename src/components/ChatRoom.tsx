@@ -1606,6 +1606,7 @@ export function ChatRoom({
               <AppointmentForm
                 roomId={roomId}
                 dialerName={memberMap.get(currentUserId) ?? ""}
+                canManageAgents={canPinMessages}
                 onClose={() => setApptOpen(false)}
               />
             )}

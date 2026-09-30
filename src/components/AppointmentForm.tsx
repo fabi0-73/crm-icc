@@ -1,32 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { CalendarPlus, Pencil, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CalendarPlus, ListChecks, Pencil, Plus, Trash2, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { Input, Label, Select } from "@/components/ui/Field";
 
 /** The client's time zone, as dialers already write it. */
 const ZONES = ["EST", "CST", "MST", "PST", "AKST", "HST"];
-/** Agent names this person used lately — a per-browser convenience only. */
-const RECENT_AGENTS_KEY = "icc.recentAgents";
-
-function recentAgents(): string[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(RECENT_AGENTS_KEY) ?? "[]");
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, 12) : [];
-  } catch {
-    return [];
-  }
-}
-
-function rememberAgent(name: string) {
-  try {
-    const next = [name, ...recentAgents().filter((n) => n !== name)].slice(0, 12);
-    localStorage.setItem(RECENT_AGENTS_KEY, JSON.stringify(next));
-  } catch {
-    /* storage unavailable — nothing lost but the suggestion */
-  }
-}
+type Agent = { id: string; name: string };
 
 /** "Wed, Oct 1, 2026 · 3:30 PM EST" — how create_appointment writes it. */
 function whenText(date: string, time: string, tz: string): string {
@@ -48,15 +29,21 @@ function whenText(date: string, time: string, tz: string): string {
  * Each field is stored as typed (create_appointment, migration 0023), and
  * the same call posts the usual readable message in the group. Nothing is
  * posted until the person has seen the preview and confirmed it.
+ *
+ * The agent is picked from a shared list (migration 0025) so one agent is
+ * never spelled three ways; admins and managers keep that list from here.
  */
 export function AppointmentForm({
   roomId,
   dialerName,
+  canManageAgents = false,
   onClose,
 }: {
   roomId: string;
   /** Prefilled: the person filling the form is normally the dialer. */
   dialerName: string;
+  /** Admins and managers: may add and remove names on the agent list. */
+  canManageAgents?: boolean;
   onClose: () => void;
 }) {
   const supabase = useMemo(() => createClient(), []);
@@ -70,10 +57,52 @@ export function AppointmentForm({
   const [busy, setBusy] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [agents, setAgents] = useState<string[]>([]);
+  const [agents, setAgents] = useState<Agent[] | null>(null);
+  const [managing, setManaging] = useState(false);
+  const [newAgent, setNewAgent] = useState("");
+  const [listBusy, setListBusy] = useState(false);
+
+  const loadAgents = useCallback(async () => {
+    const { data, error: rpcError } = await supabase.rpc("appointment_agent_names");
+    if (rpcError) {
+      setError("Could not load the agent list.");
+      return;
+    }
+    setAgents((data ?? []) as Agent[]);
+  }, [supabase]);
 
   useEffect(() => {
-    setAgents(recentAgents());
+    void loadAgents();
+  }, [loadAgents]);
+
+  const addAgent = async () => {
+    const name = newAgent.trim();
+    if (!name || listBusy) return;
+    setListBusy(true);
+    setError(null);
+    const { error: rpcError } = await supabase.rpc("add_appointment_agent", {
+      p_name: name,
+    });
+    if (rpcError) setError(rpcError.message || "Could not add that name.");
+    else setNewAgent("");
+    await loadAgents();
+    setListBusy(false);
+  };
+
+  const removeAgent = async (a: Agent) => {
+    if (listBusy) return;
+    setListBusy(true);
+    setError(null);
+    const { error: rpcError } = await supabase.rpc("remove_appointment_agent", {
+      p_id: a.id,
+    });
+    if (rpcError) setError(rpcError.message || "Could not remove that name.");
+    else if (agent === a.name) setAgent("");
+    await loadAgents();
+    setListBusy(false);
+  };
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -108,7 +137,6 @@ export function AppointmentForm({
       setError(rpcError.message || "Could not save the appointment.");
       return;
     }
-    rememberAgent(agent.trim());
     onClose();
   };
 
@@ -131,7 +159,7 @@ export function AppointmentForm({
             <CalendarPlus className="size-[18px]" />
           </span>
           <h2 id="appt-title" className="flex-1 text-[17px] font-semibold text-ink">
-            {reviewing ? "Preview" : "New appointment"}
+            {managing ? "Agent list" : reviewing ? "Preview" : "New appointment"}
           </h2>
           <button
             type="button"
@@ -143,7 +171,59 @@ export function AppointmentForm({
           </button>
         </div>
 
-        {reviewing ? (
+        {managing ? (
+          <div>
+            <p className="mb-2.5 text-[13px] text-muted">
+              Dialers pick the agent from this list. Removing a name keeps the
+              appointments already booked with it.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                aria-label="New agent name"
+                placeholder="Agent's full name"
+                value={newAgent}
+                onChange={(e) => setNewAgent(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void addAgent();
+                  }
+                }}
+                maxLength={200}
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => void addAgent()}
+                disabled={listBusy || !newAgent.trim()}
+                className="flex h-10 shrink-0 items-center gap-1.5 self-center rounded-full bg-brand-600 px-4 text-[14px] font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+              >
+                <Plus className="size-4" />
+                Add
+              </button>
+            </div>
+            <ul className="mt-3 max-h-[45dvh] divide-y divide-line overflow-y-auto rounded-xl border border-line">
+              {(agents ?? []).map((a) => (
+                <li key={a.id} className="flex items-center gap-2 py-1.5 pl-3.5 pr-1.5 text-[14px] text-ink">
+                  <span className="min-w-0 flex-1 truncate">{a.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => void removeAgent(a)}
+                    disabled={listBusy}
+                    aria-label={`Remove ${a.name}`}
+                    title="Remove from the list"
+                    className="flex size-8 items-center justify-center rounded-full text-muted hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950/50"
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                </li>
+              ))}
+              {agents?.length === 0 && (
+                <li className="px-3.5 py-3 text-[13px] text-muted">No agents yet.</li>
+              )}
+            </ul>
+          </div>
+        ) : reviewing ? (
           <div>
             <p className="mb-2.5 text-[13px] text-muted">
               Check it before it goes to the group.
@@ -175,22 +255,41 @@ export function AppointmentForm({
             <Input id="appt-dialer" value={dialerName} readOnly disabled />
           </div>
           <div>
-            <Label htmlFor="appt-agent">Agent</Label>
-            <Input
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <Label htmlFor="appt-agent" className="!mb-0">
+                Agent
+              </Label>
+              {canManageAgents && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setManaging(true);
+                  }}
+                  className="flex items-center gap-1 text-[12px] font-medium text-brand-700 hover:underline dark:text-brand-300"
+                >
+                  <ListChecks className="size-3.5" />
+                  Manage list
+                </button>
+              )}
+            </div>
+            <Select
               id="appt-agent"
               autoFocus
               value={agent}
               onChange={(e) => setAgent(e.target.value)}
-              list="appt-agents"
-              autoComplete="off"
               required
-              maxLength={200}
-            />
-            <datalist id="appt-agents">
-              {agents.map((a) => (
-                <option key={a} value={a} />
+              disabled={agents === null}
+            >
+              <option value="" disabled>
+                {agents === null ? "Loading…" : "Choose an agent"}
+              </option>
+              {(agents ?? []).map((a) => (
+                <option key={a.id} value={a.name}>
+                  {a.name}
+                </option>
               ))}
-            </datalist>
+            </Select>
           </div>
           <div>
             <Label htmlFor="appt-client">Client name</Label>
@@ -245,7 +344,18 @@ export function AppointmentForm({
         )}
 
         <div className="mt-5 flex justify-end gap-2">
-          {reviewing ? (
+          {managing ? (
+            <button
+              type="button"
+              onClick={() => {
+                setError(null);
+                setManaging(false);
+              }}
+              className="h-10 rounded-full bg-brand-600 px-5 text-[14px] font-semibold text-white hover:bg-brand-700"
+            >
+              Done
+            </button>
+          ) : reviewing ? (
             <>
               <button
                 type="button"
