@@ -35,10 +35,24 @@ async function callBelongsToRoom(callId: string, roomId: string): Promise<boolea
   }
 }
 
+/**
+ * Where this server reaches LiveKit's HTTP API. LIVEKIT_API_URL when set:
+ * LiveKit runs on this same machine (http://127.0.0.1:7880), and the SDK's
+ * RoomServiceClient drops any path in the public URL, so the public
+ * wss://…/lk address would send its API calls to the CRM itself. Otherwise
+ * the public URL as https (LiveKit Cloud).
+ */
+function apiUrl(publicUrl: string): string {
+  return (
+    process.env.LIVEKIT_API_URL ||
+    publicUrl.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:")
+  );
+}
+
 /** A human reason if LiveKit would refuse this token right now, else null. */
 async function liveKitRefusal(url: string, token: string): Promise<string | null> {
   try {
-    const httpUrl = url.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+    const httpUrl = apiUrl(url);
     const res = await fetch(`${httpUrl}/rtc/validate?access_token=${token}`, {
       signal: AbortSignal.timeout(4000),
       cache: "no-store",
@@ -211,7 +225,7 @@ export async function getLiveCall(roomId: string): Promise<LiveCall | null> {
       .maybeSingle();
     if (!membership) return null;
 
-    const httpUrl = url.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+    const httpUrl = apiUrl(url);
     const rooms = await listLiveRooms(httpUrl, apiKey, apiSecret);
     let best: LiveCall | null = null;
     for (const r of rooms) {
@@ -276,7 +290,7 @@ export async function removeCallParticipant(
     }
 
     // The SDK speaks HTTP(S); the browser-facing URL is a websocket one.
-    const httpUrl = url.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+    const httpUrl = apiUrl(url);
     const svc = new RoomServiceClient(httpUrl, apiKey, apiSecret);
     await svc.removeParticipant(`call-${callId}`, identity);
     return { ok: true };
@@ -324,7 +338,7 @@ export async function muteCallParticipant(
       return { error: "That call doesn't belong to this conversation." };
     }
 
-    const httpUrl = url.replace(/^wss:/i, "https:").replace(/^ws:/i, "http:");
+    const httpUrl = apiUrl(url);
     const svc = new RoomServiceClient(httpUrl, apiKey, apiSecret);
     const roomName = `call-${callId}`;
     const parts = await svc.listParticipants(roomName);
