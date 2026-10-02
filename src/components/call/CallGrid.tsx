@@ -153,10 +153,11 @@ export function CallGrid({
 
   // ── Every shared screen side by side ────────────────────────────────
   if (focusId === SCREENS && sharers.length >= 2) {
+    // Every screen on one page, however many: a tile scrolled out of view
+    // is paused, and the point of the wall is watching them all at once.
     const n = sharers.length;
-    const wallCols = Math.min(4, Math.ceil(Math.sqrt(n)));
+    const wallCols = Math.ceil(Math.sqrt(n));
     const wallRows = Math.ceil(n / wallCols);
-    const wallDense = n > 12;
     return (
       <div className="flex h-full min-h-0 flex-col gap-2 p-2 sm:p-3">
         <div className="flex shrink-0 items-center gap-2">
@@ -170,14 +171,10 @@ export function CallGrid({
           </span>
         </div>
         <div
-          className={`grid min-h-0 flex-1 gap-2 ${
-            wallDense ? "content-start overflow-y-auto" : ""
-          }`}
+          className="grid min-h-0 flex-1 gap-2"
           style={{
             gridTemplateColumns: `repeat(${wallCols}, minmax(0, 1fr))`,
-            ...(wallDense
-              ? { gridAutoRows: "minmax(160px, 1fr)" }
-              : { gridTemplateRows: `repeat(${wallRows}, minmax(0, 1fr))` }),
+            gridTemplateRows: `repeat(${wallRows}, minmax(0, 1fr))`,
           }}
         >
           {sharers.map((peer) => (
