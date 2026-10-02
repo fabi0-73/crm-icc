@@ -270,8 +270,10 @@ export function planGroupVideo(
 /**
  * How many 1080p shares this device plays at once before the rest wait for
  * a click. Where H.264 is decoded by the graphics chip a decode is ~1 ms a
- * frame, so six is nothing; in software it is the processor's job, and a
- * wall of them is what pinned CPUs at 100% and crashed tabs ("Aw, Snap!").
+ * frame, so a supervisor watching the whole floor (16 screens at 15 fps) is
+ * well within it; past that, decoders start handing streams back to the
+ * processor. In software every decode is the processor's job, and a wall of
+ * them is what pinned CPUs at 100% and crashed tabs ("Aw, Snap!").
  * Resolved once per page; unknown counts as software.
  */
 let budget: Promise<number> | null = null;
@@ -288,7 +290,7 @@ export function shareDecodeBudget(): Promise<number> {
           framerate: SCREEN_SHARE_PROFILE.maxFramerate,
         },
       });
-      return info.supported && info.powerEfficient ? 6 : 2;
+      return info.supported && info.powerEfficient ? 16 : 2;
     } catch {
       return 2;
     }

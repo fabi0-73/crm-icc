@@ -205,8 +205,8 @@ export function screenSharePublishOptions(): TrackPublishOptions {
   };
 }
 
-/** Roles that may watch anyone's screen. Everyone else sees only screens
- *  shared by these roles, and their own. */
+/** The only roles that see shared screens. Everyone else (the dialers)
+ *  sees no one's screen but their own. */
 const SCREEN_SUPERVISORS = new Set(["admin", "manager"]);
 const isSupervisor = (p: { attributes?: Record<string, string> }) =>
   SCREEN_SUPERVISORS.has(p.attributes?.role ?? "");
@@ -293,9 +293,9 @@ export async function connectCallRoom(opts: {
   };
 
   /**
-   * Screen privacy: a screen shared by anyone but an admin or manager is
-   * visible to admins and managers only — call centre agents do not watch
-   * each other's screens. Enforced by the SFU (subscription permissions),
+   * Screen privacy: a shared screen — whoever shares it, admins and
+   * managers included — is visible to admins and managers only; dialers
+   * watch no one's screen. Enforced by the SFU (subscription permissions),
    * not by hiding tiles, so a modified browser cannot watch either; the role
    * comes from each person's server-issued token (createCallToken).
    *
@@ -307,7 +307,7 @@ export async function connectCallRoom(opts: {
   let screenRestricted = false;
   const applyScreenPrivacy = (sharingNow: boolean) => {
     const me = room.localParticipant;
-    if (!sharingNow || isSupervisor(me)) {
+    if (!sharingNow) {
       if (screenRestricted) me.setTrackSubscriptionPermissions(true);
       screenRestricted = false;
       return;
