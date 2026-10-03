@@ -10,15 +10,34 @@ export type MessageGroup =
 
 export type DaySection = { key: string; label: string; groups: MessageGroup[] };
 
-export function dayLabel(d: Date, now: Date): string {
-  if (d.toDateString() === now.toDateString()) return "Today";
-  const y = new Date(now);
-  y.setDate(y.getDate() - 1);
-  if (d.toDateString() === y.toDateString()) return "Yesterday";
+/**
+ * The zone the server draws the first paint in, and the browser hydrates
+ * with before switching to its own. The team's PCs run on US time (they
+ * call US clients) while the server runs on Tirane time: grouping by each
+ * machine's own clock split days differently between the two, so the page
+ * React found was not the page the server sent (hydration error #418).
+ */
+export const HYDRATION_TIME_ZONE = "Europe/Tirane";
+
+/** YYYY-MM-DD of `d` in `timeZone` (undefined = this machine's zone). */
+function dayKey(d: Date, timeZone?: string): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+export function dayLabel(d: Date, now: Date, timeZone?: string): string {
+  const key = dayKey(d, timeZone);
+  if (key === dayKey(now, timeZone)) return "Today";
+  if (key === dayKey(new Date(now.getTime() - 86_400_000), timeZone)) return "Yesterday";
   return d.toLocaleDateString([], {
     weekday: "long",
     month: "long",
     day: "numeric",
+    timeZone,
   });
 }
 
@@ -27,6 +46,7 @@ export function dayLabel(d: Date, now: Date): string {
 export function buildDaySections(
   messages: Message[],
   now = new Date(),
+  timeZone?: string,
 ): DaySection[] {
   const sections: DaySection[] = [];
   let day: DaySection | null = null;
@@ -34,9 +54,9 @@ export function buildDaySections(
 
   for (const msg of messages) {
     const d = new Date(msg.created_at);
-    const dayKey = d.toDateString();
-    if (!day || day.key !== dayKey) {
-      day = { key: dayKey, label: dayLabel(d, now), groups: [] };
+    const key = dayKey(d, timeZone);
+    if (!day || day.key !== key) {
+      day = { key, label: dayLabel(d, now, timeZone), groups: [] };
       sections.push(day);
       group = null; // day boundary breaks groups
     }

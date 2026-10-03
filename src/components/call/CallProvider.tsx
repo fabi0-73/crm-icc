@@ -343,6 +343,9 @@ export function CallProvider({
   const [recorders, setRecorders] = useState<string[]>([]);
   const recordingRef = useRef<CallRecording | null>(null);
   const [canRecord, setCanRecord] = useState(false);
+  // The mute button, readable from any callback without waiting for a
+  // render. Every path that publishes or swaps a microphone obeys it.
+  const mutedRef = useRef(false);
   // 1:1 calls are peer-to-peer, so no server stands between the two
   // browsers: the sharer's own browser keeps a screen from anyone but an
   // admin or manager by not offering to share it.
@@ -644,6 +647,7 @@ export function CallProvider({
       lobbyRef.current = null;
       joinPrefsRef.current = null;
       setView("full");
+      mutedRef.current = false;
       setMuted(false);
       setCamOff(false);
       setNoiseOff(false);
@@ -875,6 +879,11 @@ export function CallProvider({
     }
     localStreamRef.current = stream;
     cameraTrackRef.current = stream.getVideoTracks()[0] ?? null;
+    // Mute may have been pressed while the browser was still opening the
+    // microphone: the new track starts as the button says.
+    stream.getAudioTracks().forEach((t) => {
+      t.enabled = !mutedRef.current;
+    });
     // FIX 5: re-assert suppression on the live track for browsers that honor
     // runtime applyConstraints. Best-effort — never throw if unsupported.
     const audioTrack = stream.getAudioTracks()[0];
@@ -1057,7 +1066,12 @@ export function CallProvider({
         micEnabled: prefs.mic,
         cameraEnabled: video && prefs.camera,
         onUpdate: applyLiveKitUpdate,
-        onLocalMic: (isMuted) => setMuted(isMuted),
+        onLocalMic: (isMuted) => {
+          mutedRef.current = isMuted;
+          setMuted(isMuted);
+        },
+        micWanted: () => !mutedRef.current,
+        onMediaError: (err) => showNotice(mediaErrorMessage(err)),
         onRecorders: setRecorders,
         onDisconnected: () => {
           // cleanup() nulls lkRef before disconnecting, so this only fires for
@@ -1070,6 +1084,20 @@ export function CallProvider({
         return false;
       }
       lkRef.current = handle;
+      // The mute button may have changed while we were connecting: the room
+      // follows it now. (connectCallRoom also re-mutes a live microphone,
+      // but a press after its last check lands only here.)
+      if (mutedRef.current) {
+        await handle.setMic(false).catch(() => undefined);
+      } else if (!prefs.mic) {
+        try {
+          await handle.setMic(true);
+        } catch (err) {
+          mutedRef.current = true;
+          setMuted(true);
+          showNotice(mediaErrorMessage(err));
+        }
+      }
 
       // Call history: only the initiator logs, once.
       if (isCallerRef.current && !startedLoggedRef.current && roomIdRef.current) {
@@ -1946,6 +1974,7 @@ export function CallProvider({
       const L = lobbyRef.current;
       if (!L) return;
       joinPrefsRef.current = { mic: !prefs.muted, camera: !prefs.camOff };
+      mutedRef.current = prefs.muted;
       setMuted(prefs.muted);
       setCamOff(prefs.camOff);
       lobbyRef.current = null;
@@ -1972,20 +2001,35 @@ export function CallProvider({
     }
   }, [lobby, incoming]);
 
-  const toggleMic = useCallback(() => {
-    const next = !muted;
+  const toggleMic = useCallback(async () => {
+    const next = !mutedRef.current;
+    mutedRef.current = next;
     setMuted(next);
     // GROUP CALLS: LiveKit publishes its own capture — localStreamRef is
     // null there, so muting MUST go through the room or the microphone
-    // keeps broadcasting while the UI claims it is muted.
+    // keeps broadcasting while the UI claims it is muted. Still connecting
+    // (no room yet): connectCallRoom reads mutedRef when it publishes.
     if (groupRef.current) {
-      void lkRef.current?.setMic(!next);
+      const handle = lkRef.current;
+      if (!handle) return;
+      try {
+        await handle.setMic(!next);
+      } catch (err) {
+        // Unmuting failed (microphone blocked or busy): say so, and show
+        // muted — the truth — instead of a live button that sends nothing.
+        // A failed mute already cut the track inside setMic.
+        if (!next) {
+          mutedRef.current = true;
+          setMuted(true);
+        }
+        showNotice(mediaErrorMessage(err));
+      }
     } else {
       localStreamRef.current?.getAudioTracks().forEach((t) => {
         t.enabled = !next;
       });
     }
-  }, [muted]);
+  }, [showNotice]);
 
   const toggleCam = useCallback(() => {
     setCamOff((prev) => {
@@ -2040,8 +2084,8 @@ export function CallProvider({
           fresh.getTracks().forEach((t) => t.stop());
           return;
         }
-        // Preserve the current mute state on the replacement track.
-        newTrack.enabled = oldTrack ? oldTrack.enabled : true;
+        // The replacement track follows the mute button.
+        newTrack.enabled = !mutedRef.current;
         // Swap the fresh audio onto the outgoing sender (1:1 path only —
         // LiveKit owns capture for group calls, see the guard in toggleNoise).
         const sender = pc?.getSenders().find((s) => s.track?.kind === "audio");

@@ -378,18 +378,35 @@ async function sendToUsers(
   const body = JSON.stringify(payload);
   await Promise.all(
     subs.map(async (s: { id: string; endpoint: string; p256dh: string; auth: string }) => {
-      try {
-        await webpush.sendNotification(
-          { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-          body,
-        );
-      } catch (err) {
-        const code = (err as { statusCode?: number })?.statusCode;
-        // 404/410 = the browser dropped this subscription; forget it.
-        if (code === 404 || code === 410) {
-          await supabase.from("push_subscriptions").delete().eq("id", s.id);
-        } else {
-          console.warn("[push] send failed:", code ?? (err as Error)?.message);
+      // A network blip ("socket hang up": 46 notifications lost in one
+      // second on Oct 3) or a busy push service (429/5xx) gets two more
+      // tries for a message; anything else is final.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await webpush.sendNotification(
+            { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+            body,
+          );
+          if (attempt > 0) console.warn(`[push] sent on retry ${attempt}`);
+          return;
+        } catch (err) {
+          const code = (err as { statusCode?: number })?.statusCode;
+          // 404/410 = the browser dropped this subscription; forget it.
+          if (code === 404 || code === 410) {
+            await supabase.from("push_subscriptions").delete().eq("id", s.id);
+            return;
+          }
+          // Not a call ring: a retried ring could land after the caller
+          // hung up (the "Missed call" push has no delay) and ring for a
+          // call that is over.
+          const transient =
+            payload.type !== "call" &&
+            (code === undefined || code === 429 || code >= 500);
+          if (!transient || attempt >= 2) {
+            console.warn("[push] send failed:", code ?? (err as Error)?.message);
+            return;
+          }
+          await new Promise((r) => setTimeout(r, attempt === 0 ? 1_000 : 4_000));
         }
       }
     }),

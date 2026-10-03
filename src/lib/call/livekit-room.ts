@@ -262,6 +262,15 @@ export async function connectCallRoom(opts: {
   onLocalMic?: (muted: boolean) => void;
   /** Names of the other participants recording this call right now. */
   onRecorders?: (names: string[]) => void;
+  /**
+   * Whether the person wants their microphone on — the mute button. The
+   * microphone is held to it whenever LiveKit (re)publishes or unmutes it,
+   * so a mute pressed while still connecting, or a track restored after a
+   * reconnect, can never broadcast while the button says "muted".
+   */
+  micWanted?: () => boolean;
+  /** The browser refused the microphone or camera (blocked, in use). */
+  onMediaError?: (err: unknown) => void;
 }): Promise<CallRoomHandle> {
   const {
     url,
@@ -273,6 +282,8 @@ export async function connectCallRoom(opts: {
     onDisconnected,
     onLocalMic,
     onRecorders,
+    micWanted = () => true,
+    onMediaError,
   } = opts;
 
   const room = new Room({
@@ -354,13 +365,19 @@ export async function connectCallRoom(opts: {
    *
    * Restricted only while this participant is sharing: everyone else keeps
    * every other track (microphone, camera) by name, and the list is redone
-   * whenever someone joins or a track of ours comes or goes. Outside a share
-   * everything is open, so a slip here can never cost anyone the audio.
+   * whenever someone joins, a track of ours comes or goes, or the connection
+   * is restored. Outside a share everything is open, so a slip here can
+   * never cost anyone the audio.
+   *
+   * `shareWanted` is the intent, not "is a screen published right now": a
+   * full reconnect unpublishes and republishes every track, and reading the
+   * publications mid-way opened the screen to everyone for the rest of it.
    */
   let screenRestricted = false;
-  const applyScreenPrivacy = (sharingNow: boolean) => {
+  let shareWanted = false;
+  const applyScreenPrivacy = () => {
     const me = room.localParticipant;
-    if (!sharingNow) {
+    if (!shareWanted) {
       if (screenRestricted) me.setTrackSubscriptionPermissions(true);
       screenRestricted = false;
       return;
@@ -493,19 +510,34 @@ export async function connectCallRoom(opts: {
   };
   const reportRecorders = () => onRecorders?.([...recorders.values()]);
 
+  /** Mute the microphone again if it is live while the button says muted. */
+  const holdMicToButton = (pub: { source?: Track.Source; isMuted: boolean }) => {
+    if (pub.source !== Track.Source.Microphone || pub.isMuted || micWanted()) {
+      return false;
+    }
+    void room.localParticipant.setMicrophoneEnabled(false).catch(() => {
+      // Muting must not fail silently: cut the audio at the source.
+      const t = room.localParticipant.getTrackPublication(Track.Source.Microphone)
+        ?.track?.mediaStreamTrack;
+      if (t) t.enabled = false;
+    });
+    return true;
+  };
+
   const onMuteChange = (
-    pub: { kind: Track.Kind; isMuted: boolean },
+    pub: { kind: Track.Kind; source?: Track.Source; isMuted: boolean },
     participant: { isLocal?: boolean },
   ) => {
     emit();
-    if (participant.isLocal && pub.kind === Track.Kind.Audio) {
+    if (participant.isLocal && pub.source === Track.Source.Microphone) {
+      if (holdMicToButton(pub)) return;
       onLocalMic?.(pub.isMuted);
     }
   };
 
   room
     .on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
-      if (screenRestricted) applyScreenPrivacy(true);
+      if (shareWanted) applyScreenPrivacy();
       if (recordingOn && isSupervisor(p)) sendRecording([p.identity]);
       emit();
     })
@@ -542,13 +574,29 @@ export async function connectCallRoom(opts: {
     .on(RoomEvent.TrackUnsubscribed, emit)
     .on(RoomEvent.TrackMuted, onMuteChange)
     .on(RoomEvent.TrackUnmuted, onMuteChange)
-    .on(RoomEvent.LocalTrackPublished, () => {
-      if (screenRestricted) applyScreenPrivacy(localSharing());
+    .on(RoomEvent.LocalTrackPublished, (pub) => {
+      holdMicToButton(pub);
+      if (shareWanted) applyScreenPrivacy();
+      // A republished screen has a new sender: size it again.
+      if (pub.source === Track.Source.ScreenShare) applyScreenQuality();
       emit();
     })
-    .on(RoomEvent.LocalTrackUnpublished, () => {
-      if (screenRestricted) applyScreenPrivacy(localSharing());
+    .on(RoomEvent.LocalTrackUnpublished, (pub) => {
+      // A share that really ended has a stopped track (the browser's "Stop
+      // sharing" bar, or ours); a reconnect republishes the live one.
+      if (
+        pub.source === Track.Source.ScreenShare &&
+        pub.track?.mediaStreamTrack?.readyState !== "live"
+      ) {
+        shareWanted = false;
+        stageWatchers.clear();
+      }
+      applyScreenPrivacy();
       emit();
+    })
+    .on(RoomEvent.Reconnected, () => {
+      if (shareWanted) applyScreenPrivacy();
+      applyScreenQuality();
     })
     .on(RoomEvent.Disconnected, () => {
       clearInterval(stagePing);
@@ -558,13 +606,32 @@ export async function connectCallRoom(opts: {
       onDisconnected();
     });
 
-  await room.connect(url, token);
+  try {
+    await room.connect(url, token);
+  } catch (err) {
+    clearInterval(stagePing);
+    clearInterval(stageExpiry);
+    void room.disconnect().catch(() => undefined);
+    throw err;
+  }
 
   // Publish our media using the lobby (or default) choices so the user is
-  // not live unmuted / on-camera before they opted in.
-  await room.localParticipant.setMicrophoneEnabled(micEnabled);
+  // not live unmuted / on-camera before they opted in — and as the mute
+  // button stands NOW: it may have been pressed while we were connecting.
+  // A refused microphone or camera no longer stops anyone joining: they
+  // join without it and are told why.
+  try {
+    await room.localParticipant.setMicrophoneEnabled(micEnabled && micWanted());
+  } catch (err) {
+    onMediaError?.(err);
+    onLocalMic?.(true);
+  }
   if (video && cameraEnabled) {
-    await room.localParticipant.setCameraEnabled(true);
+    try {
+      await room.localParticipant.setCameraEnabled(true);
+    } catch (err) {
+      onMediaError?.(err);
+    }
   }
 
   // Browsers can hold remote audio until a gesture; joining is one.
@@ -574,12 +641,28 @@ export async function connectCallRoom(opts: {
     /* best-effort */
   }
 
+  // Mute pressed after the microphone was published but before joining
+  // finished (the camera prompt can take seconds): honour it now.
+  const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+  if (micPub) holdMicToButton(micPub);
+
   emit();
 
   return {
     room,
     async setMic(on: boolean) {
-      await room.localParticipant.setMicrophoneEnabled(on);
+      try {
+        await room.localParticipant.setMicrophoneEnabled(on);
+      } catch (err) {
+        if (!on) {
+          // Never leave a microphone live after "mute" was pressed.
+          const t = room.localParticipant.getTrackPublication(Track.Source.Microphone)
+            ?.track?.mediaStreamTrack;
+          if (t) t.enabled = false;
+        }
+        emit();
+        throw err;
+      }
       emit();
     },
     async setCamera(on: boolean) {
@@ -589,21 +672,28 @@ export async function connectCallRoom(opts: {
     async setScreenShare(on: boolean) {
       // Before publishing: the screen's own track is not in the allowed list,
       // so it is restricted from its very first frame.
-      if (on) applyScreenPrivacy(true);
+      if (on) {
+        shareWanted = true;
+        applyScreenPrivacy();
+      }
       try {
         await room.localParticipant.setScreenShareEnabled(
           on,
           screenShareCaptureOptions(),
           screenSharePublishOptions(),
         );
-        applyScreenPrivacy(on);
-        if (!on) stageWatchers.clear();
+        if (!on) {
+          shareWanted = false;
+          stageWatchers.clear();
+        }
+        applyScreenPrivacy();
         applyScreenQuality();
         emit();
         return on;
       } catch {
         // User dismissed the picker, or the browser refused.
-        applyScreenPrivacy(localSharing());
+        shareWanted = localSharing();
+        applyScreenPrivacy();
         emit();
         return false;
       }

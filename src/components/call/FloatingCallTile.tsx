@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Avatar } from "@/components/Avatar";
 import { useCall } from "@/components/call/CallProvider";
 import { useDuration } from "@/components/call/useDuration";
@@ -14,9 +14,16 @@ import {
   ScreenShareIcon,
 } from "@/components/icons";
 
+/** Where this browser last left the tile — a per-viewer convenience. */
+const POS_KEY = "icc.callTilePos";
+const EDGE = 8;
+type Pos = { x: number; y: number };
+
 /**
  * Minimized in-call tile. Floats over every page so the chat stays
  * usable during a call; tapping the video (or expand) goes full screen.
+ * Drag it (by the picture or the name) to put it anywhere; it stays on
+ * screen and is remembered for the next call.
  */
 export function FloatingCallTile() {
   const {
@@ -44,6 +51,87 @@ export function FloatingCallTile() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const groupVideoRef = useRef<HTMLVideoElement>(null);
   const duration = useDuration(connectedAt);
+
+  // ── Dragging ───────────────────────────────────────────────────────
+  const tileRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<Pos | null>(null);
+  const drag = useRef<{ id: number; px: number; py: number; x: number; y: number; moved: boolean } | null>(null);
+  const swallowClick = useRef(false);
+  const clamp = useCallback((x: number, y: number): Pos => {
+    const el = tileRef.current;
+    const w = el?.offsetWidth ?? 256;
+    const h = el?.offsetHeight ?? 210;
+    return {
+      x: Math.round(Math.min(Math.max(EDGE, x), window.innerWidth - w - EDGE)),
+      y: Math.round(Math.min(Math.max(EDGE, y), window.innerHeight - h - EDGE)),
+    };
+  }, []);
+  const hasCall = Boolean(call);
+  useEffect(() => {
+    if (!hasCall) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(POS_KEY) ?? "null") as Pos | null;
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+        setPos(clamp(saved.x, saved.y));
+      }
+    } catch {
+      /* storage unavailable: the default corner */
+    }
+    const onResize = () => setPos((p) => (p ? clamp(p.x, p.y) : p));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [hasCall, clamp]);
+
+  // Press on a handle, then follow the pointer on the whole window until it
+  // is released: a quick flick leaves the tile before the drag starts, and
+  // the tile would never see the rest of it. (Capturing the pointer on the
+  // tile instead would retarget the click, and "expand" would stop working.)
+  const onPointerDown = (e: React.PointerEvent) => {
+    // One drag at a time (a second finger would orphan the first's listeners).
+    if (e.button !== 0 || drag.current) return;
+    swallowClick.current = false;
+    // The call controls stay buttons; the picture (expand) and the name
+    // strip are handles.
+    const btn = (e.target as HTMLElement).closest("button");
+    if (btn && !btn.hasAttribute("data-drag-handle")) return;
+    const r = tileRef.current?.getBoundingClientRect();
+    if (!r) return;
+    drag.current = { id: e.pointerId, px: e.clientX, py: e.clientY, x: r.left, y: r.top, moved: false };
+    const move = (ev: PointerEvent) => {
+      const d = drag.current;
+      if (!d || d.id !== ev.pointerId) return;
+      const dx = ev.clientX - d.px;
+      const dy = ev.clientY - d.py;
+      if (!d.moved) {
+        if (Math.hypot(dx, dy) < 6) return; // still a tap
+        d.moved = true;
+      }
+      ev.preventDefault(); // no text selection while dragging
+      setPos(clamp(d.x + dx, d.y + dy));
+    };
+    const end = (ev: PointerEvent) => {
+      const d = drag.current;
+      if (!d || d.id !== ev.pointerId) return;
+      drag.current = null;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      if (!d.moved) return;
+      swallowClick.current = true; // the click that ends a drag isn't "expand"
+      const box = tileRef.current?.getBoundingClientRect();
+      if (box) {
+        try {
+          localStorage.setItem(POS_KEY, JSON.stringify({ x: box.left, y: box.top }));
+        } catch {
+          /* not remembered, still moved */
+        }
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+
   const isGroup = Boolean(call?.group);
   // Group mini tile shows the first remote participant + a total-count badge.
   const groupFirst = groupPeers[0] ?? null;
@@ -98,13 +186,26 @@ export function FloatingCallTile() {
 
   // Mobile: sit above the chat composer/keyboard, not on top of it.
   return (
-    <div className="fixed right-3 bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] z-[115] w-60 overflow-hidden rounded-xl bg-ink text-white shadow-lift ring-1 ring-white/10 sm:right-4 sm:bottom-4 sm:w-64">
+    <div
+      ref={tileRef}
+      onPointerDown={onPointerDown}
+      onClickCapture={(e) => {
+        if (swallowClick.current) {
+          swallowClick.current = false;
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+      style={pos ? { left: pos.x, top: pos.y, right: "auto", bottom: "auto" } : undefined}
+      className="fixed right-3 bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] z-[115] w-60 touch-none select-none overflow-hidden rounded-xl bg-ink text-white shadow-lift ring-1 ring-white/10 sm:right-4 sm:bottom-4 sm:w-64"
+    >
       <button
         type="button"
+        data-drag-handle
         onClick={() => setView("full")}
-        className="relative block h-36 w-full bg-ink-soft text-left"
+        className="relative block h-36 w-full cursor-grab bg-ink-soft text-left active:cursor-grabbing"
         aria-label="Expand call to full screen"
-        title="Expand"
+        title="Click to expand · drag to move"
       >
         {(recording || recorders.length > 0) && (
           <span
@@ -199,7 +300,7 @@ export function FloatingCallTile() {
       </button>
 
       <div className="flex items-center gap-2 px-3 py-2.5">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 cursor-grab active:cursor-grabbing" title="Drag to move">
           <p className="truncate text-[13px] font-semibold leading-tight">
             {call.peerName}
           </p>

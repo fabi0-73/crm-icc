@@ -78,7 +78,7 @@ import {
   type MessageAttachment,
 } from "@/lib/media/attachments";
 import { renderRichText } from "@/lib/chat/rich-text";
-import { buildDaySections } from "@/lib/chat/grouping";
+import { buildDaySections, HYDRATION_TIME_ZONE } from "@/lib/chat/grouping";
 import type {
   Message,
   Role,
@@ -456,7 +456,17 @@ export function ChatRoom({
     [],
   );
 
-  const sections = useMemo(() => buildDaySections(messages), [messages]);
+  // Days are first grouped in the server's zone so the first paint matches
+  // what the server sent, then in this computer's own zone (see grouping).
+  const [dayZone, setDayZone] = useState<string>(HYDRATION_TIME_ZONE);
+  useEffect(() => {
+    const own = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (own) setDayZone(own);
+  }, []);
+  const sections = useMemo(
+    () => buildDaySections(messages, new Date(), dayZone),
+    [messages, dayZone],
+  );
   // A call starting or ending here is the moment to re-check for Join.
   const lastCallEventId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
