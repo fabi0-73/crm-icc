@@ -241,9 +241,10 @@ export function planGroupVideo(
     } else if (hidden.has(peer.id)) {
       shown = "off"; // scrolled out of view
     } else if (view.layout === "focus") {
-      // Filmstrip thumbnail. A screen there is a 1080p decode for a picture
-      // 112 px wide, so it is paused and the tile says who is sharing.
-      shown = peer.sharing ? "off" : "low";
+      // Filmstrip thumbnail. Screens play there too (asked for by the
+      // team); they arrive small unless someone has them enlarged, and any
+      // beyond the device's decode budget come in `hidden`.
+      shown = "low";
     } else if (view.layout === "screens") {
       shown = peer.sharing ? "high" : "off"; // cameras aren't on the wall
     } else {

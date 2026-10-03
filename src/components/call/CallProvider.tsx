@@ -234,6 +234,10 @@ type CallContextValue = {
   toggleCam: () => void;
   toggleNoise: () => void;
   toggleScreenShare: () => Promise<void>;
+  /** Whether this call offers screen sharing: group calls always (the SFU
+   *  sends screens to admins and managers only); a 1:1 call only when the
+   *  other person is an admin or manager, since only they see screens. */
+  canShareScreen: boolean;
   /** This device is recording the call to a local file. */
   recording: boolean;
   /** False where the browser cannot record (phones). */
@@ -339,6 +343,44 @@ export function CallProvider({
   const [recorders, setRecorders] = useState<string[]>([]);
   const recordingRef = useRef<CallRecording | null>(null);
   const [canRecord, setCanRecord] = useState(false);
+  // 1:1 calls are peer-to-peer, so no server stands between the two
+  // browsers: the sharer's own browser keeps a screen from anyone but an
+  // admin or manager by not offering to share it.
+  const [peerWatchesScreens, setPeerWatchesScreens] = useState<{
+    peerId: string;
+    ok: boolean;
+  } | null>(null);
+  const oneToOnePeer = call && !call.group ? call.peerId : null;
+  useEffect(() => {
+    if (!oneToOnePeer) return;
+    let live = true;
+    void supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", oneToOnePeer)
+      .maybeSingle()
+      .then(({ data }) => {
+        const role = (data as { role?: string } | null)?.role;
+        if (live) {
+          setPeerWatchesScreens({
+            peerId: oneToOnePeer,
+            ok: role === "admin" || role === "manager",
+          });
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [supabase, oneToOnePeer]);
+  const canShareScreen = call?.group
+    ? true
+    : Boolean(
+        oneToOnePeer &&
+          peerWatchesScreens?.peerId === oneToOnePeer &&
+          peerWatchesScreens.ok,
+      );
+  const canShareScreenRef = useRef(canShareScreen);
+  canShareScreenRef.current = canShareScreen;
   // Recording is a supervisor tool: nobody else is offered it.
   useEffect(
     () =>
@@ -2125,6 +2167,10 @@ export function CallProvider({
 
   const startScreenShare = useCallback(async () => {
     if (phaseRef.current !== "in-call") return;
+    if (!canShareScreenRef.current) {
+      showNotice("Only admins and managers can see shared screens.");
+      return;
+    }
     if (!window.isSecureContext && location.hostname !== "localhost") {
       showNotice("Screen share needs HTTPS.");
       return;
@@ -2234,10 +2280,10 @@ export function CallProvider({
 
   // GROUP CALLS: screen share is one call on the LiveKit participant — the SFU
   // republishes it to everyone, so there is no per-peer renegotiation to do.
-  // Any number of people may share at once. Each share is ONE 1080p H.264
-  // layer (screenSharePublishOptions) and every share that plays is fetched
-  // at that size. Screens out of view, in the filmstrip, or beyond what this
-  // device can decode at once (shareDecodeBudget) are paused.
+  // Any number of people may share at once. Each share is ONE H.264 layer,
+  // sent small until an admin or manager enlarges it (see livekit-room).
+  // Screens out of view, or beyond what this device can decode at once
+  // (shareDecodeBudget), are paused.
   const toggleScreenShare = useCallback(async () => {
     if (groupRef.current) {
       const handle = lkRef.current;
@@ -2358,6 +2404,7 @@ export function CallProvider({
       toggleCam,
       toggleNoise,
       toggleScreenShare,
+      canShareScreen,
       recording,
       canRecord,
       toggleRecording,
@@ -2404,6 +2451,7 @@ export function CallProvider({
       toggleCam,
       toggleNoise,
       toggleScreenShare,
+      canShareScreen,
       recording,
       canRecord,
       toggleRecording,

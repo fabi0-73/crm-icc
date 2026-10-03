@@ -35,6 +35,7 @@ export function FloatingCallTile() {
     toggleMic,
     toggleCam,
     toggleScreenShare,
+    canShareScreen,
     recording,
     recorders,
     setView,
@@ -228,7 +229,7 @@ export function FloatingCallTile() {
             <span className="scale-75">{camOff ? <CamOffIcon /> : <CamIcon />}</span>
           </button>
         )}
-        {phase === "in-call" && (
+        {phase === "in-call" && (canShareScreen || sharing) && (
           <button
             type="button"
             onClick={() => void toggleScreenShare()}

@@ -84,13 +84,16 @@ export function CallGrid({
       live = false;
     };
   }, []);
-  // Grid and wall only: on the stage nothing else plays (planGroupVideo).
+  // Every view, the filmstrip under an enlarged screen included: the
+  // enlarged one always plays and counts first, then the others in order
+  // until the device's budget is spent. Shares arrive small (960×540) unless
+  // someone has them enlarged, so a thumbnail is a light decode.
   const paused = useMemo(() => {
     const out = new Set<string>();
-    if (focusId && focusId !== SCREENS) return out;
-    let playing = 0;
+    const staged = focusId && focusId !== SCREENS && focusId !== SELF_FOCUS ? focusId : null;
+    let playing = staged ? 1 : 0;
     for (const peer of sharers) {
-      if (hidden.has(peer.id)) continue;
+      if (peer.id === staged || hidden.has(peer.id)) continue;
       if (playing < maxLive) playing++;
       else out.add(peer.id);
     }
@@ -235,9 +238,7 @@ export function CallGrid({
                 peer={peer}
                 fitClass={remoteFit}
                 compact
-                // The stage already shows the selected screen; any other
-                // screen is paused here (planGroupVideo), so say so.
-                paused={peer.sharing && peer.id !== focusId}
+                paused={paused.has(peer.id)}
                 selected={peer.id === focusId}
                 onSelect={peer.sharing ? () => setFocusId(peer.id) : undefined}
                 onVisibility={reportVisibility}

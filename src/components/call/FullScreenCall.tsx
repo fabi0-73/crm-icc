@@ -41,6 +41,7 @@ export function FullScreenCall() {
     toggleCam,
     toggleNoise,
     toggleScreenShare,
+    canShareScreen,
     recording,
     canRecord,
     toggleRecording,
@@ -325,7 +326,7 @@ export function FullScreenCall() {
             <Users className="size-[22px]" />
           </CallControlButton>
         )}
-        {phase === "in-call" && (
+        {phase === "in-call" && (canShareScreen || sharing) && (
           <CallControlButton
             onClick={() => void toggleScreenShare()}
             active={sharing}
