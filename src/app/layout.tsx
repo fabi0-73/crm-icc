@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { ErrorReporter } from "@/components/ErrorReporter";
 import { themeInitScript } from "@/lib/theme";
 
 const plex = IBM_Plex_Sans({
@@ -49,6 +50,7 @@ export default function RootLayout({
             paints so there's no light flash on load. Kept as the first child of
             <body> (rather than a manual <head>) so Next's metadata is untouched. */}
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <ErrorReporter />
         <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>

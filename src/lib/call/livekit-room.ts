@@ -176,7 +176,17 @@ export function screenShareCaptureOptions(): ScreenShareCaptureOptions {
 }
 
 /**
- * Screen-share publishing: ONE 1080p layer in H.264.
+ * Screen-share publishing: ONE layer in H.264, small until someone
+ * enlarges it.
+ *
+ * Small by default (SCREEN_SMALL: half size, 8 fps, ≤0.6 Mbps): a wall of
+ * screens shows each one a few hundred pixels wide, and every sharer
+ * sending full 1080p at up to 4 Mbps saturated the office upload — the
+ * server logged dozens of upload-loss events in one call, and voices broke
+ * up with it — while weak laptops spent their processor encoding it. When
+ * an admin or manager enlarges a screen, their browser asks that sharer for
+ * full size (see the "screen-stage" messages in connectCallRoom), and the
+ * same single layer is switched up in place.
  *
  * One layer because the ask is a constant 1080p: with simulcast the browser
  * fills the small layers first, so a sharer whose uplink or CPU could not
@@ -193,17 +203,35 @@ export function screenShareCaptureOptions(): ScreenShareCaptureOptions {
  * sheds frames, not pixels (maintain-resolution), so text stays sharp.
  */
 export function screenSharePublishOptions(): TrackPublishOptions {
-  const p = SCREEN_SHARE_PROFILE;
   return {
     videoCodec: "h264",
     simulcast: false,
+    // Starts small; applyScreenQuality sets the size, and raises all three
+    // while anyone has this screen enlarged.
     screenShareEncoding: {
-      maxBitrate: p.sfuMaxBitrate,
-      maxFramerate: p.maxFramerate,
+      maxBitrate: SCREEN_SMALL.maxBitrate,
+      maxFramerate: SCREEN_SMALL.maxFramerate,
     },
     degradationPreference: "maintain-resolution",
   };
 }
+
+/** How a shared screen is sent while nobody has it enlarged. */
+const SCREEN_SMALL = {
+  scaleResolutionDownBy: 2,
+  maxBitrate: 600_000,
+  maxFramerate: 8,
+} as const;
+/** …and while an admin or manager has it enlarged. */
+const SCREEN_FULL = {
+  scaleResolutionDownBy: 1,
+  maxBitrate: SCREEN_SHARE_PROFILE.sfuMaxBitrate,
+  maxFramerate: SCREEN_SHARE_PROFILE.maxFramerate,
+} as const;
+/** "I have your screen enlarged" — repeated while true, forgotten if not. */
+const STAGE_TOPIC = "screen-stage";
+const STAGE_PING_MS = 10_000;
+const STAGE_TTL_MS = 25_000;
 
 /** The only roles that see shared screens. Everyone else (the dialers)
  *  sees no one's screen but their own. */
@@ -260,7 +288,9 @@ export async function connectCallRoom(opts: {
     videoCaptureDefaults: {
       // Match the 1:1 path: a 16:9 source so widescreen tiles don't have to
       // crop into the middle of the picture.
-      resolution: { width: 1280, height: 720, frameRate: 24 },
+      // 540p at 15 fps: camera tiles are small, and encoding 720p at 24 fps
+      // (plus its simulcast layers) is real work for a weak laptop.
+      resolution: { width: 960, height: 540, frameRate: 15 },
       facingMode: "user",
     },
   });
@@ -272,8 +302,31 @@ export async function connectCallRoom(opts: {
 
   /** Ask the SFU for exactly the layer each video is displayed at. The
    *  setters are no-ops when nothing changed, so this runs on every update. */
+  // The screen this viewer has enlarged; its sharer sends full size while
+  // we (or another admin/manager) keep it there.
+  let stageTarget: string | null = null;
+  const sendStage = (id: string, on: boolean) => {
+    const payload = new TextEncoder().encode(JSON.stringify({ on }));
+    void room.localParticipant
+      .publishData(payload, { reliable: true, topic: STAGE_TOPIC, destinationIdentities: [id] })
+      .catch(() => undefined);
+  };
+  const updateStage = (peers: { id: string; sharing: boolean }[]) => {
+    const focus = view.layout === "focus" ? view.focusId : null;
+    const target =
+      focus && peers.some((p) => p.id === focus && p.sharing) ? focus : null;
+    if (target === stageTarget) return;
+    if (stageTarget) sendStage(stageTarget, false);
+    stageTarget = target;
+    if (target) sendStage(target, true);
+  };
+  const stagePing = setInterval(() => {
+    if (stageTarget) sendStage(stageTarget, true);
+  }, STAGE_PING_MS);
+
   const applyVideoPlan = (peers: { id: string; sharing: boolean }[]) => {
     lastPeers = peers;
+    updateStage(peers);
     const plan = planGroupVideo(peers, view);
     room.remoteParticipants.forEach((participant) => {
       const choice = plan.get(participant.identity);
@@ -331,6 +384,40 @@ export async function connectCallRoom(opts: {
   };
   const localSharing = () =>
     Boolean(room.localParticipant.getTrackPublication(Track.Source.ScreenShare));
+
+  // Admins/managers who have our screen enlarged, with when that lapses.
+  const stageWatchers = new Map<string, number>();
+  let appliedSender: RTCRtpSender | null = null;
+  let appliedFull: boolean | null = null;
+  let qualityChain: Promise<void> = Promise.resolve();
+  const applyScreenQuality = () => {
+    qualityChain = qualityChain.then(async () => {
+      const now = Date.now();
+      for (const [id, until] of stageWatchers) {
+        if (until <= now) stageWatchers.delete(id);
+      }
+      const full = stageWatchers.size > 0;
+      const sender =
+        room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track
+          ?.sender ?? null;
+      if (!sender || (sender === appliedSender && full === appliedFull)) return;
+      try {
+        const params = sender.getParameters();
+        const enc = params.encodings?.[0];
+        if (!enc) return;
+        // Only these three: LiveKit's dynacast owns `active` and keeps them.
+        Object.assign(enc, full ? SCREEN_FULL : SCREEN_SMALL);
+        await sender.setParameters(params);
+        appliedSender = sender;
+        appliedFull = full;
+      } catch {
+        /* the share ended meanwhile */
+      }
+    });
+  };
+  const stageExpiry = setInterval(() => {
+    if (stageWatchers.size > 0) applyScreenQuality();
+  }, 5_000);
 
   const emit = () => {
     const participants: LiveKitParticipant[] = [];
@@ -424,9 +511,22 @@ export async function connectCallRoom(opts: {
     })
     .on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
       if (recorders.delete(p.identity)) reportRecorders();
+      if (stageWatchers.delete(p.identity)) applyScreenQuality();
       emit();
     })
     .on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
+      // Only an admin or manager may ask for a full-size screen.
+      if (topic === STAGE_TOPIC && participant && isSupervisor(participant)) {
+        try {
+          const { on } = JSON.parse(new TextDecoder().decode(payload)) as { on?: boolean };
+          if (on) stageWatchers.set(participant.identity, Date.now() + STAGE_TTL_MS);
+          else stageWatchers.delete(participant.identity);
+          applyScreenQuality();
+        } catch {
+          /* not ours */
+        }
+        return;
+      }
       // Only an admin or manager may raise the badge.
       if (topic !== RECORDING_TOPIC || !participant || !isSupervisor(participant)) return;
       try {
@@ -451,6 +551,8 @@ export async function connectCallRoom(opts: {
       emit();
     })
     .on(RoomEvent.Disconnected, () => {
+      clearInterval(stagePing);
+      clearInterval(stageExpiry);
       remoteStreams.clear();
       localCache.clear();
       onDisconnected();
@@ -495,6 +597,8 @@ export async function connectCallRoom(opts: {
           screenSharePublishOptions(),
         );
         applyScreenPrivacy(on);
+        if (!on) stageWatchers.clear();
+        applyScreenQuality();
         emit();
         return on;
       } catch {
@@ -519,6 +623,8 @@ export async function connectCallRoom(opts: {
       applyVideoPlan(lastPeers);
     },
     async disconnect() {
+      clearInterval(stagePing);
+      clearInterval(stageExpiry);
       try {
         await room.disconnect();
       } catch {

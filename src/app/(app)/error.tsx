@@ -1,6 +1,8 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
+import { reportClientError } from "@/lib/client-errors";
 
 /** Without this, a thrown "Permission denied" (hand-typed /admin URL) or
  *  a transient query failure renders Next's raw crash screen. */
@@ -12,6 +14,9 @@ export default function AppError({
   reset: () => void;
 }) {
   const denied = error.message === "Permission denied";
+  useEffect(() => {
+    if (!denied) reportClientError(error, "page-error");
+  }, [error, denied]);
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 bg-stream px-6 text-center">
