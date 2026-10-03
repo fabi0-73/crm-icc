@@ -31,6 +31,7 @@ export async function POST(req: Request) {
   const mb = typeof r.memory === "number" ? ` heap=${Math.round(r.memory / 1e6)}MB` : "";
   console.error(
     `[client-error] ${clip(r.where, 40)} ${clip(r.url, 120)} build=${clip(r.build, 12)}${mb}` +
+      ` [${clip(r.env, 200)}]` +
       ` | ${clip(r.message, 500)} | ${clip(r.ua, 200)} | ${clip(r.stack, 2500)}`,
   );
   return new Response(null, { status: 204 });

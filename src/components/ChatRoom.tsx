@@ -2158,11 +2158,14 @@ function Bubble({
   const attachments = messageAttachments(msg);
   if (attachments.length > 0) {
     const captionBlock = caption ? (
-      <p className="mt-1 whitespace-pre-wrap break-words px-1 text-[14px] text-ink">
+      // A <div>, not a <p>: a body with "- " or "1. " lines renders a real
+      // list, and a list inside a <p> is invalid HTML — the browser closes
+      // the <p> early and the page no longer matches what React drew.
+      <div className="mt-1 whitespace-pre-wrap break-words px-1 text-[14px] text-ink">
         {renderBody(caption, msg, mentionMap, false)}
         {edited}
         {pinMark}
-      </p>
+      </div>
     ) : (
       (edited || pinMark) && (
         <div className="mt-0.5 px-1">
@@ -2220,11 +2223,12 @@ function Bubble({
     <div className={accent}>
       {replyQuote}
       <div className={`px-3.5 py-2 ${shape} ${surface}`}>
-        <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
+        {/* A <div>, not a <p>: see the caption above. */}
+        <div className="whitespace-pre-wrap break-words text-[15px] leading-relaxed">
           {renderBody(msg.body, msg, mentionMap, mine)}
           {edited}
           {pinMark}
-        </p>
+        </div>
       </div>
     </div>
   );
