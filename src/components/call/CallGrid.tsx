@@ -19,6 +19,9 @@ const SCREENS = "__screens__";
  * - with two or more, "All screens" puts them side by side;
  * - clicking any shared screen enlarges it; a filmstrip + Grid control switch
  *   views without stopping anyone's share;
+ * - a screen arrives light (960×540, 5 fps) until the viewer asks for it
+ *   sharp — by clicking it, or "HD" on the stage — because full size costs
+ *   the sharer's laptop ~3× the work; one that opened by itself stays light;
  * - an enlarged screen fills the whole call window, and its view buttons and
  *   filmstrip float over it only while the call controls show (`chrome`);
  * - a device plays only as many screens at once as it can decode
@@ -37,6 +40,14 @@ export function CallGrid({
   const { groupPeers, localStream, camOff, sharing, call, muted, setGroupLayout } =
     useCall();
   const [focusId, setFocusId] = useState<string | null>(null);
+  // The screen this viewer enlarged on purpose (clicked it, or pressed HD):
+  // only that one is sent at full size. One that opened on the stage by
+  // itself stays small — full size costs its sharer's laptop ~3× the work.
+  const [enlargedId, setEnlargedId] = useState<string | null>(null);
+  const pick = useCallback((id: string) => {
+    setFocusId(id);
+    setEnlargedId(id);
+  }, []);
 
   // Shared screens first — in the grid and the filmstrip — so a share is
   // never scrolled out of sight; otherwise the call's own order.
@@ -110,11 +121,12 @@ export function CallGrid({
           ? {
               layout: "focus",
               focusId: focusId === SELF_FOCUS ? null : focusId,
+              enlarged: focusId === enlargedId,
               hidden: hiddenIds,
             }
           : { layout: "grid", hidden: hiddenIds },
     );
-  }, [focusId, hidden, paused, setGroupLayout]);
+  }, [focusId, enlargedId, hidden, paused, setGroupLayout]);
 
   // Views exist for shares: when the one on screen ends, move to another
   // share that is still running, else back to the grid.
@@ -186,7 +198,7 @@ export function CallGrid({
               peer={peer}
               fitClass={remoteFit}
               paused={paused.has(peer.id)}
-              onSelect={() => setFocusId(peer.id)}
+              onSelect={() => pick(peer.id)}
               onVisibility={reportVisibility}
             />
           ))}
@@ -225,6 +237,21 @@ export function CallGrid({
             icon={<LayoutGrid className="size-3.5" />}
           />
           {allScreens}
+          {focusedPeer?.sharing && (
+            <ViewButton
+              onClick={() =>
+                setEnlargedId(focusedPeer.id === enlargedId ? null : focusedPeer.id)
+              }
+              label={focusedPeer.id === enlargedId ? "HD on" : "HD"}
+              title={
+                focusedPeer.id === enlargedId
+                  ? "Sharp, full-size picture. Costs the sharer's laptop more; press to go back to light."
+                  : "Light picture (easy on the sharer's laptop). Press for a sharp, full-size one."
+              }
+              active={focusedPeer.id === enlargedId}
+              icon={<MonitorUp className="size-3.5" />}
+            />
+          )}
           <span className="flex items-center rounded-full bg-black/65 px-3 py-1.5 text-[12px] font-medium text-white">
             {focusingSelf ? "Your screen" : `Screen · ${focusedPeer?.name ?? ""}`}
           </span>
@@ -240,7 +267,7 @@ export function CallGrid({
                 compact
                 paused={paused.has(peer.id)}
                 selected={peer.id === focusId}
-                onSelect={peer.sharing ? () => setFocusId(peer.id) : undefined}
+                onSelect={peer.sharing ? () => pick(peer.id) : undefined}
                 onVisibility={reportVisibility}
               />
             </div>
@@ -288,7 +315,7 @@ export function CallGrid({
             peer={peer}
             fitClass={remoteFit}
             paused={paused.has(peer.id)}
-            onSelect={peer.sharing ? () => setFocusId(peer.id) : undefined}
+            onSelect={peer.sharing ? () => pick(peer.id) : undefined}
             onVisibility={reportVisibility}
           />
         ))}
@@ -310,16 +337,24 @@ function ViewButton({
   onClick,
   label,
   icon,
+  title,
+  active = false,
 }: {
   onClick: () => void;
   label: string;
   icon: React.ReactNode;
+  title?: string;
+  active?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-1.5 rounded-full bg-black/65 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-black/80"
+      title={title}
+      aria-pressed={title ? active : undefined}
+      className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium text-white ${
+        active ? "bg-brand-600 hover:bg-brand-700" : "bg-black/65 hover:bg-black/80"
+      }`}
     >
       {icon}
       {label}

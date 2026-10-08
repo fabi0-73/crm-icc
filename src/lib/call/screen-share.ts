@@ -207,8 +207,10 @@ export type LayerChoice = "off" | "low" | "medium" | "high";
  *  `hidden`: tiles scrolled out of view (a big grid, the filmstrip). */
 export type GroupView =
   | { layout: "grid"; hidden?: string[] }
-  /** focusId null = the viewer is looking at their own share. */
-  | { layout: "focus"; focusId: string | null; hidden?: string[] }
+  /** focusId null = the viewer is looking at their own share.
+   *  `enlarged`: the viewer picked this screen themselves, so its sharer
+   *  sends full size; a screen that opened on the stage by itself does not. */
+  | { layout: "focus"; focusId: string | null; enlarged?: boolean; hidden?: string[] }
   /** Every shared screen side by side (several people sharing at once). */
   | { layout: "screens"; hidden?: string[] }
   /** Minimized: the floating tile shows one participant. */

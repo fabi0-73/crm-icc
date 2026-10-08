@@ -153,18 +153,19 @@ function publicationsOf(p: RemoteParticipant): Pub[] {
 }
 
 /**
- * Screen-share capture: the shared profile, as LiveKit options. "detail"
+ * Screen-share capture: starts small (SCREEN_SMALL), and applyScreenQuality
+ * re-sizes the capture itself while anyone has the screen enlarged. "detail"
  * tells the encoder this is text/UI, not motion.
  */
 export function screenShareCaptureOptions(): ScreenShareCaptureOptions {
-  const p = SCREEN_SHARE_PROFILE;
+  const p = SCREEN_SMALL;
   return {
     ...(capsBreakCapture()
       ? {}
       : {
           resolution: {
-            width: p.maxWidth,
-            height: p.maxHeight,
+            width: p.width,
+            height: p.height,
             frameRate: p.maxFramerate,
           },
         }),
@@ -216,17 +217,30 @@ export function screenSharePublishOptions(): TrackPublishOptions {
   };
 }
 
-/** How a shared screen is sent while nobody has it enlarged. */
+/**
+ * How a shared screen is captured and sent while nobody has it enlarged —
+ * and while an admin or manager has (SCREEN_FULL).
+ *
+ * The size and frame rate are set on the CAPTURE (applyConstraints), not
+ * only on the encoder. Measured 2026-10-08 on the live server: Chrome on
+ * Windows encodes these shares in software (OpenH264), and capturing the
+ * desktop at 1080p/15 fps only for the encoder to halve it and drop every
+ * other frame cost a sharer ~25% of a core; capturing 960×540 at 5 fps costs
+ * ~12%. Enlarged went from ~37% (1080p/15) to ~29% (1080p/10). Weak laptops
+ * pay several times that. Height stays ≥360: below it Chrome refuses the
+ * graphics chip's encoder even where it has one.
+ */
 const SCREEN_SMALL = {
-  scaleResolutionDownBy: 2,
+  width: 960,
+  height: 540,
   maxBitrate: 600_000,
-  maxFramerate: 8,
+  maxFramerate: 5,
 } as const;
-/** …and while an admin or manager has it enlarged. */
 const SCREEN_FULL = {
-  scaleResolutionDownBy: 1,
+  width: SCREEN_SHARE_PROFILE.maxWidth,
+  height: SCREEN_SHARE_PROFILE.maxHeight,
   maxBitrate: SCREEN_SHARE_PROFILE.sfuMaxBitrate,
-  maxFramerate: SCREEN_SHARE_PROFILE.maxFramerate,
+  maxFramerate: 10,
 } as const;
 /** "I have your screen enlarged" — repeated while true, forgotten if not. */
 const STAGE_TOPIC = "screen-stage";
@@ -323,7 +337,12 @@ export async function connectCallRoom(opts: {
       .catch(() => undefined);
   };
   const updateStage = (peers: { id: string; sharing: boolean }[]) => {
-    const focus = view.layout === "focus" ? view.focusId : null;
+    // Full size only for a screen someone deliberately enlarged (not one
+    // that opened by itself) and only while they can see it: a sharer at
+    // full size works ~3× harder, and the auto-opened stage kept the first
+    // sharer there all day.
+    const focus =
+      view.layout === "focus" && view.enlarged && !pageHidden() ? view.focusId : null;
     const target =
       focus && peers.some((p) => p.id === focus && p.sharing) ? focus : null;
     if (target === stageTarget) return;
@@ -335,10 +354,27 @@ export async function connectCallRoom(opts: {
     if (stageTarget) sendStage(stageTarget, true);
   }, STAGE_PING_MS);
 
+  /**
+   * The call's tab is hidden (minimized, another tab, or a window fully on
+   * top — Chrome reports that as hidden too) and not recording: no video is
+   * worth fetching. With every viewer's copy paused, a sharer's browser
+   * stops encoding altogether (dynacast); it resumes within a second when
+   * the tab is shown again. A recording captures this tab, so it keeps all.
+   */
+  const pageHidden = () =>
+    typeof document !== "undefined" && document.visibilityState === "hidden" && !recordingOn;
+  const onVisibility = () => applyVideoPlan(lastPeers);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", onVisibility);
+  }
+
   const applyVideoPlan = (peers: { id: string; sharing: boolean }[]) => {
     lastPeers = peers;
     updateStage(peers);
-    const plan = planGroupVideo(peers, view);
+    const plan = planGroupVideo(
+      peers,
+      pageHidden() ? { layout: "mini", shownId: null } : view,
+    );
     room.remoteParticipants.forEach((participant) => {
       const choice = plan.get(participant.identity);
       if (!choice) return;
@@ -414,21 +450,55 @@ export async function connectCallRoom(opts: {
         if (until <= now) stageWatchers.delete(id);
       }
       const full = stageWatchers.size > 0;
-      const sender =
-        room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track
-          ?.sender ?? null;
-      if (!sender || (sender === appliedSender && full === appliedFull)) return;
+      const screen = room.localParticipant.getTrackPublication(Track.Source.ScreenShare)
+        ?.track;
+      const sender = screen?.sender ?? null;
+      if (!screen || !sender || (sender === appliedSender && full === appliedFull)) return;
+      // LiveKit changes this sender's parameters too (dynacast pauses and
+      // resumes it as viewers come and go) and serializes its own changes
+      // through this lock. Two setParameters in flight at once can fail its
+      // resume — measured: a manager's tab coming back while asking for full
+      // size left the share frozen for everyone — so ours waits its turn.
+      // Private in livekit-client 2.22; without it we just go unlocked.
+      const lock = (screen as unknown as { senderLock?: { lock(): Promise<() => void> } })
+        .senderLock;
+      const release = typeof lock?.lock === "function" ? await lock.lock() : undefined;
+      let held = Boolean(release);
+      const unlock = () => {
+        if (held) release?.();
+        held = false;
+      };
       try {
         const params = sender.getParameters();
         const enc = params.encodings?.[0];
         if (!enc) return;
-        // Only these three: LiveKit's dynacast owns `active` and keeps them.
-        Object.assign(enc, full ? SCREEN_FULL : SCREEN_SMALL);
+        const q = full ? SCREEN_FULL : SCREEN_SMALL;
+        // Only these: LiveKit's dynacast owns `active` and keeps it.
+        enc.maxBitrate = q.maxBitrate;
+        enc.maxFramerate = q.maxFramerate;
+        // Safari 17 captures badly when given a size (capsBreakCapture), so
+        // there the encoder halves it instead.
+        const sizeOnEncoder = capsBreakCapture();
+        enc.scaleResolutionDownBy = sizeOnEncoder && !full ? 2 : 1;
         await sender.setParameters(params);
+        unlock();
+        await screen.mediaStreamTrack
+          .applyConstraints(
+            sizeOnEncoder
+              ? { frameRate: { max: q.maxFramerate } }
+              : {
+                  width: { max: q.width },
+                  height: { max: q.height },
+                  frameRate: { max: q.maxFramerate },
+                },
+          )
+          .catch(() => undefined);
         appliedSender = sender;
         appliedFull = full;
       } catch {
         /* the share ended meanwhile */
+      } finally {
+        unlock();
       }
     });
   };
@@ -599,6 +669,7 @@ export async function connectCallRoom(opts: {
       applyScreenQuality();
     })
     .on(RoomEvent.Disconnected, () => {
+      document.removeEventListener("visibilitychange", onVisibility);
       clearInterval(stagePing);
       clearInterval(stageExpiry);
       remoteStreams.clear();
@@ -609,6 +680,7 @@ export async function connectCallRoom(opts: {
   try {
     await room.connect(url, token);
   } catch (err) {
+    document.removeEventListener("visibilitychange", onVisibility);
     clearInterval(stagePing);
     clearInterval(stageExpiry);
     void room.disconnect().catch(() => undefined);
@@ -705,6 +777,7 @@ export async function connectCallRoom(opts: {
     setRecording(on: boolean) {
       recordingOn = on;
       sendRecording();
+      applyVideoPlan(lastPeers);
     },
     setView(next: GroupView) {
       view = next;
@@ -713,6 +786,7 @@ export async function connectCallRoom(opts: {
       applyVideoPlan(lastPeers);
     },
     async disconnect() {
+      document.removeEventListener("visibilitychange", onVisibility);
       clearInterval(stagePing);
       clearInterval(stageExpiry);
       try {
