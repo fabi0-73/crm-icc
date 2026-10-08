@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Avatar } from "@/components/Avatar";
 import { useCall } from "@/components/call/CallProvider";
 import { useDuration } from "@/components/call/useDuration";
+import { SharingPanel } from "@/components/call/SharingPanel";
 import {
   CamIcon,
   CamOffIcon,
@@ -169,6 +170,8 @@ export function FloatingCallTile() {
     };
   }, [remoteStream]);
 
+  // While sharing, the self-view is a SharingPanel (no <video>): it mounts
+  // again when the share ends, so re-attach then.
   useEffect(() => {
     const el = localVideoRef.current;
     if (el && localStream) {
@@ -178,7 +181,7 @@ export function FloatingCallTile() {
     return () => {
       if (el) el.srcObject = null;
     };
-  }, [localStream]);
+  }, [localStream, sharing]);
 
   if (!call) return null;
   const subtitle =
@@ -252,16 +255,23 @@ export function FloatingCallTile() {
               muted
               className={`h-full w-full bg-ink ${fitClass}`}
             />
-            <video
-              ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-              // Mirror the self-view camera (never a shared screen).
-              className={`absolute bottom-2 right-2 h-16 w-12 rounded-lg border border-white/25 ${
-                sharing ? "object-contain bg-ink" : "object-cover -scale-x-100"
-              } ${camOff && !sharing ? "opacity-30" : ""}`}
-            />
+            {sharing ? (
+              // Never a live preview of the screen being shared: see SharingPanel.
+              <div className="absolute bottom-2 right-2 h-16 w-12 overflow-hidden rounded-lg border border-white/25">
+                <SharingPanel size="sm" />
+              </div>
+            ) : (
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                // Mirror the self-view camera.
+                className={`absolute bottom-2 right-2 h-16 w-12 rounded-lg border border-white/25 object-cover -scale-x-100 ${
+                  camOff ? "opacity-30" : ""
+                }`}
+              />
+            )}
           </>
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-2">

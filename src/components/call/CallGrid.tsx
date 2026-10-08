@@ -6,6 +6,7 @@ import { shareDecodeBudget } from "@/lib/call/screen-share";
 import { Avatar } from "@/components/Avatar";
 import { useCall, type GroupParticipant } from "@/components/call/CallProvider";
 import { MicOffIcon } from "@/components/icons";
+import { SharingPanel } from "@/components/call/SharingPanel";
 
 const SELF_FOCUS = "__self__";
 /** Focus value for the wall of every shared screen. */
@@ -281,7 +282,6 @@ export function CallGrid({
               muted={muted}
               compact
               selected={focusingSelf}
-              onSelect={sharing ? () => setFocusId(SELF_FOCUS) : undefined}
             />
           </div>
         </div>
@@ -325,7 +325,6 @@ export function CallGrid({
           sharing={sharing}
           video={Boolean(call?.video)}
           muted={muted}
-          onSelect={sharing ? () => setFocusId(SELF_FOCUS) : undefined}
         />
       </div>
     </div>
@@ -573,7 +572,9 @@ function SelfTile({
 }) {
   const { selfId } = useCall();
   const videoRef = useRef<HTMLVideoElement>(null);
-  const showVideo = (video && !camOff) || sharing;
+  // While sharing, `stream` is the screen itself: never shown here (see
+  // SharingPanel), and the <video> is unmounted, so nothing decodes or paints.
+  const showVideo = video && !camOff && !sharing;
 
   useEffect(() => {
     const el = videoRef.current;
@@ -584,7 +585,7 @@ function SelfTile({
     return () => {
       if (el) el.srcObject = null;
     };
-  }, [stream]);
+  }, [stream, sharing]);
 
   return (
     <div
@@ -606,20 +607,23 @@ function SelfTile({
             }
           : undefined
       }
-      title={sharing && onSelect && !compact ? "Expand screen share" : undefined}
     >
-      {/* Muted: never play our own audio back to us. Mirror the camera the way
-          every video app does, but never a shared screen (its text would flip). */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className={`h-full w-full bg-ink object-contain ${
-          sharing ? "" : "-scale-x-100"
-        } ${showVideo ? "" : "opacity-0"}`}
-      />
-      {!showVideo && (
+      {sharing ? (
+        <SharingPanel size={compact ? "sm" : stage ? "lg" : "md"} />
+      ) : (
+        // Muted: never play our own audio back to us. Mirror the camera the
+        // way every video app does.
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`h-full w-full bg-ink object-contain -scale-x-100 ${
+            showVideo ? "" : "opacity-0"
+          }`}
+        />
+      )}
+      {!showVideo && !sharing && (
         <div className="absolute inset-0 flex items-center justify-center">
           <Avatar name="You" size={compact ? "sm" : "lg"} userId={selfId} />
         </div>

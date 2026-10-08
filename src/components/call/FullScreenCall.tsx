@@ -6,6 +6,7 @@ import { useCall } from "@/components/call/CallProvider";
 import { CallGrid } from "@/components/call/CallGrid";
 import { CallParticipants } from "@/components/call/CallParticipants";
 import { useDuration } from "@/components/call/useDuration";
+import { SharingPanel } from "@/components/call/SharingPanel";
 import {
   CamIcon,
   CamOffIcon,
@@ -137,6 +138,8 @@ export function FullScreenCall() {
     };
   }, [remoteStream]);
 
+  // While sharing, the self-view is a SharingPanel (no <video>): it mounts
+  // again when the share ends, so re-attach then.
   useEffect(() => {
     const el = localVideoRef.current;
     if (el && localStream) {
@@ -146,7 +149,7 @@ export function FullScreenCall() {
     return () => {
       if (el) el.srcObject = null;
     };
-  }, [localStream]);
+  }, [localStream, sharing]);
 
   if (!call) return null;
   const subtitle =
@@ -245,19 +248,24 @@ export function FullScreenCall() {
               muted
               className={`h-full w-full bg-ink ${fitClass}`}
             />
-            <video
-              ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-              // Mirror your own camera preview, the way every video app
-              // does, so it reads like a mirror instead of "reversed". A
-              // shared screen must never be flipped (its text would go
-              // backwards), so only the camera is mirrored.
-              className={`absolute bottom-4 right-4 h-24 w-40 rounded-xl border border-white/20 bg-ink object-contain ${
-                sharing ? "" : "-scale-x-100"
-              } ${camOff && !sharing ? "opacity-30" : ""}`}
-            />
+            {sharing ? (
+              // Never a live preview of the screen being shared: see SharingPanel.
+              <div className="absolute bottom-4 right-4 h-24 w-40 overflow-hidden rounded-xl border border-white/20">
+                <SharingPanel size="sm" />
+              </div>
+            ) : (
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                // Mirror your own camera preview, the way every video app
+                // does, so it reads like a mirror instead of "reversed".
+                className={`absolute bottom-4 right-4 h-24 w-40 rounded-xl border border-white/20 bg-ink object-contain -scale-x-100 ${
+                  camOff ? "opacity-30" : ""
+                }`}
+              />
+            )}
             {muted && (
               <span
                 className="absolute bottom-4 left-4 flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white"
