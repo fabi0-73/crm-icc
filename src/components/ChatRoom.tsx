@@ -102,12 +102,14 @@ const COUNTER_VISIBLE_FROM = 800;
  * is impossible to keep complete (.exe .msi .bat .cmd .scr .js .jar .ps1 …),
  * and anything unexpected should be refused rather than waved through.
  */
+// No .svg: an SVG can carry script, and files are served from the CRM's
+// own address, so opening one would run it as the viewer.
 const ALLOWED_FILE_EXT = new Set([
   // documents
   "pdf", "doc", "docx", "xls", "xlsx", "csv", "ppt", "pptx",
   "txt", "rtf", "odt", "ods", "odp",
   // images
-  "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "svg", "avif",
+  "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "avif",
   // audio / video
   "mp3", "wav", "m4a", "ogg", "mp4", "mov", "webm", "avi", "mkv",
   // archives

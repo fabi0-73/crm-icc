@@ -166,7 +166,13 @@ function toCsv(headers: string[], rows: Cell[][]): string {
     }
     return String(v);
   };
-  const quote = (v: Cell) => `"${text(v).replace(/"/g, '""')}"`;
+  // Quoting does not stop Excel evaluating a cell that starts with = + - @
+  // (a client name like =HYPERLINK(...) would run): such a value gets a
+  // leading apostrophe, which Excel shows as plain text. A phone number's
+  // leading "+" followed by digits is left alone.
+  const safe = (s: string) =>
+    /^[=+\-@\t\r]/.test(s) && !/^\+[\d\s()-]+$/.test(s) ? `'${s}` : s;
+  const quote = (v: Cell) => `"${safe(text(v)).replace(/"/g, '""')}"`;
   return (
     "\uFEFF" +
     [headers, ...rows].map((r) => r.map(quote).join(",")).join("\r\n") +

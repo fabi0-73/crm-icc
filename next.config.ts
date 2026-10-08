@@ -18,6 +18,31 @@ const nextConfig: NextConfig = {
   // web-push relies on Node built-ins and dynamic requires — keep it external
   // to the server bundle so the instrumentation sender loads it cleanly.
   serverExternalPackages: ["web-push"],
+  // Basic browser protections on every page. No full script CSP yet (Next's
+  // inline scripts would need nonces); frame-ancestors alone stops another
+  // site from framing the CRM to trick clicks (clickjacking).
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Strict-Transport-Security", value: "max-age=31536000" },
+          {
+            key: "Permissions-Policy",
+            value: "camera=(self), microphone=(self), display-capture=(self), geolocation=()",
+          },
+        ],
+      },
+    ];
+  },
+  poweredByHeader: false,
+  // The app never uses next/image; switching the optimizer off closes
+  // /_next/image, which had a remote-code-execution bug (Next < 15.5.24).
+  images: { unoptimized: true },
   // Keep soft-navigated pages warm so tab switches feel instant.
   experimental: {
     staleTimes: {

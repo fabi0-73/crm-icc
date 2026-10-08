@@ -13,8 +13,8 @@ export type AvatarUploadResult = { url?: string; error?: string };
  * old images are left in place (cheap, and avoids a delete race).
  */
 export async function uploadGroupAvatar(file: File): Promise<AvatarUploadResult> {
-  if (!file.type.startsWith("image/")) {
-    return { error: "Choose an image file." };
+  if (!isAvatarImage(file)) {
+    return { error: "Choose a PNG, JPEG, GIF or WebP image." };
   }
   if (file.size > MAX_AVATAR_BYTES) {
     return { error: "Image must be 2 MB or smaller." };
@@ -36,9 +36,15 @@ export async function uploadGroupAvatar(file: File): Promise<AvatarUploadResult>
   return { url: data.publicUrl };
 }
 
+/** The types the avatars bucket accepts (0026): never SVG, which can carry
+ *  script and is served from the CRM's own address. */
+function isAvatarImage(file: File): boolean {
+  return ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type);
+}
+
 /** Shared validation so the picker can reject before any upload starts. */
 export function userAvatarError(file: File): string | null {
-  if (!file.type.startsWith("image/")) return "Choose an image file.";
+  if (!isAvatarImage(file)) return "Choose a PNG, JPEG, GIF or WebP image.";
   if (file.size > MAX_AVATAR_BYTES) return "Image must be 2 MB or smaller.";
   return null;
 }
@@ -88,8 +94,8 @@ export async function uploadGroupBackground(
   roomId: string,
   file: File,
 ): Promise<AvatarUploadResult> {
-  if (!file.type.startsWith("image/")) {
-    return { error: "Choose an image file." };
+  if (!isAvatarImage(file)) {
+    return { error: "Choose a PNG, JPEG, GIF or WebP image." };
   }
   if (file.size > MAX_BACKGROUND_BYTES) {
     return { error: "Image must be 5 MB or smaller." };

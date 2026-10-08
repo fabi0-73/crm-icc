@@ -328,6 +328,17 @@ async function onCallSignal(
 ): Promise<void> {
   if (!row || !row.to_user || !row.call_id) return;
   const p = row.payload ?? {};
+  // The caller's name comes from their profile, never from the signal: the
+  // payload is written by the caller's browser, so trusting p.fromName let
+  // anyone who shares a room put any text on a colleague's lock screen.
+  const callerName = async () => {
+    const { data } = await supabase
+      .from("profiles")
+      .select("full_name, public_name")
+      .eq("id", row.from_user)
+      .maybeSingle();
+    return data ? publicDisplayName(data as { full_name: string; public_name: string | null }) : "Someone";
+  };
 
   // The caller gave up or cancelled. A closed device has nothing running to
   // clear the persistent "Incoming call" alert, so replace it (same tag) with
@@ -336,7 +347,7 @@ async function onCallSignal(
   // people who already talked doesn't invent a missed call.
   if (row.kind === "hangup") {
     if (!wasNotified(`${row.call_id}:${row.to_user}`)) return;
-    const caller = p.fromName || "Someone";
+    const caller = await callerName();
     await sendToUsers(supabase, [row.to_user], {
       title: "Missed call",
       body: `${caller} called`,
@@ -351,7 +362,7 @@ async function onCallSignal(
   if (p.joining) return; // a presence announcement, not a fresh ring
   if (alreadyNotified(`${row.call_id}:${row.to_user}`)) return;
 
-  const caller = p.fromName || "Someone";
+  const caller = await callerName();
   const body = p.group ? `${caller} started a group call` : `${caller} is calling`;
 
   await sendToUsers(supabase, [row.to_user], {

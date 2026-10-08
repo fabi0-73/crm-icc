@@ -1288,6 +1288,18 @@ export function CallProvider({
         return;
       }
 
+      // Everything after an invite belongs to the call we are in, and only
+      // the person we are in it with may send it. Anyone who shares a room
+      // with us can insert a signal addressed to us: without this, a forged
+      // "answer" racing the real one could connect our microphone to them.
+      if (
+        !callIdRef.current ||
+        row.call_id !== callIdRef.current ||
+        row.from_user !== peerIdRef.current
+      ) {
+        return;
+      }
+
       if (row.kind === "decline" || row.kind === "hangup") {
         if (!callIdRef.current || callIdRef.current === row.call_id) {
           if (phaseRef.current === "dialing") {
