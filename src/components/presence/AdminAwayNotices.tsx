@@ -2,7 +2,7 @@
 
 /**
  * Admin-only. Lists dialers whose CRM session has had no mouse or
- * keyboard input for 3 minutes, and raises a desktop notification when
+ * keyboard input for 5 minutes, and raises a desktop notification when
  * someone newly goes away. Other roles never mount this.
  */
 

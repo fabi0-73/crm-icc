@@ -3,9 +3,9 @@
 --        only admins can see it
 -- ============================================================
 -- An assistant (a dialer) reports whether their CRM session has gone
--- 3 minutes without mouse or keyboard input. Admins are the only role
+-- 5 minutes without mouse or keyboard input. Admins are the only role
 -- that can read those rows, so the dialer, managers, and agents never
--- see the notice. The client decides when the 3 minutes have passed;
+-- see the notice. The client decides when the 5 minutes have passed;
 -- this table only stores the transition.
 
 create table if not exists public.dialer_activity (
