@@ -178,6 +178,8 @@ type CallContextValue = {
   camOff: boolean;
   noiseOff: boolean;
   sharing: boolean;
+  /** Signed-in role. Idle notices inside a screenshare are supervisors only. */
+  userRole?: Role;
   statusText: string;
   signalReady: boolean;
   localStream: MediaStream | null;
@@ -2431,6 +2433,7 @@ export function CallProvider({
       camOff,
       noiseOff,
       sharing,
+      userRole,
       statusText,
       signalReady,
       localStream,
@@ -2478,6 +2481,7 @@ export function CallProvider({
       camOff,
       noiseOff,
       sharing,
+      userRole,
       statusText,
       signalReady,
       localStream,

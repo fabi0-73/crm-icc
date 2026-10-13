@@ -21,7 +21,6 @@ import {
 } from "@supabase/supabase-js";
 import webpush from "web-push";
 import { publicDisplayName } from "@/lib/display-name";
-import { DIALER_IDLE_LABEL } from "@/lib/dialer-idle";
 
 type MessageRow = {
   id: string;
@@ -42,11 +41,6 @@ type SignalRow = {
     group?: boolean;
     joining?: boolean;
   } | null;
-};
-
-type ActivityRow = {
-  user_id: string;
-  away: boolean;
 };
 
 type PushPayload = {
@@ -112,7 +106,7 @@ export function startPushSender(): void {
         auth: { persistSession: false, autoRefreshToken: false },
       }),
     topic: "push-sender",
-    onSubscribed: "sender subscribed to messages + call_signals + dialer_activity",
+    onSubscribed: "sender subscribed to messages + call_signals",
     attach: (channel, live) =>
       channel
         .on(
@@ -136,16 +130,6 @@ export function startPushSender(): void {
               alreadyNotified,
               wasNotified,
             ).catch((e) => console.warn("[push] call handler failed:", e?.message ?? e));
-          },
-        )
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "dialer_activity" },
-          (payload) => {
-            if (!live()) return;
-            void onDialerActivity(supabase, payload.new as ActivityRow).catch((e) =>
-              console.warn("[push] idle handler failed:", e?.message ?? e),
-            );
           },
         ),
   });
@@ -387,40 +371,6 @@ async function onCallSignal(
     url: `/rooms/${row.room_id}`,
     tag: "call",
     type: "call",
-  });
-}
-
-/** Dialer went idle or came back. Admins only — never the dialer or other staff. */
-async function onDialerActivity(
-  supabase: SupabaseClient,
-  row: ActivityRow,
-): Promise<void> {
-  if (!row?.user_id) return;
-  const { data: admins } = await supabase
-    .from("profiles")
-    .select("id")
-    .eq("role", "admin")
-    .eq("is_active", true);
-  const ids = (admins ?? [])
-    .map((a: { id: string }) => a.id)
-    .filter((id: string) => id && id !== row.user_id);
-  if (ids.length === 0) return;
-
-  const { data: person } = await supabase
-    .from("profiles")
-    .select("full_name")
-    .eq("id", row.user_id)
-    .maybeSingle();
-  const name = (person as { full_name?: string } | null)?.full_name?.trim() || "A dialer";
-
-  await sendToUsers(supabase, ids, {
-    title: row.away ? "Dialer inactive" : "Dialer active",
-    body: row.away
-      ? `${name} has had no mouse or keyboard activity for ${DIALER_IDLE_LABEL}`
-      : `${name} is back at their computer`,
-    url: "/rooms",
-    tag: `idle-${row.user_id}`,
-    type: "message",
   });
 }
 

@@ -1,78 +1,100 @@
 "use client";
 
 /**
- * Silent for the person using it. An assistant's open CRM tab watches
- * mouse and keyboard input; after DIALER_IDLE_MS with none, it reports
- * away. Coming back reports active. Nothing is rendered — admins are
- * the only role that can read the row.
- *
- * Input in any tab counts (a shared timestamp), so working in a second
- * chat tab does not look like being away.
+ * Silent for the person using it. While a screenshare is up in their
+ * call, this tab watches mouse and keyboard input and, after
+ * DIALER_IDLE_MS with none, reports them away. Leaving that share
+ * clears it. People outside the screenshare are never reported.
  */
 
 import { useEffect, useMemo, useRef } from "react";
+import { useCall } from "@/components/call/CallProvider";
 import { createClient } from "@/lib/supabase/client";
 import { DIALER_IDLE_MS } from "@/lib/dialer-idle";
 
-const STORAGE_KEY = "icc-dialer-last-input";
+const INPUT_KEY = "icc-dialer-last-input";
+const SHARE_KEY = "icc-screenshare-alive";
 const CHECK_MS = 10_000;
 
 export function DialerIdleReporter() {
+  const { sharing, groupPeers, call, phase, remoteHasVideo } = useCall();
+  const inScreenshare =
+    phase === "in-call" &&
+    (sharing ||
+      groupPeers.some((peer) => peer.sharing) ||
+      Boolean(call && !call.group && !call.video && remoteHasVideo));
   const supabase = useMemo(() => createClient(), []);
-  const lastRef = useRef(Date.now());
-  const awayRef = useRef(false);
+  const tabId = useRef(
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : String(Math.random()),
+  );
 
   useEffect(() => {
+    if (!inScreenshare) return;
     let cancelled = false;
+    const away = { current: false };
+    const last = { current: Date.now() };
 
-    const report = async (away: boolean) => {
-      if (cancelled || awayRef.current === away) return;
-      const { error } = await supabase.rpc("report_dialer_activity", {
-        p_away: away,
-      });
+    const beat = () => {
+      try {
+        localStorage.setItem(
+          SHARE_KEY,
+          JSON.stringify({ tab: tabId.current, t: Date.now() }),
+        );
+      } catch {
+        /* private mode */
+      }
+    };
+    const clearBeat = () => {
+      try {
+        const raw = localStorage.getItem(SHARE_KEY);
+        const cur = raw ? (JSON.parse(raw) as { tab?: string }) : null;
+        if (cur?.tab === tabId.current) localStorage.removeItem(SHARE_KEY);
+      } catch {
+        /* private mode */
+      }
+    };
+
+    const report = async (next: boolean) => {
+      if (cancelled || away.current === next) return;
+      const { error } = await supabase.rpc("report_dialer_activity", { p_away: next });
       if (cancelled) return;
       if (error) {
         console.warn("dialer activity", error.message);
         return;
       }
-      awayRef.current = away;
+      away.current = next;
     };
 
-    const noteInput = () => {
-      const now = Date.now();
-      lastRef.current = now;
-      try {
-        localStorage.setItem(STORAGE_KEY, String(now));
-      } catch {
-        /* private mode */
-      }
-      if (awayRef.current) void report(false);
-    };
+    beat();
+    try {
+      localStorage.setItem(INPUT_KEY, String(Date.now()));
+    } catch {
+      /* private mode */
+    }
 
     let lastWrite = 0;
     const onInput = () => {
       const now = Date.now();
-      lastRef.current = now;
+      last.current = now;
       if (now - lastWrite > 2000) {
         lastWrite = now;
         try {
-          localStorage.setItem(STORAGE_KEY, String(now));
+          localStorage.setItem(INPUT_KEY, String(now));
         } catch {
           /* private mode */
         }
       }
-      if (awayRef.current) void report(false);
+      if (away.current) void report(false);
     };
 
     const onStorage = (e: StorageEvent) => {
-      if (e.key !== STORAGE_KEY || !e.newValue) return;
+      if (e.key !== INPUT_KEY || !e.newValue) return;
       const t = Number(e.newValue);
-      if (Number.isFinite(t) && t > lastRef.current) lastRef.current = t;
-      if (awayRef.current) void report(false);
+      if (Number.isFinite(t) && t > last.current) last.current = t;
+      if (away.current) void report(false);
     };
-
-    noteInput();
-    void report(false);
 
     const opts: AddEventListenerOptions = { capture: true, passive: true };
     const events = ["pointerdown", "keydown", "wheel", "touchstart", "mousemove"] as const;
@@ -80,14 +102,15 @@ export function DialerIdleReporter() {
     window.addEventListener("storage", onStorage);
 
     const timer = window.setInterval(() => {
+      beat();
       let stored = 0;
       try {
-        stored = Number(localStorage.getItem(STORAGE_KEY) || 0);
+        stored = Number(localStorage.getItem(INPUT_KEY) || 0);
       } catch {
         stored = 0;
       }
-      const last = Math.max(lastRef.current, Number.isFinite(stored) ? stored : 0);
-      if (Date.now() - last >= DIALER_IDLE_MS) void report(true);
+      const seen = Math.max(last.current, Number.isFinite(stored) ? stored : 0);
+      if (Date.now() - seen >= DIALER_IDLE_MS) void report(true);
     }, CHECK_MS);
 
     return () => {
@@ -95,8 +118,12 @@ export function DialerIdleReporter() {
       clearInterval(timer);
       for (const name of events) window.removeEventListener(name, onInput, opts);
       window.removeEventListener("storage", onStorage);
+      clearBeat();
+      if (away.current) {
+        void supabase.rpc("report_dialer_activity", { p_away: false });
+      }
     };
-  }, [supabase]);
+  }, [inScreenshare, supabase]);
 
   return null;
 }

@@ -7,6 +7,7 @@ import { CallGrid } from "@/components/call/CallGrid";
 import { CallParticipants } from "@/components/call/CallParticipants";
 import { useDuration } from "@/components/call/useDuration";
 import { SharingPanel } from "@/components/call/SharingPanel";
+import { ScreenshareIdleNotices } from "@/components/presence/ScreenshareIdleNotices";
 import {
   CamIcon,
   CamOffIcon,
@@ -177,6 +178,7 @@ export function FullScreenCall() {
       {showPeople && call.group && (
         <CallParticipants onClose={() => setShowPeople(false)} />
       )}
+      <ScreenshareIdleNotices />
       {/* The page draws under the notch (viewport-fit=cover), so the
           minimize button needs the inset or it sits under the status bar. */}
       <div

@@ -5,6 +5,7 @@ import { Avatar } from "@/components/Avatar";
 import { useCall } from "@/components/call/CallProvider";
 import { useDuration } from "@/components/call/useDuration";
 import { SharingPanel } from "@/components/call/SharingPanel";
+import { ScreenshareIdleNotices } from "@/components/presence/ScreenshareIdleNotices";
 import {
   CamIcon,
   CamOffIcon,
@@ -202,6 +203,7 @@ export function FloatingCallTile() {
       style={pos ? { left: pos.x, top: pos.y, right: "auto", bottom: "auto" } : undefined}
       className="fixed right-3 bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] z-[115] w-60 touch-none select-none overflow-hidden rounded-xl bg-ink text-white shadow-lift ring-1 ring-white/10 sm:right-4 sm:bottom-4 sm:w-64"
     >
+      <ScreenshareIdleNotices compact />
       <button
         type="button"
         data-drag-handle
