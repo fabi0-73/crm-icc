@@ -26,7 +26,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
+  // No maximumScale: people must be able to pinch-zoom (it also blocked
+  // zoom in the store apps' webviews). iOS's zoom-on-focus is handled by
+  // giving form fields 16px text there instead (globals.css).
   // Draw under the notch/home indicator; safe-area insets pad it back.
   viewportFit: "cover",
   // Android: shrink the layout viewport when the keyboard opens.

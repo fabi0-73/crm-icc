@@ -206,6 +206,17 @@ html {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* iOS zooms the page into any field with text under 16px when it is
+   focused. Pinch-zoom is allowed (no maximum-scale), so stop that jump by
+   giving fields 16px text on iOS only (-webkit-touch-callout is iOS-only). */
+@supports (-webkit-touch-callout: none) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
 body {
   @apply bg-mist text-ink antialiased font-sans;
   /* Plex has real tabular figures; counts and times should line up. */
