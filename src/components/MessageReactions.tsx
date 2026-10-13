@@ -2,9 +2,9 @@
 
 import type { Message } from "@/lib/types";
 
-/** The reactions on offer, in picker order. toggle_reaction (0027) accepts
+/** The reactions on offer, in picker order. toggle_reaction (0027, 0030) accepts
  *  exactly these strings. */
-export const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "✅"] as const;
+export const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "✅", "🌶️"] as const;
 
 /**
  * The chips under a message: each emoji with its count. Tapping one adds

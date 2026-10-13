@@ -96,12 +96,12 @@ export function MessageActions({
         <div
           role="menu"
           className={`absolute bottom-full z-30 mb-1 overflow-hidden rounded-xl border border-line/80 bg-paper py-1 shadow-lg ${
-            canReact ? "w-[13.5rem]" : "w-40"
+            canReact ? "w-44" : "w-40"
           } ${align === "right" ? "right-0" : "left-0"}`}
         >
           {canReact && onReact && (
             <div
-              className={`grid grid-cols-4 gap-0.5 px-1.5 pb-1 pt-0.5 ${
+              className={`grid grid-cols-3 gap-0.5 px-1.5 pb-1 pt-0.5 ${
                 canReply || canEdit || canPin || canDelete ? "mb-1 border-b border-line" : ""
               }`}
               aria-label="React"
