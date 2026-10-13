@@ -3,6 +3,8 @@ import { headers } from "next/headers";
 import { SidebarShell } from "@/components/sidebar/SidebarShell";
 import { CallProvider } from "@/components/call/CallProvider";
 import { PresenceProvider } from "@/components/presence/PresenceProvider";
+import { DialerIdleReporter } from "@/components/presence/DialerIdleReporter";
+import { AdminAwayNotices } from "@/components/presence/AdminAwayNotices";
 import { ProfileAvatarsProvider } from "@/components/presence/ProfileAvatarsProvider";
 import { KeyboardInsets } from "@/components/mobile/KeyboardInsets";
 import { PushRegistrar } from "@/components/PushRegistrar";
@@ -53,6 +55,8 @@ export default async function AppLayout({
           <PushRegistrar />
           <NotificationPrompt />
           <UpdateWatcher />
+          {profile.role === "assistant" && <DialerIdleReporter />}
+          {profile.role === "admin" && <AdminAwayNotices />}
           <SidebarShell
             profile={profile}
             initialRooms={(data ?? []) as MyRoom[]}
