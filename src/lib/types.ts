@@ -100,6 +100,8 @@ export type Message = {
   /** Set while the message is pinned (admins/managers only). */
   pinned_at: string | null;
   pinned_by: string | null;
+  /** Emoji reactions: emoji → ids of the people who reacted (0027). */
+  reactions?: Record<string, string[]> | null;
 };
 
 export type AuditLog = {

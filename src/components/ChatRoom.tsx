@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronLeft,
   CircleUserRound,
+  ClipboardList,
   FileText,
   Hash,
   Info,
@@ -72,6 +73,9 @@ import { GroupDetails } from "@/components/GroupDetails";
 import { MediaHistory } from "@/components/MediaHistory";
 import { PostCounts } from "@/components/PostCounts";
 import { AppointmentForm } from "@/components/AppointmentForm";
+import { ReportForm } from "@/components/ReportForm";
+import { ReportTotals } from "@/components/ReportTotals";
+import { MessageReactions } from "@/components/MessageReactions";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import {
   messageAttachments,
@@ -185,6 +189,7 @@ export function ChatRoom({
   readOnly = false,
   ownMessagesOnly = false,
   appointmentForm = false,
+  reportForm = false,
 }: {
   roomId: string;
   roomName: string;
@@ -218,6 +223,8 @@ export function ChatRoom({
   /** rooms.appointment_form: the composer offers "New appointment", whose
    *  entries feed the Excel export (migration 0023). */
   appointmentForm?: boolean;
+  /** rooms.report_form: the same, with "New report" (migration 0027). */
+  reportForm?: boolean;
 }) {
   const supabase = useMemo(() => createClient(), []);
   const { phase: callPhase } = useCall();
@@ -407,6 +414,10 @@ export function ChatRoom({
   }, [supabase, roomId, roomType]);
 
   const [apptOpen, setApptOpen] = useState(false);
+  /** A form post being corrected through its form (0027). */
+  const [formEdit, setFormEdit] = useState<{ kind: FormEvent; id: string } | null>(null);
+  /** Posts only through a form: no free text, files, voice or replies. */
+  const formRoom = appointmentForm || reportForm;
   const memberMap = useMemo(() => {
     const m = new Map<string, string>();
     members.forEach((p) => m.set(p.id, publicDisplayName(p)));
@@ -1165,6 +1176,23 @@ export function ChatRoom({
     });
   }
 
+  // Reactions: shown at once, then the realtime UPDATE carries the stored
+  // set (to everyone, this tab included).
+  async function react(msg: Message, emoji: string) {
+    if (msg.deleted_at || msg.kind === "system") return;
+    const before = msg.reactions ?? null;
+    const next = toggledReactions(before, emoji, currentUserId);
+    upsertMessage({ ...msg, reactions: next });
+    const { error: rpcError } = await supabase.rpc("toggle_reaction", {
+      p_message: msg.id,
+      p_emoji: emoji,
+    });
+    if (rpcError) {
+      upsertMessage({ ...msg, reactions: before });
+      setError(rpcError.message || "Could not add the reaction.");
+    }
+  }
+
   const canDeleteMessage = useCallback(
     (msg: Message) =>
       !msg.deleted_at &&
@@ -1441,24 +1469,33 @@ export function ChatRoom({
                                 }}
                               />
                             )}
+                            <MessageReactions
+                              msg={msg}
+                              mine
+                              currentUserId={currentUserId}
+                              names={memberMap}
+                              disabled={readOnly}
+                              onToggle={(e) => void react(msg, e)}
+                            />
                           </div>
                           {!msg.deleted_at && editing !== msg.id && (
                             <MessageActions
                               align="right"
-                              canReply={!readOnly && !appointmentForm}
-                              canEdit={
-                                !readOnly &&
-                                msg.kind === "text" &&
-                                // Its Excel row was stored as typed; an edit
-                                // would leave the two disagreeing.
-                                (msg.metadata as { event?: string } | null)?.event !==
-                                  "appointment"
-                              }
+                              canReply={!readOnly && !formRoom}
+                              canEdit={!readOnly && msg.kind === "text"}
+                              canReact={!readOnly}
+                              onReact={(e) => void react(msg, e)}
                               canDelete={canDeleteMessage(msg)}
                               canPin={canPinMessages && !readOnly && !msg.deleted_at}
                               pinned={Boolean(msg.pinned_at)}
                               onReply={() => setReplyTo(msg)}
-                              onEdit={() => setEditing(msg.id)}
+                              onEdit={() => {
+                                // A form post is corrected with its form, so
+                                // its Excel row and the chat stay the same.
+                                const ev = formEvent(msg);
+                                if (ev) setFormEdit({ kind: ev, id: msg.id });
+                                else setEditing(msg.id);
+                              }}
                               onDelete={() => void removeMessage(msg)}
                               onTogglePin={() => void togglePin(msg)}
                             />
@@ -1539,17 +1576,31 @@ export function ChatRoom({
                                   scrollToBottom(false);
                               }}
                             />
+                            <MessageReactions
+                              msg={msg}
+                              mine={false}
+                              currentUserId={currentUserId}
+                              names={memberMap}
+                              disabled={readOnly}
+                              onToggle={(e) => void react(msg, e)}
+                            />
                           </div>
                           {!msg.deleted_at && (
                             <MessageActions
                               align="left"
-                              canReply={!readOnly && !appointmentForm}
-                              canEdit={false}
+                              canReply={!readOnly && !formRoom}
+                              // Admins and managers may correct anyone's form post.
+                              canEdit={!readOnly && canPinMessages && formEvent(msg) !== null}
+                              canReact={!readOnly}
+                              onReact={(e) => void react(msg, e)}
                               canDelete={canDeleteMessage(msg)}
                               canPin={canPinMessages && !readOnly && !msg.deleted_at}
                               pinned={Boolean(msg.pinned_at)}
                               onReply={() => setReplyTo(msg)}
-                              onEdit={() => {}}
+                              onEdit={() => {
+                                const ev = formEvent(msg);
+                                if (ev) setFormEdit({ kind: ev, id: msg.id });
+                              }}
                               onDelete={() => void removeMessage(msg)}
                               onTogglePin={() => void togglePin(msg)}
                             />
@@ -1602,19 +1653,26 @@ export function ChatRoom({
             {error}
           </p>
         )}
-        {appointmentForm ? (
-          // An appointments group takes appointments only: no free text,
-          // files or voice — every post goes through the form.
+        {formRoom ? (
+          // An appointments or reports group takes its form only: no free
+          // text, files or voice — every post goes through the form.
           <div className="mx-auto flex w-full max-w-3xl justify-center">
             <button
               type="button"
               onClick={() => setApptOpen(true)}
               className="flex h-12 items-center gap-2 rounded-full bg-brand-600 px-6 text-[15px] font-semibold text-white shadow-soft transition-[transform,background-color] hover:bg-brand-700 active:scale-95"
             >
-              <CalendarPlus className="size-5" />
-              New appointment
+              {reportForm ? (
+                <ClipboardList className="size-5" />
+              ) : (
+                <CalendarPlus className="size-5" />
+              )}
+              {reportForm ? "New report" : "New appointment"}
             </button>
-            {apptOpen && (
+            {apptOpen && reportForm && (
+              <ReportForm roomId={roomId} onClose={() => setApptOpen(false)} />
+            )}
+            {apptOpen && !reportForm && (
               <AppointmentForm
                 roomId={roomId}
                 dialerName={memberMap.get(currentUserId) ?? ""}
@@ -1798,6 +1856,19 @@ export function ChatRoom({
       </div>
       )}
 
+      {formEdit?.kind === "appointment" && (
+        <AppointmentForm
+          roomId={roomId}
+          dialerName={memberMap.get(currentUserId) ?? ""}
+          canManageAgents={canPinMessages}
+          editMessageId={formEdit.id}
+          onClose={() => setFormEdit(null)}
+        />
+      )}
+      {formEdit?.kind === "report" && (
+        <ReportForm roomId={roomId} editMessageId={formEdit.id} onClose={() => setFormEdit(null)} />
+      )}
+
       {/* ── Details sheet ──────────────────────────────────────── */}
       <Sheet
         open={showMembers}
@@ -1821,7 +1892,11 @@ export function ChatRoom({
                 onChange={setDetailsTab}
                 showCounts={ownMessagesOnly}
               />
-              <PostCounts roomId={roomId} excel={appointmentForm} />
+              {reportForm ? (
+                <ReportTotals roomId={roomId} />
+              ) : (
+                <PostCounts roomId={roomId} excel={appointmentForm} />
+              )}
             </>
           ) : detailsTab === "media" ? (
             <>
@@ -2052,6 +2127,29 @@ function EditBox({
       </div>
     </div>
   );
+}
+
+type FormEvent = "appointment" | "report";
+
+/** The form a post came from (0023 / 0027), or null for an ordinary one. */
+function formEvent(msg: Message): FormEvent | null {
+  const ev = (msg.metadata as { event?: string } | null)?.event;
+  return ev === "appointment" || ev === "report" ? ev : null;
+}
+
+/** `reactions` with this person's `emoji` added or taken away, as
+ *  toggle_reaction stores it (0027). */
+function toggledReactions(
+  current: Record<string, string[]> | null,
+  emoji: string,
+  userId: string,
+): Record<string, string[]> | null {
+  const next: Record<string, string[]> = { ...(current ?? {}) };
+  const list = next[emoji] ?? [];
+  const after = list.includes(userId) ? list.filter((u) => u !== userId) : [...list, userId];
+  if (after.length) next[emoji] = after;
+  else delete next[emoji];
+  return Object.keys(next).length ? next : null;
 }
 
 function Bubble({

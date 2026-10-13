@@ -8,6 +8,16 @@ import { Input, Label, Select } from "@/components/ui/Field";
 /** The client's time zone, as dialers already write it. */
 const ZONES = ["EST", "CST", "MST", "PST", "AKST", "HST"];
 type Agent = { id: string; name: string };
+type EditRow = {
+  agent_name: string;
+  policy_number: string | null;
+  client_name: string;
+  phone: string;
+  appt_date: string;
+  appt_time: string;
+  appt_tz: string | null;
+  dialer_name: string;
+};
 
 /** "Wed, Oct 1, 2026 · 3:30 PM EST" — how create_appointment writes it. */
 function whenText(date: string, time: string, tz: string): string {
@@ -32,11 +42,16 @@ function whenText(date: string, time: string, tz: string): string {
  *
  * The agent is picked from a shared list (migration 0025) so one agent is
  * never spelled three ways; admins and managers keep that list from here.
+ *
+ * With `editMessageId` it corrects a posted appointment instead: the form
+ * opens with the stored values, and saving rewrites the stored row and the
+ * chat message together (update_appointment, 0027).
  */
 export function AppointmentForm({
   roomId,
   dialerName,
   canManageAgents = false,
+  editMessageId,
   onClose,
 }: {
   roomId: string;
@@ -44,6 +59,8 @@ export function AppointmentForm({
   dialerName: string;
   /** Admins and managers: may add and remove names on the agent list. */
   canManageAgents?: boolean;
+  /** The chat message of the appointment being corrected. */
+  editMessageId?: string;
   onClose: () => void;
 }) {
   const supabase = useMemo(() => createClient(), []);
@@ -61,6 +78,10 @@ export function AppointmentForm({
   const [managing, setManaging] = useState(false);
   const [newAgent, setNewAgent] = useState("");
   const [listBusy, setListBusy] = useState(false);
+  const editing = Boolean(editMessageId);
+  /** Editing: who booked it (the dialer never changes), once loaded. */
+  const [bookedBy, setBookedBy] = useState<string | null>(null);
+  const [loadingEdit, setLoadingEdit] = useState(editing);
 
   const loadAgents = useCallback(async () => {
     const { data, error: rpcError } = await supabase.rpc("appointment_agent_names");
@@ -74,6 +95,43 @@ export function AppointmentForm({
   useEffect(() => {
     void loadAgents();
   }, [loadAgents]);
+
+  useEffect(() => {
+    if (!editMessageId) return;
+    let live = true;
+    void (async () => {
+      const { data, error: rpcError } = await supabase.rpc("appointment_for_message", {
+        p_message: editMessageId,
+      });
+      if (!live) return;
+      setLoadingEdit(false);
+      const a = (data as EditRow[] | null)?.[0];
+      if (rpcError || !a) {
+        setError("Could not load this appointment.");
+        return;
+      }
+      setAgent(a.agent_name);
+      setPolicy(a.policy_number ?? "");
+      setClient(a.client_name);
+      setPhone(a.phone);
+      setDate(a.appt_date);
+      setTime(a.appt_time.slice(0, 5));
+      setTz(a.appt_tz ?? "");
+      setBookedBy(a.dialer_name);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [supabase, editMessageId]);
+
+  // An agent since taken off the list stays choosable on an appointment
+  // that already has them.
+  const agentOptions = useMemo(() => {
+    const list = agents ?? [];
+    if (!agent || list.some((a) => a.name === agent)) return list;
+    return [...list, { id: `kept:${agent}`, name: agent }];
+  }, [agents, agent]);
+  const shownDialer = bookedBy ?? dialerName;
 
   const addAgent = async () => {
     const name = newAgent.trim();
@@ -121,17 +179,28 @@ export function AppointmentForm({
   const confirm = async () => {
     setBusy(true);
     setError(null);
-    const { error: rpcError } = await supabase.rpc("create_appointment", {
-      p_room: roomId,
-      p_dialer: dialerName,
-      p_agent: agent,
-      p_policy: policy,
-      p_client: client,
-      p_phone: phone,
-      p_date: date,
-      p_time: time,
-      p_tz: tz,
-    });
+    const { error: rpcError } = editMessageId
+      ? await supabase.rpc("update_appointment", {
+          p_message: editMessageId,
+          p_agent: agent,
+          p_policy: policy,
+          p_client: client,
+          p_phone: phone,
+          p_date: date,
+          p_time: time,
+          p_tz: tz,
+        })
+      : await supabase.rpc("create_appointment", {
+          p_room: roomId,
+          p_dialer: dialerName,
+          p_agent: agent,
+          p_policy: policy,
+          p_client: client,
+          p_phone: phone,
+          p_date: date,
+          p_time: time,
+          p_tz: tz,
+        });
     setBusy(false);
     if (rpcError) {
       setError(rpcError.message || "Could not save the appointment.");
@@ -159,7 +228,13 @@ export function AppointmentForm({
             <CalendarPlus className="size-[18px]" />
           </span>
           <h2 id="appt-title" className="flex-1 text-[17px] font-semibold text-ink">
-            {managing ? "Agent list" : reviewing ? "Preview" : "New appointment"}
+            {managing
+              ? "Agent list"
+              : reviewing
+                ? "Preview"
+                : editing
+                  ? "Edit appointment"
+                  : "New appointment"}
           </h2>
           <button
             type="button"
@@ -226,12 +301,14 @@ export function AppointmentForm({
         ) : reviewing ? (
           <div>
             <p className="mb-2.5 text-[13px] text-muted">
-              Check it before it goes to the group.
+              {editing
+                ? "Check it before the change is saved."
+                : "Check it before it goes to the group."}
             </p>
             <dl className="divide-y divide-line rounded-xl border border-line bg-mist/40 text-[14px]">
               {(
                 [
-                  ["Dialer", dialerName],
+                  ["Dialer", shownDialer],
                   ["Agent", agent.trim()],
                   ["Policy #", policy.trim() || "—"],
                   ["Client", client.trim()],
@@ -252,7 +329,7 @@ export function AppointmentForm({
             <Label htmlFor="appt-dialer">Dialer</Label>
             {/* Always the person posting (create_appointment sets it), so
                 one person can't appear under two spellings. */}
-            <Input id="appt-dialer" value={dialerName} readOnly disabled />
+            <Input id="appt-dialer" value={shownDialer} readOnly disabled />
           </div>
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -279,12 +356,12 @@ export function AppointmentForm({
               value={agent}
               onChange={(e) => setAgent(e.target.value)}
               required
-              disabled={agents === null}
+              disabled={agents === null || loadingEdit}
             >
               <option value="" disabled>
-                {agents === null ? "Loading…" : "Choose an agent"}
+                {agents === null || loadingEdit ? "Loading…" : "Choose an agent"}
               </option>
-              {(agents ?? []).map((a) => (
+              {agentOptions.map((a) => (
                 <option key={a.id} value={a.name}>
                   {a.name}
                 </option>
@@ -373,7 +450,13 @@ export function AppointmentForm({
                 disabled={busy}
                 className="h-10 rounded-full bg-brand-600 px-5 text-[14px] font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
               >
-                {busy ? "Posting…" : "Confirm & post"}
+                {busy
+                  ? editing
+                    ? "Saving…"
+                    : "Posting…"
+                  : editing
+                    ? "Save changes"
+                    : "Confirm & post"}
               </button>
             </>
           ) : (
@@ -387,7 +470,8 @@ export function AppointmentForm({
               </button>
               <button
                 type="submit"
-                className="h-10 rounded-full bg-brand-600 px-5 text-[14px] font-semibold text-white hover:bg-brand-700"
+                disabled={loadingEdit}
+                className="h-10 rounded-full bg-brand-600 px-5 text-[14px] font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
               >
                 Review
               </button>

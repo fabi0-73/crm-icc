@@ -9,6 +9,7 @@ import {
   PinOff,
   Trash2,
 } from "lucide-react";
+import { REACTIONS } from "@/components/MessageReactions";
 
 /**
  * The hover/tap "⋯" affordance on a message bubble. On desktop it fades
@@ -21,7 +22,9 @@ export function MessageActions({
   canEdit,
   canDelete,
   canPin,
+  canReact = false,
   pinned,
+  onReact,
   onReply,
   onEdit,
   onDelete,
@@ -34,7 +37,10 @@ export function MessageActions({
   canDelete: boolean;
   /** Admins and managers only. */
   canPin: boolean;
+  /** Offer the emoji row at the top of the menu. */
+  canReact?: boolean;
   pinned: boolean;
+  onReact?: (emoji: string) => void;
   onReply: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -66,7 +72,7 @@ export function MessageActions({
     };
   }, [open]);
 
-  if (!canReply && !canEdit && !canDelete && !canPin) return null;
+  if (!canReply && !canEdit && !canDelete && !canPin && !canReact) return null;
 
   const close = () => {
     setOpen(false);
@@ -89,10 +95,34 @@ export function MessageActions({
       {open && (
         <div
           role="menu"
-          className={`absolute bottom-full z-30 mb-1 w-40 overflow-hidden rounded-xl border border-line/80 bg-paper py-1 shadow-lg ${
-            align === "right" ? "right-0" : "left-0"
-          }`}
+          className={`absolute bottom-full z-30 mb-1 overflow-hidden rounded-xl border border-line/80 bg-paper py-1 shadow-lg ${
+            canReact ? "w-[13.5rem]" : "w-40"
+          } ${align === "right" ? "right-0" : "left-0"}`}
         >
+          {canReact && onReact && (
+            <div
+              className={`grid grid-cols-4 gap-0.5 px-1.5 pb-1 pt-0.5 ${
+                canReply || canEdit || canPin || canDelete ? "mb-1 border-b border-line" : ""
+              }`}
+              aria-label="React"
+            >
+              {REACTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  role="menuitem"
+                  aria-label={`React ${emoji}`}
+                  onClick={() => {
+                    close();
+                    onReact(emoji);
+                  }}
+                  className="flex h-10 items-center justify-center rounded-lg text-[22px] transition-transform hover:bg-mist active:scale-90"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          )}
           {canReply && (
             <button
               type="button"
