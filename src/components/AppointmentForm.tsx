@@ -19,6 +19,24 @@ type EditRow = {
   dialer_name: string;
 };
 
+/** "Wed, Oct 1, 2026" for a YYYY-MM-DD day. */
+function whenDay(date: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/** Today on this device, YYYY-MM-DD (the latest a booking day can be). */
+function localToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 /** "Wed, Oct 1, 2026 · 3:30 PM EST" — how create_appointment writes it. */
 function whenText(date: string, time: string, tz: string): string {
   const [y, m, d] = date.split("-").map(Number);
@@ -43,6 +61,10 @@ function whenText(date: string, time: string, tz: string): string {
  * The agent is picked from a shared list (migration 0025) so one agent is
  * never spelled three ways; admins and managers keep that list from here.
  *
+ * Admins and managers (`dialers` given) may post for any dialer in the
+ * group and for an earlier booking day; the post then goes out under the
+ * dialer's name with "Booked:" and "Entered by:" lines (migration 0031).
+ *
  * With `editMessageId` it corrects a posted appointment instead: the form
  * opens with the stored values, and saving rewrites the stored row and the
  * chat message together (update_appointment, 0027).
@@ -51,6 +73,8 @@ export function AppointmentForm({
   roomId,
   dialerName,
   canManageAgents = false,
+  currentUserId,
+  dialers,
   editMessageId,
   onClose,
 }: {
@@ -59,6 +83,9 @@ export function AppointmentForm({
   dialerName: string;
   /** Admins and managers: may add and remove names on the agent list. */
   canManageAgents?: boolean;
+  currentUserId?: string;
+  /** Admins and managers: the group's members, to post for one of them. */
+  dialers?: Agent[];
   /** The chat message of the appointment being corrected. */
   editMessageId?: string;
   onClose: () => void;
@@ -79,6 +106,11 @@ export function AppointmentForm({
   const [newAgent, setNewAgent] = useState("");
   const [listBusy, setListBusy] = useState(false);
   const editing = Boolean(editMessageId);
+  /** Posting for someone else / another day is offered (new posts only). */
+  const forOthers = Boolean(dialers && currentUserId) && !editing;
+  const [dialerId, setDialerId] = useState(currentUserId ?? "");
+  /** Empty = today's shift. */
+  const [bookedOn, setBookedOn] = useState("");
   /** Editing: who booked it (the dialer never changes), once loaded. */
   const [bookedBy, setBookedBy] = useState<string | null>(null);
   const [loadingEdit, setLoadingEdit] = useState(editing);
@@ -131,7 +163,10 @@ export function AppointmentForm({
     if (!agent || list.some((a) => a.name === agent)) return list;
     return [...list, { id: `kept:${agent}`, name: agent }];
   }, [agents, agent]);
-  const shownDialer = bookedBy ?? dialerName;
+  const shownDialer =
+    bookedBy ??
+    (forOthers ? (dialers?.find((d) => d.id === dialerId)?.name ?? dialerName) : dialerName);
+  const bookedText = bookedOn ? whenDay(bookedOn) : "Today's shift";
 
   const addAgent = async () => {
     const name = newAgent.trim();
@@ -200,6 +235,12 @@ export function AppointmentForm({
           p_date: date,
           p_time: time,
           p_tz: tz,
+          ...(forOthers
+            ? {
+                p_dialer_id: dialerId && dialerId !== currentUserId ? dialerId : null,
+                p_booked_on: bookedOn || null,
+              }
+            : {}),
         });
     setBusy(false);
     if (rpcError) {
@@ -309,6 +350,7 @@ export function AppointmentForm({
               {(
                 [
                   ["Dialer", shownDialer],
+                  ...(forOthers ? ([["Booked", bookedText]] as const) : []),
                   ["Agent", agent.trim()],
                   ["Policy #", policy.trim() || "—"],
                   ["Client", client.trim()],
@@ -329,7 +371,23 @@ export function AppointmentForm({
             <Label htmlFor="appt-dialer">Dialer</Label>
             {/* Always the person posting (create_appointment sets it), so
                 one person can't appear under two spellings. */}
-            <Input id="appt-dialer" value={shownDialer} readOnly disabled />
+            {forOthers ? (
+              <Select
+                id="appt-dialer"
+                value={dialerId}
+                onChange={(e) => setDialerId(e.target.value)}
+                required
+              >
+                {(dialers ?? []).map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                    {d.id === currentUserId ? " (you)" : ""}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              <Input id="appt-dialer" value={shownDialer} readOnly disabled />
+            )}
           </div>
           <div>
             <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -390,6 +448,20 @@ export function AppointmentForm({
             </Label>
             <Input id="appt-policy" value={policy} onChange={(e) => setPolicy(e.target.value)} maxLength={200} />
           </div>
+          {forOthers && (
+            <div className="sm:col-span-2">
+              <Label htmlFor="appt-booked">
+                Booked on <span className="font-normal text-muted">(empty = today&apos;s shift)</span>
+              </Label>
+              <Input
+                id="appt-booked"
+                type="date"
+                value={bookedOn}
+                max={localToday()}
+                onChange={(e) => setBookedOn(e.target.value)}
+              />
+            </div>
+          )}
           <div>
             <Label htmlFor="appt-date">Appointment date</Label>
             <Input id="appt-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />

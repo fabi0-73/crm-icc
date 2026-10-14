@@ -416,6 +416,15 @@ export function ChatRoom({
   const [apptOpen, setApptOpen] = useState(false);
   /** A form post being corrected through its form (0027). */
   const [formEdit, setFormEdit] = useState<{ kind: FormEvent; id: string } | null>(null);
+  /** Admins/managers posting an appointment for a member (0031). */
+  const apptDialers = useMemo(
+    () =>
+      members
+        .filter((m) => m.is_active !== false && m.role !== "agent")
+        .map((m) => ({ id: m.id, name: publicDisplayName(m) }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [members],
+  );
   /** Posts only through a form: no free text, files, voice or replies. */
   const formRoom = appointmentForm || reportForm;
   const memberMap = useMemo(() => {
@@ -1677,6 +1686,8 @@ export function ChatRoom({
                 roomId={roomId}
                 dialerName={memberMap.get(currentUserId) ?? ""}
                 canManageAgents={canPinMessages}
+                currentUserId={currentUserId}
+                dialers={canPinMessages ? apptDialers : undefined}
                 onClose={() => setApptOpen(false)}
               />
             )}
