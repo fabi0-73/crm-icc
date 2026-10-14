@@ -1906,7 +1906,7 @@ export function ChatRoom({
               {reportForm ? (
                 <ReportTotals roomId={roomId} />
               ) : (
-                <PostCounts roomId={roomId} excel={appointmentForm} />
+                <PostCounts roomId={roomId} excel={appointmentForm} reviewer={canPinMessages} />
               )}
             </>
           ) : detailsTab === "media" ? (

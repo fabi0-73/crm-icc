@@ -13,6 +13,13 @@ type Row = {
   to_day: string;
 };
 type Period = "today" | "week" | "month" | "all" | "range";
+/** One dialer × agent cell of the form appointments (0032). */
+type Cell = {
+  dialer_id: string;
+  dialer_name: string;
+  agent_name: string;
+  appointments: number;
+};
 
 const LABELS: Record<Period, string> = {
   today: "Shift",
@@ -48,10 +55,13 @@ function localToday(): string {
 export function PostCounts({
   roomId,
   excel = false,
+  reviewer = false,
 }: {
   roomId: string;
   /** Offer the form-entered appointments as an Excel file (0023). */
   excel?: boolean;
+  /** Admins and managers: filter by agent and dialer, or count per agent. */
+  reviewer?: boolean;
 }) {
   const supabase = useMemo(() => createClient(), []);
   const [period, setPeriod] = useState<Period>("today");
@@ -62,11 +72,33 @@ export function PostCounts({
   const [from, setFrom] = useState(localToday);
   const [to, setTo] = useState(localToday);
   const rangeOk = period !== "range" || (Boolean(from) && Boolean(to) && from <= to);
+  const filters = excel && reviewer;
+  const [cells, setCells] = useState<Cell[] | null>(null);
+  const [groupBy, setGroupBy] = useState<"dialer" | "agent">("dialer");
+  const [agent, setAgent] = useState("");
+  const [dialer, setDialer] = useState("");
+  /** The filtered view counts form appointments per dialer or per agent;
+   *  the plain view is the original per-person count. */
+  const filtered = filters && (groupBy === "agent" || Boolean(agent) || Boolean(dialer));
 
   const load = useCallback(async () => {
     if (period === "range" && !(from && to && from <= to)) return;
     setLoading(true);
     setError(false);
+    if (filters) {
+      const { data: cellData } =
+        period === "range"
+          ? await supabase.rpc("appointment_breakdown_range", {
+              p_room: roomId,
+              p_from: from,
+              p_to: to,
+            })
+          : await supabase.rpc("appointment_breakdown", {
+              p_room: roomId,
+              p_period: period,
+            });
+      setCells((cellData ?? []) as Cell[]);
+    }
     const { data, error: rpcError } =
       period === "range"
         ? await supabase.rpc("room_post_counts_range", {
@@ -84,32 +116,62 @@ export function PostCounts({
       return;
     }
     setRows((data ?? []) as Row[]);
-  }, [supabase, roomId, period, from, to]);
+  }, [supabase, roomId, period, from, to, filters]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  // The filter choices: everyone with an appointment in the period, plus
+  // a choice already made (so changing the period never drops it).
+  const dialerNames = useMemo(() => {
+    const m = new Map<string, string>();
+    (cells ?? []).forEach((c) => m.set(c.dialer_id, c.dialer_name));
+    return m;
+  }, [cells]);
+  const dialerOptions = [...dialerNames.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  const agentOptions = [...new Set((cells ?? []).map((c) => c.agent_name)).add(agent)]
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+  const dialerLabel = dialer ? (dialerNames.get(dialer) ?? "") : "";
+
+  /** The filtered view's lines: name → appointments, most first. */
+  const lines = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of cells ?? []) {
+      if (agent && c.agent_name !== agent) continue;
+      if (dialer && c.dialer_id !== dialer) continue;
+      const key = groupBy === "agent" ? c.agent_name : c.dialer_name;
+      m.set(key, (m.get(key) ?? 0) + Number(c.appointments));
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [cells, agent, dialer, groupBy]);
+
   const exportQuery =
-    period === "range"
+    (period === "range"
       ? `room=${roomId}&from=${from}&to=${to}`
-      : `room=${roomId}&period=${period}`;
-  const totalAppts = (rows ?? []).reduce(
-    (n, r) => n + Number(r.appointments),
-    0,
-  );
+      : `room=${roomId}&period=${period}`) +
+    (filters && agent ? `&agent=${encodeURIComponent(agent)}` : "") +
+    (filters && dialerLabel ? `&dialer=${encodeURIComponent(dialerLabel)}` : "");
+  const totalAppts = filtered
+    ? lines.reduce((n, [, v]) => n + v, 0)
+    : (rows ?? []).reduce((n, r) => n + Number(r.appointments), 0);
   const span = rows?.[0];
 
   const copy = async () => {
     if (!rows) return;
     const head =
-      span && span.from_day === span.to_day
+      (span && span.from_day === span.to_day
         ? `Appointments — ${span.from_day}`
-        : `Appointments — ${span?.from_day} to ${span?.to_day}`;
-    const body = rows
-      .filter((r) => Number(r.appointments) > 0)
-      .map((r) => `${r.person}: ${r.appointments}`)
-      .join("\n");
+        : `Appointments — ${span?.from_day} to ${span?.to_day}`) +
+      (filtered && agent ? ` · agent ${agent}` : "") +
+      (filtered && dialerLabel ? ` · dialer ${dialerLabel}` : "");
+    const body = filtered
+      ? lines.map(([name, n]) => `${name}: ${n}`).join("\n")
+      : rows
+          .filter((r) => Number(r.appointments) > 0)
+          .map((r) => `${r.person}: ${r.appointments}`)
+          .join("\n");
     try {
       await navigator.clipboard.writeText(
         `${head}\n${body}\n\nTotal: ${totalAppts}`,
@@ -122,7 +184,7 @@ export function PostCounts({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex shrink-0 gap-1 px-2 pt-2">
         {(Object.keys(LABELS) as Period[]).map((p) => (
           <button
@@ -166,6 +228,55 @@ export function PostCounts({
         </div>
       )}
 
+      {filters && (
+        <div className="shrink-0 space-y-2 px-3 pt-2.5">
+          <div className="flex gap-1 rounded-lg bg-mist p-0.5">
+            {(["dialer", "agent"] as const).map((g) => (
+              <button
+                key={g}
+                type="button"
+                onClick={() => setGroupBy(g)}
+                aria-pressed={groupBy === g}
+                className={`h-7 flex-1 rounded-md text-[12px] font-semibold transition-colors ${
+                  groupBy === g ? "bg-paper text-ink shadow-xs" : "text-muted hover:text-ink"
+                }`}
+              >
+                {g === "dialer" ? "Per dialer" : "Per agent"}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <select
+              aria-label="Filter by dialer"
+              value={dialer}
+              onChange={(e) => setDialer(e.target.value)}
+              className="min-w-0 flex-1 rounded-lg border border-line-strong bg-paper px-2 py-1.5 text-[13px] text-ink"
+            >
+              <option value="">All dialers</option>
+              {dialer && !dialerNames.has(dialer) && <option value={dialer}>(no appointments)</option>}
+              {dialerOptions.map(([id, name]) => (
+                <option key={id} value={id}>
+                  {name}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter by agent"
+              value={agent}
+              onChange={(e) => setAgent(e.target.value)}
+              className="min-w-0 flex-1 rounded-lg border border-line-strong bg-paper px-2 py-1.5 text-[13px] text-ink"
+            >
+              <option value="">All agents</option>
+              {agentOptions.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
       <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2.5">
         <div className="min-w-0">
           <p className="text-[13px] font-semibold text-ink">
@@ -176,6 +287,7 @@ export function PostCounts({
               {span.from_day === span.to_day
                 ? `Shift of ${span.from_day} · noon to noon`
                 : `${span.from_day} → ${span.to_day}`}
+              {filtered && " · form entries"}
             </p>
           )}
         </div>
@@ -236,7 +348,24 @@ export function PostCounts({
       )}
 
       <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-        {(rows ?? []).map((r) => (
+        {filtered &&
+          lines.map(([name, n]) => (
+            <li
+              key={name}
+              className="flex items-center justify-between gap-3 rounded-xl px-2.5 py-2"
+            >
+              <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{name}</span>
+              <span className="shrink-0 rounded-full bg-brand-50 px-2 py-0.5 text-[13px] font-semibold tabular-nums text-brand-700 dark:bg-brand-950 dark:text-brand-300">
+                {n}
+              </span>
+            </li>
+          ))}
+        {filtered && cells !== null && lines.length === 0 && !error && (
+          <li className="px-2.5 py-6 text-center text-[13px] text-muted">
+            No appointments match.
+          </li>
+        )}
+        {!filtered && (rows ?? []).map((r) => (
           <li
             key={r.user_id}
             className="flex items-center justify-between gap-3 rounded-xl px-2.5 py-2"
@@ -263,7 +392,7 @@ export function PostCounts({
             </span>
           </li>
         ))}
-        {rows !== null && rows.length === 0 && !error && (
+        {!filtered && rows !== null && rows.length === 0 && !error && (
           <li className="px-2.5 py-6 text-center text-[13px] text-muted">
             Nothing in this period.
           </li>

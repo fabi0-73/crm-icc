@@ -71,7 +71,19 @@ export async function GET(request: Request) {
         p_period: period,
       });
   if (error) return new Response("Could not load appointments", { status: 500 });
-  const rows = (data ?? []) as Row[];
+  // Optional filters from the counts tab (admins and managers; for a
+  // dialer the rows are already only their own).
+  const agent = url.searchParams.get("agent");
+  const dialer = url.searchParams.get("dialer");
+  const rows = ((data ?? []) as Row[]).filter(
+    (r) => (!agent || r.agent_name === agent) && (!dialer || r.dialer_name === dialer),
+  );
+  // Named in the file, without characters a file name can't hold.
+  const filterTag = [dialer, agent]
+    .filter(Boolean)
+    .join(" - ")
+    .replace(/[\\/:*?"<>|]/g, "");
+  const suffix = filterTag ? ` (${filterTag})` : "";
 
   // The columns the team asked for, in their order and their words.
   const columns = [
@@ -108,7 +120,7 @@ export async function GET(request: Request) {
         ? first.to_day
         : `${first.from_day} to ${first.to_day}`;
   if (csv) {
-    const name = `Takimet ${span}.csv`;
+    const name = `Takimet ${span}${suffix}.csv`;
     return new Response(toCsv(columns.map((c) => c.header), cells), {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
@@ -140,7 +152,7 @@ export async function GET(request: Request) {
       ],
     },
   ]);
-  const name = `Takimet ${span}.xlsx`;
+  const name = `Takimet ${span}${suffix}.xlsx`;
   return new Response(file as BodyInit, {
     headers: {
       "Content-Type":
